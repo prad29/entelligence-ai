@@ -1,13 +1,51 @@
 import re
+import unicodedata
 from typing import FrozenSet
 
 
 _NOISE_PATTERN = re.compile(r"[^a-z0-9\s]")
 _MULTI_SPACE = re.compile(r"\s+")
 
+# Matches the literal ASCII sequence x-a-0 (OCR artifact for \xa0)
+_LITERAL_XA0 = re.compile(r"xa0", re.IGNORECASE)
+
+# Track A: remove ® ™ © $, map / @ . to space, keep - + & '
+_TRACK_A_CLEAN = re.compile(r"[®™©$]")
+_TRACK_A_MAP = re.compile(r"[/@.]")
+
+# Track B extends Track A: also map hyphens to space
+_TRACK_B_MAP = re.compile(r"[-]")
+
+
+def _fold_accents(text: str) -> str:
+    """Decompose Unicode, strip combining marks, then recompose."""
+    nfd = unicodedata.normalize("NFD", text)
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+
+
+def _pre_normalize(text: str) -> str:
+    """
+    Pre-processing applied before all tracks:
+    - Replace real \xa0 (non-breaking space) with regular space
+    - Replace literal 'xa0' sequence with empty string
+    - Fold accents (CINÉ → CINE)
+    - Normalize smart quotes / curly apostrophes
+    """
+    # Real non-breaking space
+    text = text.replace("\xa0", " ")
+    # Literal xa0 sequence
+    text = _LITERAL_XA0.sub("", text)
+    # Accent folding
+    text = _fold_accents(text)
+    # Smart quotes → straight
+    text = text.replace("‘", "'").replace("’", "'")
+    text = text.replace("“", '"').replace("”", '"')
+    return text
+
 
 def normalize_string(text: str) -> str:
     """Lower-case and strip non-alphanumeric characters."""
+    text = _pre_normalize(text)
     text = text.lower()
     text = _NOISE_PATTERN.sub(" ", text)
     text = _MULTI_SPACE.sub(" ", text).strip()
@@ -15,19 +53,39 @@ def normalize_string(text: str) -> str:
 
 
 def track_a_clean(text: str) -> str:
-    """Track A: exact normalized match."""
-    return normalize_string(text)
+    """
+    Track A: light clean — remove ® ™ © $, map / @ . to space.
+    Case-insensitive; keeps hyphens, +, &, '.
+    """
+    text = _pre_normalize(text)
+    text = _TRACK_A_CLEAN.sub("", text)
+    text = _TRACK_A_MAP.sub(" ", text)
+    text = _MULTI_SPACE.sub(" ", text).strip().lower()
+    return text
 
 
 def track_b_clean(text: str) -> str:
-    """Track B: normalized with common noise words removed."""
+    """Track B: Track A + hyphen→space, then stopwords removed."""
     STOPWORDS = {"the", "a", "an", "and", "or", "with", "in", "at", "by"}
-    tokens = normalize_string(text).split()
+    text = track_a_clean(text)
+    text = _TRACK_B_MAP.sub(" ", text)
+    text = _MULTI_SPACE.sub(" ", text).strip()
+    tokens = text.split()
     filtered = [t for t in tokens if t not in STOPWORDS]
     return " ".join(filtered)
 
 
 def track_c_tokens(text: str) -> FrozenSet[str]:
-    """Track C: token set for fuzzy intersection matching."""
+    """
+    Track C: alnum-only tokens of length >= TRACK_C_MIN_LEN (default 4).
+
+    Uses the configured TRACK_C_MIN_LEN from settings when available,
+    otherwise defaults to 4.
+    """
+    try:
+        from app.config import settings
+        min_len = settings.TRACK_C_MIN_LEN
+    except Exception:
+        min_len = 4
     tokens = normalize_string(text).split()
-    return frozenset(t for t in tokens if len(t) >= 3)
+    return frozenset(t for t in tokens if len(t) >= min_len)

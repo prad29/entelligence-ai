@@ -1,7 +1,11 @@
 from fastapi import FastAPI
 
+from app.logging_config import configure_logging
 from app.routers import detect, amenities, circuits, review
 from app.routers import settings as settings_router
+
+# Configure structured JSON logging as early as possible
+configure_logging()
 
 app = FastAPI(
     title="Amenity Screen Format Detector",

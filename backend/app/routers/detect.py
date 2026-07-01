@@ -10,7 +10,7 @@ from sqlmodel import Session
 from typing import Optional
 
 from app.database import get_session
-from app.models import DetectionJob
+from app.models import AmenityMapping, DetectionJob, ReviewItem
 
 router = APIRouter(prefix="/api/v1/detect", tags=["detect"])
 
@@ -21,9 +21,57 @@ class DetectSingleRequest(BaseModel):
 
 
 @router.post("/single")
-async def detect_single(payload: DetectSingleRequest, request: Request):
+async def detect_single(
+    payload: DetectSingleRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    from app.config import settings
+
     engine = request.app.state.engine
     result = engine.detect(payload.amenity, payload.circuit_name or "")
+
+    if result.fired_ai and settings.AI_TRIGGER_MODE not in ("off", ""):
+        known_formats = engine.get_all_formats()
+        from app.detection.bedrock_client import bedrock_client
+
+        suggestion = bedrock_client.classify_single(
+            payload.amenity, payload.circuit_name or "", known_formats
+        )
+        if suggestion:
+            result.ai_suggested_format = suggestion.suggested_screen_format
+            result.ai_reasoning = suggestion.reasoning
+            session.add(
+                ReviewItem(
+                    type="ai_suggestion",
+                    source_string=payload.amenity,
+                    circuit=payload.circuit_name,
+                    suggested_format=suggestion.suggested_screen_format,
+                    confidence=suggestion.confidence,
+                    reasoning=suggestion.reasoning,
+                )
+            )
+            session.commit()
+
+            if (
+                settings.AI_AUTOAPPLY_CONFIDENCE is not None
+                and suggestion.confidence >= settings.AI_AUTOAPPLY_CONFIDENCE
+            ):
+                new_mapping = AmenityMapping(
+                    amenity_keyword=suggestion.detected_keyword or payload.amenity[:64],
+                    screen_format=suggestion.suggested_screen_format,
+                    priority_tier=5,
+                    status="approved",
+                    notes=(
+                        f"Auto-applied from AI suggestion (confidence={suggestion.confidence})"
+                    ),
+                )
+                session.add(new_mapping)
+                session.commit()
+                from app.detection.loader import build_engine_from_db
+
+                request.app.state.engine = build_engine_from_db(session)
+
     return result.__dict__ if hasattr(result, "__dict__") else result
 
 

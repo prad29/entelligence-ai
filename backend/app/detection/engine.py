@@ -32,16 +32,6 @@ class ScreenFormatEngine:
         normalized = circuit.strip().lower()
         return self.index.aliases.get(normalized, normalized)
 
-    def get_all_formats(self) -> list[str]:
-        """Return the deduplicated list of known screen format values."""
-        seen: set[str] = set()
-        result: list[str] = []
-        for m in self.index.mappings:
-            if m.screen_format not in seen:
-                seen.add(m.screen_format)
-                result.append(m.screen_format)
-        return result
-
     def detect(self, amenity: str, circuit_name: str = "") -> DetectionResult:
         if not amenity:
             return DetectionResult(
@@ -62,9 +52,7 @@ class ScreenFormatEngine:
                     match_track="circuit_override",
                     confidence=1.0,
                     matched_keyword=amenity,
-                    detected_keyword=amenity,
                     circuit_name=resolved_circuit,
-                    match_source="circuit_override",
                 )
 
         # Track A: exact normalized
@@ -76,10 +64,8 @@ class ScreenFormatEngine:
                 match_track="A",
                 confidence=1.0,
                 matched_keyword=m.amenity_keyword,
-                detected_keyword=m.amenity_keyword,
                 circuit_name=m.circuit_name,
                 na_default=m.na_default,
-                match_source="layer1",
             )
 
         # Track B: stopword-cleaned
@@ -91,10 +77,8 @@ class ScreenFormatEngine:
                 match_track="B",
                 confidence=0.9,
                 matched_keyword=m.amenity_keyword,
-                detected_keyword=m.amenity_keyword,
                 circuit_name=m.circuit_name,
                 na_default=m.na_default,
-                match_source="layer1",
             )
 
         # Track C: token intersection (Jaccard)
@@ -117,17 +101,12 @@ class ScreenFormatEngine:
                     match_track="C",
                     confidence=best_score,
                     matched_keyword=best_mapping.amenity_keyword,
-                    detected_keyword=best_mapping.amenity_keyword,
                     circuit_name=best_mapping.circuit_name,
                     na_default=best_mapping.na_default,
-                    match_source="layer1",
                 )
 
-        # No Layer 1 match — signal Layer 2 AI
         return DetectionResult(
-            screen_format="Standard",
+            screen_format="UNKNOWN",
             match_track="none",
             confidence=0.0,
-            fired_ai=True,
-            match_source="no_match",
         )

@@ -2,20 +2,20 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-@dataclass
+@dataclass(frozen=True)
 class ApprovedMapping:
     amenity_keyword: str
     screen_format: str
     priority_tier: int
-    circuit_name: Optional[str] = None
-    na_default: Optional[str] = None
-    norm_exact: str = ""
-    norm_track_a: str = ""
-    norm_track_b: str = ""
-    norm_track_c: list = field(default_factory=list)
+    circuit_name: Optional[str]
+    na_default: Optional[str]
+    norm_exact: str
+    norm_track_a: str
+    norm_track_b: str
+    norm_track_c: frozenset
 
 
-@dataclass
+@dataclass(frozen=True)
 class CircuitOverrideEntry:
     keyword: str
     circuit_name: str
@@ -25,19 +25,9 @@ class CircuitOverrideEntry:
 @dataclass
 class DetectionResult:
     screen_format: str
-    detected_keyword: Optional[str]
-    match_source: str
-    match_track: Optional[str]
-    priority: Optional[int]
+    match_track: str
     confidence: float
-    fired_ai: bool
-    ai_suggested_format: Optional[str] = None
-    ai_reasoning: Optional[str] = None
-
-
-@dataclass
-class BedrockSuggestion:
-    suggested_screen_format: str
-    confidence: float
-    reasoning: str
-    detected_keyword: Optional[str] = None
+    matched_keyword: Optional[str] = None
+    circuit_name: Optional[str] = None
+    na_default: Optional[str] = None
+    diagnostics: Optional[dict] = field(default=None)

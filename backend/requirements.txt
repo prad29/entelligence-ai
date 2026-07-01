@@ -4,7 +4,6 @@ sqlmodel>=0.0.18
 psycopg2-binary>=2.9.9
 alembic>=1.13.1
 openpyxl>=3.1.2
-boto3>=1.34.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.1
 typer>=0.12.3

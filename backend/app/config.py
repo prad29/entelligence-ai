@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     BEDROCK_REGION: str = "us-east-1"
     BEDROCK_MODEL_ID: str = "mistral.mistral-large-2407-v1:0"
     BEDROCK_API_KEY: str = ""
-    AI_TRIGGER_MODE: str = "off"
+    AI_TRIGGER_MODE: str = "on"
     AI_AUTOAPPLY_CONFIDENCE: Optional[float] = None
     MAX_BATCH_ROWS: int = 10000
     JOB_TTL_HOURS: int = 24

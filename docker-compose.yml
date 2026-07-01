@@ -27,11 +27,9 @@ services:
         condition: service_healthy
 
   frontend:
-    image: node:20-alpine
-    working_dir: /app
+    build: ./frontend
     volumes:
-      - ./frontend:/app
-    command: npm run dev -- --host
+      - ./frontend/src:/app/src
     ports:
       - "5173:5173"
     depends_on:

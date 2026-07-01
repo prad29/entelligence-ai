@@ -2,11 +2,12 @@ from fastapi import FastAPI
 
 from app.routers import detect, amenities, circuits, review
 from app.routers import settings as settings_router
+from app.routers import jobs as jobs_router
 
 app = FastAPI(
     title="Amenity Screen Format Detector",
     description="Detect cinema screen formats from amenity strings.",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 app.include_router(detect.router)
@@ -14,6 +15,7 @@ app.include_router(amenities.router)
 app.include_router(circuits.router)
 app.include_router(review.router)
 app.include_router(settings_router.router)
+app.include_router(jobs_router.router)
 
 
 @app.on_event("startup")

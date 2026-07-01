@@ -6,24 +6,14 @@ router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 @router.get("/bedrock/status")
 def bedrock_status():
     from app.config import settings
+    from app.detection.bedrock_client import bedrock_client
 
-    try:
-        import boto3
-
-        client = boto3.client("bedrock", region_name=settings.BEDROCK_REGION)
-        client.list_foundation_models(byOutputModality="TEXT")
-        return {
-            "connected": True,
-            "model_id": settings.BEDROCK_MODEL_ID,
-            "region": settings.BEDROCK_REGION,
-        }
-    except Exception as e:
-        return {
-            "connected": False,
-            "model_id": settings.BEDROCK_MODEL_ID,
-            "region": settings.BEDROCK_REGION,
-            "error": str(e),
-        }
+    connected = bedrock_client.check_connection()
+    return {
+        "connected": connected,
+        "model_id": settings.BEDROCK_MODEL_ID,
+        "region": settings.BEDROCK_REGION,
+    }
 
 
 @router.get("")

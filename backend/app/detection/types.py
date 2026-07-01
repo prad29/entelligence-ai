@@ -28,6 +28,14 @@ class DetectionResult:
     match_track: str
     confidence: float
     matched_keyword: Optional[str] = None
+    # Alias so tests can use either name
+    detected_keyword: Optional[str] = None
     circuit_name: Optional[str] = None
     na_default: Optional[str] = None
+    # Human-readable description of how this result was reached
+    match_source: Optional[str] = None
+    # True when Layer 2 (Bedrock AI) was invoked
+    fired_ai: bool = False
+    ai_suggested_format: Optional[str] = None
+    ai_reasoning: Optional[str] = None
     diagnostics: Optional[dict] = field(default=None)

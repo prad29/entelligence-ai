@@ -4,9 +4,10 @@ from typing import Optional
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://amenity:amenity@localhost:5432/amenitydb"
+    SECRET_KEY: str = "change-me"
     BEDROCK_REGION: str = "us-east-1"
     BEDROCK_MODEL_ID: str = "mistral.mistral-large-2407-v1:0"
-    AI_TRIGGER_MODE: bool = False
+    AI_TRIGGER_MODE: str = "off"
     AI_AUTOAPPLY_CONFIDENCE: Optional[float] = None
     MAX_BATCH_ROWS: int = 10000
     JOB_TTL_HOURS: int = 24

@@ -1,36 +1,33 @@
-import unicodedata
 import re
+from typing import FrozenSet
 
 
-def normalize_string(s: str) -> str:
-    # Handle real non-breaking space and literal "xa0" sequence
-    s = s.replace('\xa0', ' ').replace('xa0', ' ')
-    # Smart quotes
-    s = s.replace('‘', "'").replace('’', "'")
-    s = s.replace('“', '"').replace('”', '"')
-    # Accent-fold via NFD decomposition
-    s = unicodedata.normalize('NFD', s)
-    s = ''.join(c for c in s if unicodedata.category(c) != 'Mn')
-    return s.strip()
+_NOISE_PATTERN = re.compile(r"[^a-z0-9\s]")
+_MULTI_SPACE = re.compile(r"\s+")
 
 
-def track_a_clean(s: str) -> str:
-    s = normalize_string(s)
-    s = re.sub(r'[®™©$]', '', s)
-    s = re.sub(r'[/@.]', ' ', s)
-    s = re.sub(r'\s+', ' ', s)
-    return s.strip().lower()
+def normalize_string(text: str) -> str:
+    """Lower-case and strip non-alphanumeric characters."""
+    text = text.lower()
+    text = _NOISE_PATTERN.sub(" ", text)
+    text = _MULTI_SPACE.sub(" ", text).strip()
+    return text
 
 
-def track_b_clean(s: str) -> str:
-    s = track_a_clean(s)
-    s = s.replace('-', ' ')
-    s = re.sub(r'\s+', ' ', s)
-    return s.strip()
+def track_a_clean(text: str) -> str:
+    """Track A: exact normalized match."""
+    return normalize_string(text)
 
 
-def track_c_tokens(s: str, min_len: int = 4) -> list:
-    s = normalize_string(s)
-    s = re.sub(r'[^a-zA-Z0-9\s]', '', s)
-    tokens = s.lower().split()
-    return [t for t in tokens if len(t) >= min_len]
+def track_b_clean(text: str) -> str:
+    """Track B: normalized with common noise words removed."""
+    STOPWORDS = {"the", "a", "an", "and", "or", "with", "in", "at", "by"}
+    tokens = normalize_string(text).split()
+    filtered = [t for t in tokens if t not in STOPWORDS]
+    return " ".join(filtered)
+
+
+def track_c_tokens(text: str) -> FrozenSet[str]:
+    """Track C: token set for fuzzy intersection matching."""
+    tokens = normalize_string(text).split()
+    return frozenset(t for t in tokens if len(t) >= 3)

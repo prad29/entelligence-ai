@@ -1,10 +1,11 @@
-import boto3
 import json
 import logging
 from typing import Optional
 
-from app.detection.types import BedrockSuggestion
+import httpx
+
 from app.config import settings
+from app.detection.types import BedrockSuggestion
 
 logger = logging.getLogger(__name__)
 
@@ -14,17 +15,23 @@ SYSTEM_PROMPT = (
     "Return Standard if nothing matches. Return valid JSON only."
 )
 
+_INVOKE_PATH = "/model/{model_id}/invoke"
+_LIST_MODELS_PATH = "/foundation-models"
+
+
+def _base_url() -> str:
+    return f"https://bedrock-runtime.{settings.BEDROCK_REGION}.amazonaws.com"
+
+
+def _control_url() -> str:
+    return f"https://bedrock.{settings.BEDROCK_REGION}.amazonaws.com"
+
+
+def _auth_headers() -> dict:
+    return {"Authorization": f"Bearer {settings.BEDROCK_API_KEY}"}
+
 
 class BedrockClient:
-    _client = None
-
-    def _get_runtime(self):
-        if self._client is None:
-            self._client = boto3.client(
-                "bedrock-runtime", region_name=settings.BEDROCK_REGION
-            )
-        return self._client
-
     def classify_single(
         self, amenity: str, circuit: str, known_formats: list
     ) -> Optional[BedrockSuggestion]:
@@ -41,13 +48,15 @@ class BedrockClient:
                 "max_tokens": 256,
                 "temperature": 0,
             }
-            resp = self._get_runtime().invoke_model(
-                modelId=settings.BEDROCK_MODEL_ID,
-                body=json.dumps(body),
-                contentType="application/json",
-                accept="application/json",
+            url = _base_url() + _INVOKE_PATH.format(model_id=settings.BEDROCK_MODEL_ID)
+            resp = httpx.post(
+                url,
+                headers={**_auth_headers(), "Content-Type": "application/json"},
+                json=body,
+                timeout=30,
             )
-            raw = json.loads(resp["body"].read())
+            resp.raise_for_status()
+            raw = resp.json()
             # Support Mistral and generic message-based response shapes
             text = (raw.get("outputs") or [{}])[0].get("text") or (
                 raw.get("choices") or [{}]
@@ -55,9 +64,7 @@ class BedrockClient:
             parsed = json.loads(text)
             return BedrockSuggestion(
                 detected_keyword=parsed.get("detected_keyword"),
-                suggested_screen_format=parsed.get(
-                    "suggested_screen_format", "Standard"
-                ),
+                suggested_screen_format=parsed.get("suggested_screen_format", "Standard"),
                 confidence=float(parsed.get("confidence", 0.5)),
                 reasoning=parsed.get("reasoning", ""),
             )
@@ -70,10 +77,14 @@ class BedrockClient:
 
     def check_connection(self) -> bool:
         try:
-            boto3.client(
-                "bedrock", region_name=settings.BEDROCK_REGION
-            ).list_foundation_models(byOutputModality="TEXT")
-            return True
+            url = _control_url() + _LIST_MODELS_PATH
+            resp = httpx.get(
+                url,
+                headers=_auth_headers(),
+                params={"byOutputModality": "TEXT"},
+                timeout=10,
+            )
+            return resp.status_code == 200
         except Exception:
             return False
 

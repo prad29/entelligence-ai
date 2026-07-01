@@ -39,3 +39,11 @@ class DetectionResult:
     ai_suggested_format: Optional[str] = None
     ai_reasoning: Optional[str] = None
     diagnostics: Optional[dict] = field(default=None)
+
+
+@dataclass
+class BedrockSuggestion:
+    suggested_screen_format: str
+    confidence: float
+    reasoning: str
+    detected_keyword: Optional[str] = None

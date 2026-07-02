@@ -258,21 +258,36 @@ class ScreenFormatEngine:
                 best_hit = (mapping, track, source, pos)
             else:
                 prev_mapping, prev_track, prev_source, prev_pos = best_hit
-                # Tie-break: priority ASC → position ASC → specificity DESC → track A<B<C
+                # Tie-break: priority ASC → circuit-match → circuit-scoped → position ASC → specificity DESC → track A<B<C
                 if mapping.priority_tier < prev_mapping.priority_tier:
                     best_hit = (mapping, track, source, pos)
                 elif mapping.priority_tier == prev_mapping.priority_tier:
-                    if pos < prev_pos:
+                    new_circuit_match = mapping.circuit_name is not None and mapping.circuit_name.lower() == norm_circuit_lower
+                    prev_circuit_match = prev_mapping.circuit_name is not None and prev_mapping.circuit_name.lower() == norm_circuit_lower
+                    new_is_circuit = mapping.circuit_name is not None
+                    prev_is_circuit = prev_mapping.circuit_name is not None
+
+                    if new_circuit_match and not prev_circuit_match:
                         best_hit = (mapping, track, source, pos)
-                    elif pos == prev_pos:
-                        kw_len = len(mapping.amenity_keyword)
-                        prev_kw_len = len(prev_mapping.amenity_keyword)
-                        if kw_len > prev_kw_len:
+                    elif not new_circuit_match and prev_circuit_match:
+                        pass  # keep prev
+                    elif new_is_circuit and not prev_is_circuit:
+                        best_hit = (mapping, track, source, pos)
+                    elif not new_is_circuit and prev_is_circuit:
+                        pass  # keep prev
+                    else:
+                        # Both same circuit-specificity → fall back to existing position/specificity/track rules
+                        if pos < prev_pos:
                             best_hit = (mapping, track, source, pos)
-                        elif kw_len == prev_kw_len:
-                            track_order = {"A": 0, "B": 1, "C": 2}
-                            if track_order.get(track, 9) < track_order.get(prev_track, 9):
+                        elif pos == prev_pos:
+                            kw_len = len(mapping.amenity_keyword)
+                            prev_kw_len = len(prev_mapping.amenity_keyword)
+                            if kw_len > prev_kw_len:
                                 best_hit = (mapping, track, source, pos)
+                            elif kw_len == prev_kw_len:
+                                track_order = {"A": 0, "B": 1, "C": 2}
+                                if track_order.get(track, 9) < track_order.get(prev_track, 9):
+                                    best_hit = (mapping, track, source, pos)
 
         if best_hit is not None:
             mapping, track, source, pos = best_hit

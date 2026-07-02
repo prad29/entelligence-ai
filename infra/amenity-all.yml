@@ -394,7 +394,10 @@ Resources:
 
   EC2Instance:
     Type: AWS::EC2::Instance
-    DependsOn: RDSInstance   # UserData references RDS endpoint — RDS must exist first
+    DependsOn: RDSInstance
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
     Properties:
       InstanceType: t4g.medium
       ImageId: !Ref AmiId
@@ -419,53 +422,57 @@ Resources:
             set -euo pipefail
             exec > /var/log/user-data.log 2>&1
 
-            # ── System packages ───────────────────────────────────────────────
+            # ── cfn-bootstrap (for cfn-signal) ───────────────────────────────
             apt-get update -y
-            apt-get install -y docker.io docker-compose-plugin awscli jq ruby-full wget unzip
-            systemctl enable docker && systemctl start docker
+            apt-get install -y jq ruby-full wget unzip python3-pip
+
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+
+            # ── Docker ────────────────────────────────────────────────────────
+            curl -fsSL https://get.docker.com | sh
             usermod -aG docker ubuntu
+            systemctl enable docker && systemctl start docker
+
+            # ── AWS CLI v2 ────────────────────────────────────────────────────
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+            unzip /tmp/awscliv2.zip -d /tmp
+            /tmp/aws/install
 
             # ── CodeDeploy agent ──────────────────────────────────────────────
-            cd /tmp
-            wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
-            chmod +x install && ./install auto
+            wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install -O /tmp/codedeploy-install
+            chmod +x /tmp/codedeploy-install && /tmp/codedeploy-install auto
             systemctl enable codedeploy-agent && systemctl start codedeploy-agent
 
             # ── Pull secrets and write /app/.env.prod ─────────────────────────
             mkdir -p /app && chown ubuntu:ubuntu /app
 
-            DB_SECRET=$(aws secretsmanager get-secret-value \
-              --secret-id amenity/db-credentials \
-              --query SecretString --output text \
-              --region ${AWS::Region})
-
+            DB_SECRET=$(/usr/local/bin/aws secretsmanager get-secret-value --secret-id amenity/db-credentials --query SecretString --output text --region ${AWS::Region})
             DB_USER=$(echo "$DB_SECRET" | jq -r .username)
             DB_PASS=$(echo "$DB_SECRET" | jq -r .password)
-
-            APP_SECRET=$(aws secretsmanager get-secret-value \
-              --secret-id amenity/app-secret-key \
-              --query SecretString --output text \
-              --region ${AWS::Region})
+            APP_SECRET=$(/usr/local/bin/aws secretsmanager get-secret-value --secret-id amenity/app-secret-key --query SecretString --output text --region ${AWS::Region})
 
             cat > /app/.env.prod <<EOF
-            DATABASE_URL=postgresql://${!DB_USER}:${!DB_PASS}@${RDSEndpoint}:5432/amenitydb
-            SECRET_KEY=${!APP_SECRET}
-            BEDROCK_REGION=${AWS::Region}
-            BEDROCK_MODEL_ID=mistral.mistral-large-2407-v1:0
-            BEDROCK_API_KEY=
-            AI_TRIGGER_MODE=on
-            REDIS_URL=redis://redis:6379/0
-            BEDROCK_CACHE_TTL_DAYS=30
-            MAX_BATCH_ROWS=10000
-            JOB_TTL_HOURS=24
-            TRACK_C_MIN_LEN=4
-            CIRCUIT_MATCH_MIN_JACCARD=0.5
-            EOF
+DATABASE_URL=postgresql://${!DB_USER}:${!DB_PASS}@${RDSEndpoint}:5432/amenitydb
+SECRET_KEY=${!APP_SECRET}
+BEDROCK_REGION=${AWS::Region}
+BEDROCK_MODEL_ID=mistral.mistral-large-2407-v1:0
+BEDROCK_API_KEY=
+AI_TRIGGER_MODE=on
+REDIS_URL=redis://redis:6379/0
+BEDROCK_CACHE_TTL_DAYS=30
+MAX_BATCH_ROWS=10000
+JOB_TTL_HOURS=24
+TRACK_C_MIN_LEN=4
+CIRCUIT_MATCH_MIN_JACCARD=0.5
+EOF
 
             chown ubuntu:ubuntu /app/.env.prod
             chmod 600 /app/.env.prod
 
-            echo "UserData complete" >> /var/log/user-data.log
+            echo "UserData complete"
+
+            # ── Signal CloudFormation that setup is done ──────────────────────
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region}
           - RDSEndpoint: !GetAtt RDSInstance.Endpoint.Address
 
   # ── ALB ──────────────────────────────────────────────────────────────────────

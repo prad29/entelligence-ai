@@ -50,9 +50,9 @@ function AmenityFormDrawer({ open, onOpenChange, amenity, onSubmit }: AmenityFor
       reset({
         keyword: amenity.keyword,
         screen_format: amenity.screen_format,
-        tier: amenity.tier,
+        tier: amenity.tier as 'P1' | 'P2' | 'P3' | 'P4' | 'P5' | 'P6',
         circuit: amenity.circuit ?? '',
-        status: amenity.status,
+        status: amenity.status as 'pending' | 'active' | 'inactive',
       })
     } else {
       reset({ tier: 'P3', status: 'active', keyword: '', screen_format: '', circuit: '' })

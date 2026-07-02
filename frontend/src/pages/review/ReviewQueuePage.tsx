@@ -7,7 +7,7 @@ import { Dialog } from '@/components/ui/Dialog'
 import { Textarea } from '@/components/ui/Textarea'
 import { Progress } from '@/components/ui/Progress'
 import { Check, X, CheckCheck } from 'lucide-react'
-import { truncate, formatDate } from '@/lib/utils'
+import { truncate } from '@/lib/utils'
 import api from '@/lib/api'
 
 interface ReviewItem {
@@ -179,7 +179,7 @@ function ReviewTable({ items, onApprove, onReject }: {
       <DataTable
         columns={columns}
         data={items}
-        keyExtractor={(r) => r.id}
+        keyExtractor={(r) => String(r.id)}
         selectable
         selectedIds={selectedIds}
         onSelectionChange={setSelectedIds}

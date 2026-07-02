@@ -53,7 +53,6 @@ function BedrockConfigCard() {
   const [saved, setSaved] = useState(false)
 
   const {
-    register,
     handleSubmit,
     setValue,
     watch,

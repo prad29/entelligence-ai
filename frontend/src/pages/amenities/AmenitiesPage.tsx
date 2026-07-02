@@ -218,7 +218,7 @@ function AmenitiesPage() {
         <DataTable
           columns={columns}
           data={amenities}
-          keyExtractor={(row) => row.id}
+          keyExtractor={(row) => String(row.id)}
           emptyMessage="No amenity mappings found. Add one to get started."
         />
       )}

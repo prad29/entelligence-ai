@@ -76,6 +76,10 @@ class MappingIndex:
             (o.keyword.lower(), o.circuit_name.lower()): o.screen_format
             for o in self.overrides
         }
+        # Keywords that have at least one circuit override (regardless of which circuit)
+        self._has_circuit_override: frozenset[str] = frozenset(
+            o.keyword.lower() for o in self.overrides
+        )
 
 
 class ScreenFormatEngine:
@@ -281,8 +285,21 @@ class ScreenFormatEngine:
                 elif mapping.priority_tier == prev_mapping.priority_tier:
                     new_circuit_match = mapping.circuit_name is not None and mapping.circuit_name.lower() == norm_circuit_lower
                     prev_circuit_match = prev_mapping.circuit_name is not None and prev_mapping.circuit_name.lower() == norm_circuit_lower
-                    new_is_circuit = mapping.circuit_name is not None
-                    prev_is_circuit = prev_mapping.circuit_name is not None
+                    # Also treat a circuit override entry as a circuit match
+                    if norm_circuit_lower and not new_circuit_match:
+                        new_circuit_match = (mapping.amenity_keyword.lower(), norm_circuit_lower) in self.index._override_index
+                    if norm_circuit_lower and not prev_circuit_match:
+                        prev_circuit_match = (prev_mapping.amenity_keyword.lower(), norm_circuit_lower) in self.index._override_index
+                    new_is_circuit = (
+                        mapping.circuit_name is not None
+                        or (norm_circuit_lower and (mapping.amenity_keyword.lower(), norm_circuit_lower) in self.index._override_index)
+                        or mapping.amenity_keyword.lower() in self.index._has_circuit_override
+                    )
+                    prev_is_circuit = (
+                        prev_mapping.circuit_name is not None
+                        or (norm_circuit_lower and (prev_mapping.amenity_keyword.lower(), norm_circuit_lower) in self.index._override_index)
+                        or prev_mapping.amenity_keyword.lower() in self.index._has_circuit_override
+                    )
 
                     if new_circuit_match and not prev_circuit_match:
                         best_hit = (mapping, track, source, pos)

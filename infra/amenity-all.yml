@@ -15,13 +15,6 @@ Parameters:
       Your public IP in CIDR notation for SSH access (e.g. 1.2.3.4/32).
       Run: curl -s https://checkip.amazonaws.com
 
-  ACMCertificateArn:
-    Type: String
-    Description: >
-      ARN of an ACM certificate for your domain, already issued.
-      Must be in the same region as this stack.
-      Create it first: ACM → Request certificate → DNS validation.
-
   GitHubConnectionArn:
     Type: String
     Description: >
@@ -223,13 +216,9 @@ Resources:
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "ALB — HTTPS and HTTP from internet"
+      GroupDescription: "ALB — HTTP from internet"
       VpcId: !Ref VPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
@@ -487,21 +476,6 @@ Resources:
       LoadBalancerArn: !Ref ALB
       Port: 80
       Protocol: HTTP
-      DefaultActions:
-        - Type: redirect
-          RedirectConfig:
-            Protocol: HTTPS
-            Port: "443"
-            StatusCode: HTTP_301
-
-  HTTPSListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref ALB
-      Port: 443
-      Protocol: HTTPS
-      Certificates:
-        - CertificateArn: !Ref ACMCertificateArn
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup

@@ -216,7 +216,7 @@ Resources:
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "ALB — HTTP from internet"
+      GroupDescription: "ALB - HTTP from internet"
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -230,7 +230,7 @@ Resources:
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "EC2 — port 80 from ALB, SSH from your IP"
+      GroupDescription: "EC2 - port 80 from ALB, SSH from your IP"
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -248,7 +248,7 @@ Resources:
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "RDS — PostgreSQL from EC2 only"
+      GroupDescription: "RDS - PostgreSQL from EC2 only"
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp

@@ -79,6 +79,13 @@ async def detect_batch(
     if row_count > settings.MAX_BATCH_ROWS:
         raise HTTPException(400, detail=f"File exceeds {settings.MAX_BATCH_ROWS} row limit")
 
+    # Validate required columns before accepting the job
+    from app.workers.batch_worker import _peek_headers
+    headers = _peek_headers(contents, ext)
+    missing = [col for col in ("amenities", "circuit_name") if col not in headers]
+    if missing:
+        raise HTTPException(400, detail=f"Missing required column(s): {', '.join(missing)}")
+
     os.makedirs(_UPLOAD_DIR, exist_ok=True)
     job_id = str(uuid.uuid4())
     upload_path = os.path.join(_UPLOAD_DIR, f"{job_id}{ext}")

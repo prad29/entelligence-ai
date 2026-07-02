@@ -29,6 +29,19 @@ logger = logging.getLogger(__name__)
 _CHUNK_SIZE = 50
 
 
+def _peek_headers(contents: bytes, ext: str) -> list[str]:
+    """Return lowercased column headers from raw file bytes without writing to disk."""
+    if ext == ".csv":
+        import io as _io
+        text = contents.decode("utf-8-sig", errors="replace")
+        reader = csv.reader(_io.StringIO(text))
+        raw = next(reader, [])
+        return [h.strip().lower() for h in raw]
+    wb = openpyxl.load_workbook(io.BytesIO(contents), read_only=True, data_only=True)
+    ws = wb.active
+    return [str(ws.cell(1, c).value or "").strip().lower() for c in range(1, (ws.max_column or 0) + 1)]
+
+
 def _read_rows(upload_path: str) -> tuple[list[str], list[tuple]]:
     """
     Read amenity rows from either .xlsx or .csv.

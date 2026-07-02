@@ -125,3 +125,31 @@ class TestEdgeCases:
         result = engine.detect("Digital 3D", "")
         assert result.screen_format == "Standard"
         assert result.fired_ai is False
+
+    def test_rpx_regal_circuit_match(self, engine):
+        result = engine.detect("RPX", "Regal Cinemas")
+        assert result.screen_format == "RPX Regal"
+        assert result.fired_ai is False
+
+    def test_rpx_regal_full_amenity_string(self, engine):
+        # Exact string from feature request — RPX should win for Regal
+        amenity = "2D | CC | DV | HDR | Laser | No Passes | RPX | Stadium | Reserved-Selected"
+        result = engine.detect(amenity, "Regal Cinemas")
+        assert result.screen_format == "RPX Regal"
+        assert result.fired_ai is False
+
+    def test_p4_circuit_beats_generic_generic_first(self, engine):
+        # GDX is P4 global; RPX is P4 Regal-scoped; circuit-specific wins even when generic is first
+        result = engine.detect("GDX | RPX", "Regal Cinemas")
+        assert result.screen_format == "RPX Regal"
+
+    def test_p4_circuit_beats_generic_circuit_first(self, engine):
+        # Circuit-specific first — also wins (baseline sanity)
+        result = engine.detect("RPX | GDX", "Regal Cinemas")
+        assert result.screen_format == "RPX Regal"
+
+    def test_rpx_unknown_circuit_returns_standard(self, engine):
+        # RPX with non-Regal circuit, no na_default → Standard, no AI invocation
+        result = engine.detect("RPX", "Some Other Theatre")
+        assert result.screen_format == "Standard"
+        assert result.fired_ai is False

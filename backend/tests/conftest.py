@@ -44,6 +44,8 @@ CIRCUIT_ALIASES: dict[str, str] = {
     "cineplex entertainment": "Cineplex Entertainment",
     "landmark cinemas": "Landmark Cinemas",
     "caribbean cinemas - us territory": "Caribbean Cinemas - US Territory",
+    "regal cinemas": "Regal Cinemas",
+    "regal": "Regal Cinemas",
 }
 
 # P1 — Motion / 4D
@@ -67,6 +69,7 @@ _CINE_XL = _make_mapping("CINE XL", "Cine XL Harkins", 4, circuit_name="Harkins 
 _ULTRA_AVX = _make_mapping("UltraAVX", "UltraAVX", 4, circuit_name="Cineplex Entertainment")
 _ACX_INFINITY = _make_mapping("ACX Infinity", "ACX Infinity", 4)
 _DCX = _make_mapping("DCX", "DCX", 4)
+_RPX_REGAL = _make_mapping("RPX", "RPX Regal", 4, circuit_name="Regal Cinemas")
 
 # P6 — Deliberate Standard (no AI)
 _ACX_INFINITY_2D = _make_mapping("ACX Infinity 2D", "Standard", 6)
@@ -79,7 +82,7 @@ ALL_MAPPINGS: list[ApprovedMapping] = [
     _4DX, _MX4D,
     _IMAX, _DOLBY,
     _BTX, _SCREENX,
-    _XL, _XD, _ACX, _GDX, _CINE_XL, _ULTRA_AVX, _ACX_INFINITY, _DCX,
+    _XL, _XD, _ACX, _GDX, _CINE_XL, _ULTRA_AVX, _ACX_INFINITY, _DCX, _RPX_REGAL,
     _ACX_INFINITY_2D,
     _DIGITAL_3D, _70MM, _DIGITAL, _3D,
 ]
@@ -90,6 +93,7 @@ CIRCUIT_OVERRIDES: list[CircuitOverrideEntry] = [
     CircuitOverrideEntry(keyword="ACX", circuit_name="Apple Cinemas", screen_format="ACX Apple"),
     CircuitOverrideEntry(keyword="CINE XL", circuit_name="Harkins Theatres", screen_format="Cine XL Harkins"),
     CircuitOverrideEntry(keyword="UltraAVX", circuit_name="Cineplex Entertainment", screen_format="UltraAVX"),
+    CircuitOverrideEntry(keyword="RPX", circuit_name="Regal Cinemas", screen_format="RPX Regal"),
 ]
 
 

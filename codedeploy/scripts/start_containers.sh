@@ -3,9 +3,10 @@ set -e
 
 cd /app
 
+AWS_DEFAULT_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
 IMAGE_TAG=$(cat /app/image_tag.txt)
-ECR_BACKEND=$(aws ssm get-parameter --name /amenity/ecr_backend --query Parameter.Value --output text)
-ECR_FRONTEND=$(aws ssm get-parameter --name /amenity/ecr_frontend --query Parameter.Value --output text)
+ECR_BACKEND=$(aws ssm get-parameter --name /amenity/ecr_backend --region $AWS_DEFAULT_REGION --query Parameter.Value --output text)
+ECR_FRONTEND=$(aws ssm get-parameter --name /amenity/ecr_frontend --region $AWS_DEFAULT_REGION --query Parameter.Value --output text)
 
 # Pull both images
 aws ecr get-login-password --region $AWS_DEFAULT_REGION \

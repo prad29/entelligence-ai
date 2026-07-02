@@ -355,12 +355,40 @@ Resources:
                   - ssm:GetParameter
                   - ssm:GetParameters
                 Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/amenity/*"
+        - PolicyName: CodeDeployS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::amenity-pipeline-artifacts-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::amenity-pipeline-artifacts-${AWS::AccountId}/*"
 
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
         - !Ref EC2InstanceRole
+
+  # ── SSM Parameters (ECR URIs for CodeDeploy scripts) ─────────────────────────
+
+  ECRBackendParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /amenity/ecr_backend
+      Type: String
+      Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/amenity-backend"
+
+  ECRFrontendParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /amenity/ecr_frontend
+      Type: String
+      Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/amenity-frontend"
 
   # ── EC2 ──────────────────────────────────────────────────────────────────────
 

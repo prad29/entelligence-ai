@@ -37,8 +37,8 @@ Parameters:
 
   AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
-    Description: "Ubuntu 24.04 LTS ARM64 AMI — auto-resolved via SSM, no need to change"
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: "Amazon Linux 2023 ARM64 AMI - auto-resolved via SSM, no need to change"
 
 Resources:
 
@@ -422,21 +422,13 @@ Resources:
             set -euo pipefail
             exec > /var/log/user-data.log 2>&1
 
-            # ── cfn-bootstrap (for cfn-signal) ───────────────────────────────
-            apt-get update -y
-            apt-get install -y jq ruby-full wget unzip python3-pip
-
-            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+            # ── System packages (AWS CLI and cfn-signal pre-installed on AL2023) ─
+            dnf update -y
+            dnf install -y docker jq ruby wget unzip
 
             # ── Docker ────────────────────────────────────────────────────────
-            curl -fsSL https://get.docker.com | sh
-            usermod -aG docker ubuntu
             systemctl enable docker && systemctl start docker
-
-            # ── AWS CLI v2 ────────────────────────────────────────────────────
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
-            unzip /tmp/awscliv2.zip -d /tmp
-            /tmp/aws/install
+            usermod -aG docker ec2-user
 
             # ── CodeDeploy agent ──────────────────────────────────────────────
             wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install -O /tmp/codedeploy-install
@@ -444,12 +436,12 @@ Resources:
             systemctl enable codedeploy-agent && systemctl start codedeploy-agent
 
             # ── Pull secrets and write /app/.env.prod ─────────────────────────
-            mkdir -p /app && chown ubuntu:ubuntu /app
+            mkdir -p /app && chown ec2-user:ec2-user /app
 
-            DB_SECRET=$(/usr/local/bin/aws secretsmanager get-secret-value --secret-id amenity/db-credentials --query SecretString --output text --region ${AWS::Region})
+            DB_SECRET=$(aws secretsmanager get-secret-value --secret-id amenity/db-credentials --query SecretString --output text --region ${AWS::Region})
             DB_USER=$(echo "$DB_SECRET" | jq -r .username)
             DB_PASS=$(echo "$DB_SECRET" | jq -r .password)
-            APP_SECRET=$(/usr/local/bin/aws secretsmanager get-secret-value --secret-id amenity/app-secret-key --query SecretString --output text --region ${AWS::Region})
+            APP_SECRET=$(aws secretsmanager get-secret-value --secret-id amenity/app-secret-key --query SecretString --output text --region ${AWS::Region})
 
             cat > /app/.env.prod <<EOF
 DATABASE_URL=postgresql://${!DB_USER}:${!DB_PASS}@${RDSEndpoint}:5432/amenitydb
@@ -466,13 +458,13 @@ TRACK_C_MIN_LEN=4
 CIRCUIT_MATCH_MIN_JACCARD=0.5
 EOF
 
-            chown ubuntu:ubuntu /app/.env.prod
+            chown ec2-user:ec2-user /app/.env.prod
             chmod 600 /app/.env.prod
 
             echo "UserData complete"
 
             # ── Signal CloudFormation that setup is done ──────────────────────
-            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region}
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region}
           - RDSEndpoint: !GetAtt RDSInstance.Endpoint.Address
 
   # ── ALB ──────────────────────────────────────────────────────────────────────

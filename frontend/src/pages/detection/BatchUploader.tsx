@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 function BatchUploader() {
   const [file, setFile] = useState<File | null>(null)
   const [includeDiagnostics, setIncludeDiagnostics] = useState(false)
-  const { job, uploading, error, uploadBatch, reset } = useBatchJob()
+  const { job, uploading, isActive, error, uploadBatch, reset } = useBatchJob()
 
   const onDrop = useCallback((accepted: File[]) => {
     if (accepted[0]) setFile(accepted[0])
@@ -129,7 +129,7 @@ function BatchUploader() {
             <Button
               onClick={() => void handleUpload()}
               loading={uploading}
-              disabled={!file}
+              disabled={!file || isActive}
               className="w-full"
             >
               <Upload className="h-4 w-4" />
@@ -198,7 +198,10 @@ function BatchUploader() {
               {isCompleted && job.output_url && (
                 <Button
                   variant="success"
-                  onClick={() => window.open(job.output_url, '_blank')}
+                  onClick={() => {
+                    const base = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+                    window.open(`${base}${job.output_url}`, '_blank')
+                  }}
                 >
                   <Download className="h-4 w-4" />
                   Download Results

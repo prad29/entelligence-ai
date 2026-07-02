@@ -1,7 +1,9 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings
 from app.logging_config import configure_logging
-from app.routers import detect, amenities, circuits, review
+from app.routers import detect, amenities, circuits, review, jobs
 from app.routers import settings as settings_router
 
 # Configure structured JSON logging as early as possible
@@ -13,11 +15,19 @@ app = FastAPI(
     version="0.3.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(detect.router)
 app.include_router(amenities.router)
 app.include_router(circuits.router)
 app.include_router(review.router)
 app.include_router(settings_router.router)
+app.include_router(jobs.router)
 
 
 @app.on_event("startup")

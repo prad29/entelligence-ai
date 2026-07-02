@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     JOB_TTL_HOURS: int = 24
     TRACK_C_MIN_LEN: int = 4
     CIRCUIT_MATCH_MIN_JACCARD: float = 0.5
+    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
     class Config:
         env_file = ".env"

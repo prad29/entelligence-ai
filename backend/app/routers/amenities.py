@@ -15,6 +15,10 @@ from app.detection.loader import build_engine_from_db
 router = APIRouter(prefix="/api/v1/amenities", tags=["amenities"])
 
 
+def _json_safe(obj):
+    return json.dumps(obj, default=str)
+
+
 def write_audit(
     session: Session,
     table: str,
@@ -29,8 +33,8 @@ def write_audit(
             table_name=table,
             record_id=str(record_id),
             action=action,
-            before_json=json.dumps(before) if before else None,
-            after_json=json.dumps(after) if after else None,
+            before_json=_json_safe(before) if before else None,
+            after_json=_json_safe(after) if after else None,
             actor=actor,
         )
     )

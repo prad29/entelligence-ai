@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Circuits that trigger Layer-0 VIP override
 _VIP_CIRCUITS: dict[str, str] = {
     "caribbean cinemas - us territory": "Caribbean VIP",
+    "caribbean cinemas - us territories": "Caribbean VIP",
     "cineplex entertainment": "VIP Cineplex",
 }
 
@@ -29,6 +30,7 @@ _IGNORE_TOKENS: frozenset[str] = frozenset(
         "no passes",
         "laser",
         "amc signature recliners",
+        "prime at amc",
         "undefined",
         "•",  # bullet •
         "",
@@ -80,6 +82,9 @@ class ScreenFormatEngine:
     def __init__(self, index: MappingIndex) -> None:
         self.index = index
 
+    def get_all_formats(self) -> list[str]:
+        return sorted({m.screen_format for m in self.index.mappings})
+
     def _resolve_circuit(self, circuit: str) -> str:
         """
         Normalize circuit name via alias map.
@@ -125,9 +130,18 @@ class ScreenFormatEngine:
             m = self.index._track_b[norm_b]
             return (m, "B", f"Bucket Priority {m.priority_tier}")
 
-        # Track C: prefix-anchored token matching (handles corruption/concatenation)
-        # Strategy: build both the regular token set AND the concatenated alnum form,
-        # then check if any keyword token is a prefix of any query form.
+        # Track C: two strategies for corruption/concatenation matching.
+        #
+        # Token path: ALL keyword tokens (including short ones) must be present in the
+        # query token set. Short tokens like "XD", "X", "GTX" are the discriminating
+        # suffix of multi-word keywords ("Luxury Lounger XD", "Screen X", "GTX DUBBED").
+        # Filtering them out (the old min_len guard) caused "Luxury Lounger" to match
+        # "Luxury Lounger XD", "Atmos" to match "XPX- Atmos", etc.
+        #
+        # Concat path: concat(segment).startswith(concat(whole_keyword)).
+        # This is the OCR/concatenation path only — "imaxentral".startswith("imax").
+        # We compare against the FULL keyword concat, not per-token, to avoid
+        # "dbox".startswith("dbox") matching "DBOX XTR" when segment is just "D-BOX".
         try:
             from app.config import settings
             min_len = settings.TRACK_C_MIN_LEN
@@ -145,31 +159,27 @@ class ScreenFormatEngine:
                 if not m.norm_track_c:
                     continue
 
-                eligible_kw_tokens = [t for t in m.norm_track_c if len(t) >= min_len]
-                if not eligible_kw_tokens:
+                all_kw_tokens = m.norm_track_c  # ALL tokens, no length filter
+                kw_concat = _concat_form(m.amenity_keyword)
+                if not all_kw_tokens and not kw_concat:
                     continue
 
-                token_matched = 0
-                concat_matched = 0
-                for kw_tok in eligible_kw_tokens:
-                    # Regular token match: kw_tok must be a prefix of a query whitespace token
-                    if any(q_tok.startswith(kw_tok) for q_tok in query_tokens):
-                        token_matched += 1
-                    # Concat form match: kw_tok must be a prefix of the concatenated segment
-                    if len(concat) >= len(kw_tok) and concat.startswith(kw_tok):
-                        concat_matched += 1
+                # Token path: ALL keyword tokens must appear in query token set.
+                token_match = bool(all_kw_tokens) and all(t in query_tokens for t in all_kw_tokens)
 
-                total_kw = len(eligible_kw_tokens)
+                # Concat path: segment concat must start with the full keyword concat
+                # and keyword concat must be long enough to be meaningful.
+                concat_match = (
+                    len(kw_concat) >= min_len
+                    and len(concat) >= len(kw_concat)
+                    and concat.startswith(kw_concat)
+                )
 
-                # For concat matches: if the concat form starts with the full keyword prefix,
-                # that is a corruption/concatenation signal — use this with high confidence.
-                if concat_matched == total_kw and total_kw > 0:
-                    score = concat_matched / max(total_kw, 1)
-                elif token_matched == total_kw and total_kw > 0:
-                    # ALL keyword tokens matched in query tokens — full token overlap
+                if concat_match:
+                    score = 1.0
+                elif token_match:
                     score = 1.0
                 else:
-                    # Partial matches are not enough for Track C
                     score = 0.0
 
                 if score > best_score:
@@ -189,6 +199,13 @@ class ScreenFormatEngine:
 
         norm_circuit_lower must be lowercased to match override_index keys.
         """
+        # Always check circuit override table first — this handles global keywords
+        # that have circuit-specific variants (e.g. "laser ultra" → "Laser Ultra Landmark CAN").
+        if norm_circuit_lower:
+            key = (mapping.amenity_keyword.lower(), norm_circuit_lower)
+            if key in self.index._override_index:
+                return self.index._override_index[key]
+
         if not mapping.circuit_name:
             # Not circuit-sensitive → return generic
             return mapping.screen_format

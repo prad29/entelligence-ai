@@ -25,7 +25,7 @@ function SingleDetector() {
 
   const handleDetect = async () => {
     if (!amenityString.trim()) return
-    await detect({ amenity_string: amenityString, circuit_name: circuitName || undefined })
+    await detect({ amenity: amenityString, circuit_name: circuitName || undefined })
   }
 
   const handleChip = (chip: string) => {

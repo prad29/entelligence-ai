@@ -9,12 +9,13 @@ export interface DetectResult {
   match_track: string | null
   confidence: number
   fired_ai: boolean
+  ai_suggested_format: string | null
   ai_reasoning: string | null
   circuit_name: string | null
 }
 
 interface DetectPayload {
-  amenity_string: string
+  amenity: string
   circuit_name?: string
 }
 

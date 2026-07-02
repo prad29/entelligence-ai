@@ -26,16 +26,19 @@ def get_job(job_id: str, session: Session = Depends(get_session)) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    progress = job.processed / job.total if job.total > 0 else 0.0
+    import json as _json
+    progress = min(1.0, job.processed / job.total) if job.total > 0 else 0.0
+    stats = _json.loads(job.stats) if job.stats else {}
 
     return {
-        "id": job.id,
+        "job_id": job.id,
         "status": job.status,
         "total": job.total,
         "processed": job.processed,
         "progress": round(progress, 3),
-        "stats": job.stats,
-        "output_ready": job.status == "completed" and job.output_path is not None,
+        "matched": stats.get("matched", 0),
+        "ai_suggestions": stats.get("ai_suggestions", 0),
+        "output_url": f"/api/v1/jobs/{job.id}/download" if job.status == "completed" and job.output_path else None,
     }
 
 

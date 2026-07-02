@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Tabs, TabsContent } from '@/components/ui/Tabs'
 import { DataTable, type Column } from '@/components/ui/DataTable'
 import { Badge, type BadgeVariant } from '@/components/ui/Badge'
@@ -8,25 +8,19 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Progress } from '@/components/ui/Progress'
 import { Check, X, CheckCheck } from 'lucide-react'
 import { truncate, formatDate } from '@/lib/utils'
+import api from '@/lib/api'
 
 interface ReviewItem {
-  id: string
-  type: 'mapping' | 'ai_suggestion'
-  source_string: string
-  suggested_format: string
-  confidence: number
-  created_at: string
+  id: number
+  type: 'mapping' | 'ai_suggestion' | 'circuit_override'
+  source_string: string | null
+  circuit: string | null
+  suggested_format: string | null
+  confidence: number | null
+  reasoning: string | null
   status: 'pending' | 'approved' | 'rejected'
-  reject_reason?: string
+  decided_at: string | null
 }
-
-const SAMPLE_ITEMS: ReviewItem[] = [
-  { id: '1', type: 'ai_suggestion', source_string: 'CINÉ XL® | Dolby Atmos', suggested_format: 'CINÉ XL', confidence: 0.82, created_at: '2025-06-15T10:30:00Z', status: 'pending' },
-  { id: '2', type: 'mapping', source_string: 'VIP | Ultra Screen', suggested_format: 'VIP Ultra', confidence: 0.91, created_at: '2025-06-14T08:15:00Z', status: 'pending' },
-  { id: '3', type: 'ai_suggestion', source_string: 'Laser IMAX | Recliners', suggested_format: 'IMAX', confidence: 0.95, created_at: '2025-06-13T14:00:00Z', status: 'approved' },
-  { id: '4', type: 'mapping', source_string: 'BTX | D-BOX', suggested_format: 'BTX', confidence: 0.77, created_at: '2025-06-12T11:45:00Z', status: 'pending' },
-  { id: '5', type: 'ai_suggestion', source_string: 'XD Extreme Digital', suggested_format: 'XD', confidence: 0.88, created_at: '2025-06-11T09:00:00Z', status: 'rejected', reject_reason: 'Too generic' },
-]
 
 interface RejectModalProps {
   open: boolean
@@ -66,16 +60,14 @@ function RejectModal({ open, onOpenChange, onConfirm, loading }: RejectModalProp
 
 function ReviewTable({ items, onApprove, onReject }: {
   items: ReviewItem[]
-  onApprove: (id: string) => void
-  onReject: (id: string, reason: string) => void
+  onApprove: (id: number) => void
+  onReject: (id: number, reason: string) => void
 }) {
-  const [rejectId, setRejectId] = useState<string | null>(null)
+  const [rejectId, setRejectId] = useState<number | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
-  const pendingItems = items.filter((i) => i.status === 'pending')
-
   const handleBulkApprove = () => {
-    selectedIds.forEach((id) => onApprove(id))
+    selectedIds.forEach((id) => onApprove(Number(id)))
     setSelectedIds(new Set())
   }
 
@@ -85,7 +77,7 @@ function ReviewTable({ items, onApprove, onReject }: {
       header: 'Type',
       cell: (row) => (
         <Badge variant={row.type === 'ai_suggestion' ? 'warning' : 'info'} size="sm">
-          {row.type === 'ai_suggestion' ? 'AI' : 'Mapping'}
+          {row.type === 'ai_suggestion' ? 'AI' : row.type === 'circuit_override' ? 'Circuit' : 'Mapping'}
         </Badge>
       ),
     },
@@ -93,8 +85,8 @@ function ReviewTable({ items, onApprove, onReject }: {
       key: 'source_string',
       header: 'Source String',
       cell: (row) => (
-        <span className="font-mono text-xs text-zinc-700 dark:text-zinc-300" title={row.source_string}>
-          {truncate(row.source_string, 40)}
+        <span className="font-mono text-xs text-zinc-700 dark:text-zinc-300" title={row.source_string ?? undefined}>
+          {truncate(row.source_string ?? '—', 40)}
         </span>
       ),
     },
@@ -103,13 +95,22 @@ function ReviewTable({ items, onApprove, onReject }: {
       header: 'Suggested Format',
       sortable: true,
       cell: (row) => (
-        <span className="font-semibold text-zinc-900 dark:text-zinc-100">{row.suggested_format}</span>
+        <span className="font-semibold text-zinc-900 dark:text-zinc-100">{row.suggested_format ?? '—'}</span>
       ),
+    },
+    {
+      key: 'reasoning',
+      header: 'Reasoning',
+      cell: (row) => row.reasoning ? (
+        <span className="text-xs text-zinc-500 dark:text-zinc-400" title={row.reasoning}>
+          {truncate(row.reasoning, 60)}
+        </span>
+      ) : null,
     },
     {
       key: 'confidence',
       header: 'Confidence',
-      cell: (row) => (
+      cell: (row) => row.confidence != null ? (
         <div className="flex items-center gap-2 min-w-28">
           <Progress
             value={row.confidence * 100}
@@ -123,15 +124,7 @@ function ReviewTable({ items, onApprove, onReject }: {
             {Math.round(row.confidence * 100)}%
           </span>
         </div>
-      ),
-    },
-    {
-      key: 'created_at',
-      header: 'Created',
-      sortable: true,
-      cell: (row) => (
-        <span className="text-xs text-zinc-400 dark:text-zinc-500">{formatDate(row.created_at)}</span>
-      ),
+      ) : <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>,
     },
     {
       key: 'status',
@@ -165,7 +158,6 @@ function ReviewTable({ items, onApprove, onReject }: {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Bulk actions bar */}
       {selectedIds.size > 0 && (
         <div className="flex items-center gap-3 rounded-xl bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 px-4 py-2.5">
           <span className="text-sm font-medium text-violet-700 dark:text-violet-300">
@@ -198,42 +190,61 @@ function ReviewTable({ items, onApprove, onReject }: {
         open={rejectId !== null}
         onOpenChange={(open) => { if (!open) setRejectId(null) }}
         onConfirm={(reason) => {
-          if (rejectId) { onReject(rejectId, reason); setRejectId(null) }
+          if (rejectId != null) { onReject(rejectId, reason); setRejectId(null) }
         }}
       />
-
-      {/* suppress unused pendingItems warning */}
-      <span className="hidden">{pendingItems.length}</span>
     </div>
   )
 }
 
 function ReviewQueuePage() {
-  const [items, setItems] = useState<ReviewItem[]>(SAMPLE_ITEMS)
+  const [items, setItems] = useState<ReviewItem[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const approve = (id: string) => {
+  const fetchItems = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await api.get<ReviewItem[]>('/api/v1/review?limit=200')
+      setItems(res.data)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void fetchItems() }, [fetchItems])
+
+  const approve = async (id: number) => {
+    await api.post(`/api/v1/review/${id}/approve`, {})
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, status: 'approved' as const } : i)))
   }
 
-  const reject = (id: string, reason: string) => {
-    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, status: 'rejected' as const, reject_reason: reason } : i)))
+  const reject = async (id: number, reason: string) => {
+    await api.post(`/api/v1/review/${id}/reject`, { reason })
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, status: 'rejected' as const } : i)))
   }
 
-  const all = items
   const pending = items.filter((i) => i.status === 'pending')
   const aiSuggestions = items.filter((i) => i.type === 'ai_suggestion')
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64 text-zinc-400">
+        <div className="h-6 w-6 rounded-full border-2 border-violet-600 border-t-transparent animate-spin" />
+      </div>
+    )
+  }
 
   return (
     <Tabs
       defaultValue="all"
       tabs={[
-        { value: 'all', label: 'All', count: all.length },
+        { value: 'all', label: 'All', count: items.length },
         { value: 'pending', label: 'Pending', count: pending.length },
         { value: 'ai', label: 'AI Suggestions', count: aiSuggestions.length },
       ]}
     >
       <TabsContent value="all">
-        <ReviewTable items={all} onApprove={approve} onReject={reject} />
+        <ReviewTable items={items} onApprove={approve} onReject={reject} />
       </TabsContent>
       <TabsContent value="pending">
         <ReviewTable items={pending} onApprove={approve} onReject={reject} />

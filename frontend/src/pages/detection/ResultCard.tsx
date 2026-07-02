@@ -94,12 +94,25 @@ function ResultCard({ result }: ResultCardProps) {
           </div>
 
           {/* AI callout */}
-          {result.fired_ai && result.ai_reasoning && (
+          {result.fired_ai && (
             <div className="rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 flex gap-3">
               <Sparkles className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">AI Suggestion</p>
-                <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">{result.ai_reasoning}</p>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">
+                  AI Suggestion
+                  {result.ai_suggested_format && (
+                    <span className="ml-2 inline-flex items-center rounded-md bg-amber-100 dark:bg-amber-900/50 px-2 py-0.5 font-bold text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700">
+                      {result.ai_suggested_format}
+                    </span>
+                  )}
+                </p>
+                {result.ai_reasoning ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">{result.ai_reasoning}</p>
+                ) : (
+                  <p className="text-xs text-amber-600 dark:text-amber-500 italic">
+                    No keyword match — added to Review Queue for human approval.
+                  </p>
+                )}
               </div>
             </div>
           )}

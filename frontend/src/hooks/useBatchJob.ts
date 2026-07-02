@@ -16,6 +16,7 @@ export interface BatchJob {
 export function useBatchJob() {
   const [job, setJob] = useState<BatchJob | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [isActive, setIsActive] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -28,6 +29,7 @@ export function useBatchJob() {
 
   const uploadBatch = async (file: File, includeDiagnostics: boolean) => {
     setUploading(true)
+    setIsActive(true)
     setError(null)
     setJob(null)
     stopPolling()
@@ -49,14 +51,17 @@ export function useBatchJob() {
           setJob(poll.data)
           if (poll.data.status === 'completed' || poll.data.status === 'failed') {
             stopPolling()
+            setIsActive(false)
           }
         } catch (e: unknown) {
           setError(e instanceof Error ? e.message : 'Polling failed')
           stopPolling()
+          setIsActive(false)
         }
       }, 2000)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Upload failed')
+      setIsActive(false)
     } finally {
       setUploading(false)
     }
@@ -66,7 +71,8 @@ export function useBatchJob() {
     stopPolling()
     setJob(null)
     setError(null)
+    setIsActive(false)
   }
 
-  return { job, uploading, error, uploadBatch, reset }
+  return { job, uploading, isActive, error, uploadBatch, reset }
 }

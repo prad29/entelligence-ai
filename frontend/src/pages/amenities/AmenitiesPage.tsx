@@ -18,16 +18,17 @@ const tierVariantMap: Record<string, BadgeVariant> = {
 }
 
 const statusVariantMap: Record<string, BadgeVariant> = {
-  active: 'success',
+  approved: 'success',
   pending: 'pending',
-  inactive: 'default',
+  rejected: 'danger',
+  draft: 'default',
 }
 
 const statusOptions = [
   { value: '', label: 'All statuses' },
-  { value: 'active', label: 'Active' },
+  { value: 'approved', label: 'Approved' },
   { value: 'pending', label: 'Pending' },
-  { value: 'inactive', label: 'Inactive' },
+  { value: 'rejected', label: 'Rejected' },
 ]
 
 const tierOptions = [
@@ -104,12 +105,12 @@ function AmenitiesPage() {
       header: '',
       cell: (row) => (
         <div className="flex items-center gap-1 justify-end">
-          {row.status === 'pending' && (
+          {(row.status === 'pending' || row.status === 'draft') && (
             <>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  void updateAmenity(row.id, { status: 'active' })
+                  void updateAmenity(row.id, { status: 'approved' })
                 }}
                 className="rounded-md p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
                 title="Approve"

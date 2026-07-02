@@ -114,7 +114,7 @@ def _approve_review_item(
 @router.get("")
 def list_review_items(
     type: Optional[str] = None,
-    status: Optional[str] = "pending",
+    status: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
     session: Session = Depends(get_session),
@@ -158,8 +158,7 @@ def reject_review_item(
         raise HTTPException(404)
     if item.status != "pending":
         raise HTTPException(400, detail=f"Review item is already '{item.status}'")
-    if not body.reason:
-        raise HTTPException(400, detail="A reason is required when rejecting")
+    # reason is optional — empty string is allowed
 
     item.status = "rejected"
     item.decided_at = datetime.utcnow()

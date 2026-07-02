@@ -7,7 +7,7 @@ interface BedrockStatus {
   region?: string
 }
 
-export function useBedrockStatus(intervalMs = 30_000) {
+export function useBedrockStatus(intervalMs = 60_000) {
   const [status, setStatus] = useState<BedrockStatus | null>(null)
   const [loading, setLoading] = useState(true)
 

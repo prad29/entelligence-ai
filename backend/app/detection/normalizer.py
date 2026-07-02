@@ -77,15 +77,13 @@ def track_b_clean(text: str) -> str:
 
 def track_c_tokens(text: str) -> FrozenSet[str]:
     """
-    Track C: alnum-only tokens of length >= TRACK_C_MIN_LEN (default 4).
+    Track C: all alnum-only tokens from the normalized text.
 
-    Uses the configured TRACK_C_MIN_LEN from settings when available,
-    otherwise defaults to 4.
+    No length filter here — short tokens like "xd", "x", "gtx" are the
+    discriminating suffix of multi-word keywords ("Luxury Lounger XD",
+    "Screen X", "GTX DUBBED") and must be retained so the engine can
+    require ALL keyword tokens to be present in the query.
+    The concat path in the engine applies its own min_len guard separately.
     """
-    try:
-        from app.config import settings
-        min_len = settings.TRACK_C_MIN_LEN
-    except Exception:
-        min_len = 4
     tokens = normalize_string(text).split()
-    return frozenset(t for t in tokens if len(t) >= min_len)
+    return frozenset(t for t in tokens if t)

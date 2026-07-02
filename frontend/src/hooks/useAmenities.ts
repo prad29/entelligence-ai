@@ -2,13 +2,35 @@ import { useState, useEffect, useCallback } from 'react'
 import api from '@/lib/api'
 
 export interface Amenity {
-  id: string
+  id: number
   keyword: string
   screen_format: string
-  tier: 'P1' | 'P2' | 'P3' | 'P4' | 'P5' | 'P6'
+  tier: string
   circuit: string | null
-  status: 'active' | 'pending' | 'inactive'
+  status: string
   updated_at: string
+}
+
+interface ApiAmenity {
+  id: number
+  amenity_keyword: string
+  screen_format: string
+  priority_tier: number
+  circuit_name: string | null
+  status: string
+  updated_at: string
+}
+
+function fromApi(a: ApiAmenity): Amenity {
+  return {
+    id: a.id,
+    keyword: a.amenity_keyword,
+    screen_format: a.screen_format,
+    tier: `P${a.priority_tier}`,
+    circuit: a.circuit_name,
+    status: a.status,
+    updated_at: a.updated_at,
+  }
 }
 
 export interface AmenityFilters {
@@ -30,8 +52,8 @@ export function useAmenities(filters: AmenityFilters = {}) {
       if (filters.status) params.set('status', filters.status)
       if (filters.tier) params.set('tier', filters.tier)
 
-      const res = await api.get<Amenity[]>(`/api/v1/amenities?${params.toString()}`)
-      setAmenities(res.data)
+      const res = await api.get<ApiAmenity[]>(`/api/v1/amenities?${params.toString()}`)
+      setAmenities(res.data.map(fromApi))
       setError(null)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load amenities')
@@ -43,18 +65,20 @@ export function useAmenities(filters: AmenityFilters = {}) {
   useEffect(() => { void fetchAmenities() }, [fetchAmenities])
 
   const createAmenity = async (data: Omit<Amenity, 'id' | 'updated_at'>) => {
-    const res = await api.post<Amenity>('/api/v1/amenities', data)
-    setAmenities((prev) => [res.data, ...prev])
-    return res.data
+    const res = await api.post<ApiAmenity>('/api/v1/amenities', data)
+    const mapped = fromApi(res.data)
+    setAmenities((prev) => [mapped, ...prev])
+    return mapped
   }
 
-  const updateAmenity = async (id: string, data: Partial<Amenity>) => {
-    const res = await api.patch<Amenity>(`/api/v1/amenities/${id}`, data)
-    setAmenities((prev) => prev.map((a) => (a.id === id ? res.data : a)))
-    return res.data
+  const updateAmenity = async (id: number, data: Partial<Amenity>) => {
+    const res = await api.patch<ApiAmenity>(`/api/v1/amenities/${id}`, data)
+    const mapped = fromApi(res.data)
+    setAmenities((prev) => prev.map((a) => (a.id === id ? mapped : a)))
+    return mapped
   }
 
-  const deleteAmenity = async (id: string) => {
+  const deleteAmenity = async (id: number) => {
     await api.delete(`/api/v1/amenities/${id}`)
     setAmenities((prev) => prev.filter((a) => a.id !== id))
   }

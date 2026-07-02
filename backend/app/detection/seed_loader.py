@@ -12,6 +12,7 @@ Sheet 3 structure:
 """
 
 import openpyxl
+from sqlalchemy import text as sa_text
 from app.detection.normalizer import normalize_string
 from app.models import AmenityMapping, CircuitOverride, CircuitAlias
 
@@ -83,19 +84,21 @@ def parse_xlsx(path: str):
     overrides: list[CircuitOverride] = []
     alias_map: dict[str, str] = {}
 
-    if len(wb.worksheets) >= 3:
-        for row in wb.worksheets[2].iter_rows(min_row=2, values_only=True):
+    sheet3 = wb["Sheet3"] if "Sheet3" in wb.sheetnames else None
+    if sheet3 is not None:
+        for row in sheet3.iter_rows(min_row=2, values_only=True):
             if not row or not row[0]:
                 continue
 
+            # Sheet3 columns: A=keyword, B=screen_format, C=circuit_name
             kw = _clean_cell(row[0])
-            circ = _clean_cell(row[1]) if len(row) > 1 and row[1] is not None else ""
-            fmt = _clean_cell(row[2]) if len(row) > 2 and row[2] is not None else ""
+            fmt = _clean_cell(row[1]) if len(row) > 1 and row[1] is not None else ""
+            circ = _clean_cell(row[2]) if len(row) > 2 and row[2] is not None else ""
 
-            if not kw or not circ or not fmt:
+            if not kw or not fmt:
                 continue
 
-            if circ.upper() == "NA":
+            if circ.upper() == "NA" or not circ:
                 # na_default row — attach to any existing deduped mapping with same keyword
                 for m in deduped:
                     if normalize_string(m.amenity_keyword).lower() == normalize_string(kw).lower():
@@ -135,10 +138,10 @@ def seed_db(session, path: str) -> None:
     Callers must commit() after this returns — seed_db does not commit.
     """
     mappings, overrides, aliases = parse_xlsx(path)
-    for m in mappings:
-        session.merge(m)
-    for o in overrides:
-        session.merge(o)
-    for a in aliases:
-        session.merge(a)
+
+    # Truncate so re-runs are idempotent; CASCADE handles FK ordering
+    session.exec(sa_text("TRUNCATE amenitymapping, circuitoverride, circuitalias RESTART IDENTITY CASCADE"))
+    session.add_all(mappings)
+    session.add_all(overrides)
+    session.add_all(aliases)
     session.commit()

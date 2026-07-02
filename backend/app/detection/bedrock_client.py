@@ -57,10 +57,20 @@ class BedrockClient:
             )
             resp.raise_for_status()
             raw = resp.json()
-            # Support Mistral and generic message-based response shapes
+            # Support Mistral (choices[0].message.content) and legacy outputs[0].text shapes
             text = (raw.get("outputs") or [{}])[0].get("text") or (
                 raw.get("choices") or [{}]
             )[0].get("message", {}).get("content", "{}")
+            # Strip markdown code fences if present (```json ... ```)
+            text = text.strip()
+            if text.startswith("```"):
+                # Split on first fence opening, take content after it
+                parts = text.split("```", 2)
+                # parts[0]='', parts[1]='json\n{...}\n', parts[2]=''
+                inner = parts[1] if len(parts) >= 2 else text
+                if inner.startswith("json"):
+                    inner = inner[4:]
+                text = inner.strip()
             parsed = json.loads(text)
             return BedrockSuggestion(
                 detected_keyword=parsed.get("detected_keyword"),

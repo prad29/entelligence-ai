@@ -3,7 +3,6 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -26,6 +25,17 @@ const aiTriggerOptions = [
 ]
 
 const MODEL_OPTIONS = [
+  // Mistral
+  { value: 'mistral.mistral-large-2407-v1:0', label: 'Mistral Large 2 (24.07)' },
+  { value: 'mistral.mistral-small-2402-v1:0', label: 'Mistral Small' },
+  // Amazon Nova
+  { value: 'amazon.nova-pro-v1:0', label: 'Amazon Nova Pro' },
+  { value: 'amazon.nova-lite-v1:0', label: 'Amazon Nova Lite' },
+  { value: 'amazon.nova-micro-v1:0', label: 'Amazon Nova Micro' },
+  // Meta Llama
+  { value: 'meta.llama3-70b-instruct-v1:0', label: 'Meta Llama 3 70B' },
+  { value: 'meta.llama3-8b-instruct-v1:0', label: 'Meta Llama 3 8B' },
+  // Anthropic Claude
   { value: 'anthropic.claude-3-5-sonnet-20241022-v2:0', label: 'Claude 3.5 Sonnet v2' },
   { value: 'anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude 3.5 Haiku' },
   { value: 'anthropic.claude-3-haiku-20240307-v1:0', label: 'Claude 3 Haiku' },
@@ -52,9 +62,9 @@ function BedrockConfigCard() {
   } = useForm<BedrockFormData>({
     resolver: zodResolver(bedrockSchema),
     defaultValues: {
-      model_id: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+      model_id: 'mistral.mistral-large-2407-v1:0',
       region: 'us-east-1',
-      ai_trigger_mode: 'fallback',
+      ai_trigger_mode: 'always',
     },
   })
 
@@ -114,14 +124,7 @@ function BedrockConfigCard() {
             onValueChange={(v) => setValue('region', v)}
             options={REGION_OPTIONS}
           />
-
-          <Input
-            label="Region (custom)"
-            id="region-custom"
-            placeholder="e.g. us-east-1"
-            {...register('region')}
-            error={errors.region?.message}
-          />
+          {errors.region && <span className="text-xs text-red-500">{errors.region.message}</span>}
 
           <Select
             label="AI Trigger Mode"

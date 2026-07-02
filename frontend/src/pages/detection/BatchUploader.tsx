@@ -199,7 +199,7 @@ function BatchUploader() {
                 <Button
                   variant="success"
                   onClick={() => {
-                    const base = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+                    const base = import.meta.env.VITE_API_URL ?? ''
                     window.open(`${base}${job.output_url}`, '_blank')
                   }}
                 >

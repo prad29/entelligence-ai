@@ -3,7 +3,7 @@ set -e
 
 cd /app
 
-AWS_DEFAULT_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+AWS_DEFAULT_REGION=us-east-1
 IMAGE_TAG=$(cat /app/image_tag.txt)
 ECR_BACKEND=$(aws ssm get-parameter --name /amenity/ecr_backend --region $AWS_DEFAULT_REGION --query Parameter.Value --output text)
 

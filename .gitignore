@@ -38,3 +38,10 @@ AWS_DEPLOYMENT.md
 PROD_DEPLOYMENT.md
 amenity-screen-format-detector.md
 CLAUDE_CODE_BUILD_BRIEF.md
+
+# Old split CloudFormation stacks — superseded by infra/amenity-all.yml
+infra/1-ecr.yml
+infra/2-network.yml
+infra/3-rds.yml
+infra/4-ec2-alb.yml
+infra/5-codepipeline.yml

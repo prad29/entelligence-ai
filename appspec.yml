@@ -1,0 +1,29 @@
+version: 0.0
+os: linux
+
+files:
+  - source: docker-compose.prod.yml
+    destination: /app
+  - source: image_tag.txt
+    destination: /app
+
+hooks:
+  BeforeInstall:
+    - location: codedeploy/scripts/stop_containers.sh
+      timeout: 60
+      runas: root
+
+  AfterInstall:
+    - location: codedeploy/scripts/run_migrations.sh
+      timeout: 120
+      runas: root
+
+  ApplicationStart:
+    - location: codedeploy/scripts/start_containers.sh
+      timeout: 120
+      runas: root
+
+  ValidateService:
+    - location: codedeploy/scripts/validate_service.sh
+      timeout: 60
+      runas: root

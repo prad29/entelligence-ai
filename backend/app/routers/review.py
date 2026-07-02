@@ -91,6 +91,13 @@ def _approve_review_item(
             },
         )
 
+        # Invalidate the Redis cache entry so future batch runs use Layer 1
+        try:
+            from app.cache import get_redis, bedrock_cache_key
+            get_redis().delete(bedrock_cache_key(item.source_string or "", item.circuit or ""))
+        except Exception:
+            pass
+
     elif item.type == "circuit_override":
         from app.models import CircuitOverride
         if item.mapping_id:

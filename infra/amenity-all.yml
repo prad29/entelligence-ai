@@ -1,0 +1,842 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Amenity Screen Format Detector — complete infrastructure (single stack)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARAMETERS
+# You must supply these four values at deploy time.
+# Everything else (DB password, SECRET_KEY, key pair, AMI) is automated.
+# ─────────────────────────────────────────────────────────────────────────────
+
+Parameters:
+
+  YourSSHCidr:
+    Type: String
+    Description: >
+      Your public IP in CIDR notation for SSH access (e.g. 1.2.3.4/32).
+      Run: curl -s https://checkip.amazonaws.com
+
+  ACMCertificateArn:
+    Type: String
+    Description: >
+      ARN of an ACM certificate for your domain, already issued.
+      Must be in the same region as this stack.
+      Create it first: ACM → Request certificate → DNS validation.
+
+  GitHubConnectionArn:
+    Type: String
+    Description: >
+      ARN of a CodeStar Connection to GitHub, status must be Available.
+      Create it first: Developer Tools → Connections → Create connection.
+
+  GitHubOwner:
+    Type: String
+    Description: "GitHub organisation or username (e.g. prad29)"
+
+  GitHubRepo:
+    Type: String
+    Default: entelligence-ai
+    Description: "GitHub repository name"
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: "Branch that triggers the pipeline"
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp2/ami-id
+    Description: "Ubuntu 24.04 LTS ARM64 AMI — auto-resolved via SSM, no need to change"
+
+Resources:
+
+  # ── Secrets (created first — no dependencies) ────────────────────────────────
+
+  DBPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    Properties:
+      Name: amenity/db-credentials
+      Description: "RDS master credentials for amenity-db"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "amenity"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true   # avoids URL-encoding issues in DATABASE_URL
+
+  AppSecretKey:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    Properties:
+      Name: amenity/app-secret-key
+      Description: "SECRET_KEY for the amenity FastAPI backend"
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludeCharacters: '"@/\'
+
+  # ── EC2 Key Pair ─────────────────────────────────────────────────────────────
+  # Private key is stored automatically in SSM Parameter Store at:
+  # /ec2/keypair/<KeyPairId>
+  # Retrieve with: aws ssm get-parameter --name "/ec2/keypair/<id>" --with-decryption
+
+  AmenityKeyPair:
+    Type: AWS::EC2::KeyPair
+    DeletionPolicy: Retain
+    Properties:
+      KeyName: amenity-ec2-key
+      KeyType: ed25519
+      Tags:
+        - Key: Name
+          Value: amenity-ec2-key
+
+  # ── ECR Repositories ─────────────────────────────────────────────────────────
+
+  BackendRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: amenity-backend
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep last 5 images",
+              "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5},
+              "action": {"type": "expire"}
+            }]
+          }
+
+  FrontendRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: amenity-frontend
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep last 5 images",
+              "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5},
+              "action": {"type": "expire"}
+            }]
+          }
+
+  # ── VPC ──────────────────────────────────────────────────────────────────────
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: amenity-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: amenity-igw
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: amenity-public-a
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: amenity-public-b
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: amenity-private-a
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: amenity-private-b
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetAAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # ── Security Groups ──────────────────────────────────────────────────────────
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "ALB — HTTPS and HTTP from internet"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: amenity-sg-alb
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "EC2 — port 80 from ALB, SSH from your IP"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref YourSSHCidr
+      Tags:
+        - Key: Name
+          Value: amenity-sg-ec2
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "RDS — PostgreSQL from EC2 only"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: amenity-sg-rds
+
+  # ── RDS ──────────────────────────────────────────────────────────────────────
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Amenity private subnet group (two AZs)"
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: amenity-db
+      DBInstanceClass: db.t4g.micro
+      Engine: postgres
+      EngineVersion: "16"
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DBPasswordSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DBPasswordSecret}:SecretString:password}}"
+      DBName: amenitydb
+      AllocatedStorage: "20"
+      StorageType: gp3
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "02:00-03:00"
+      PreferredMaintenanceWindow: "sun:03:00-sun:04:00"
+      DeletionProtection: true
+      Tags:
+        - Key: Name
+          Value: amenity-db
+
+  # ── IAM ──────────────────────────────────────────────────────────────────────
+
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: amenity-ec2-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:ListFoundationModels
+                Resource: "*"
+        - PolicyName: ECRPull
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                Resource:
+                  - !GetAtt BackendRepository.Arn
+                  - !GetAtt FrontendRepository.Arn
+        - PolicyName: SecretsManagerRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DBPasswordSecret
+                  - !Ref AppSecretKey
+        - PolicyName: SSMParameterRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/amenity/*"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # ── EC2 ──────────────────────────────────────────────────────────────────────
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: RDSInstance   # UserData references RDS endpoint — RDS must exist first
+    Properties:
+      InstanceType: t4g.medium
+      ImageId: !Ref AmiId
+      KeyName: !Ref AmenityKeyPair
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: amenity-app
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euo pipefail
+            exec > /var/log/user-data.log 2>&1
+
+            # ── System packages ───────────────────────────────────────────────
+            apt-get update -y
+            apt-get install -y docker.io docker-compose-plugin awscli jq ruby-full wget unzip
+            systemctl enable docker && systemctl start docker
+            usermod -aG docker ubuntu
+
+            # ── CodeDeploy agent ──────────────────────────────────────────────
+            cd /tmp
+            wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+            chmod +x install && ./install auto
+            systemctl enable codedeploy-agent && systemctl start codedeploy-agent
+
+            # ── Pull secrets and write /app/.env.prod ─────────────────────────
+            mkdir -p /app && chown ubuntu:ubuntu /app
+
+            DB_SECRET=$(aws secretsmanager get-secret-value \
+              --secret-id amenity/db-credentials \
+              --query SecretString --output text \
+              --region ${AWS::Region})
+
+            DB_USER=$(echo "$DB_SECRET" | jq -r .username)
+            DB_PASS=$(echo "$DB_SECRET" | jq -r .password)
+
+            APP_SECRET=$(aws secretsmanager get-secret-value \
+              --secret-id amenity/app-secret-key \
+              --query SecretString --output text \
+              --region ${AWS::Region})
+
+            cat > /app/.env.prod <<EOF
+            DATABASE_URL=postgresql://${!DB_USER}:${!DB_PASS}@${RDSEndpoint}:5432/amenitydb
+            SECRET_KEY=${!APP_SECRET}
+            BEDROCK_REGION=${AWS::Region}
+            BEDROCK_MODEL_ID=mistral.mistral-large-2407-v1:0
+            BEDROCK_API_KEY=
+            AI_TRIGGER_MODE=on
+            REDIS_URL=redis://redis:6379/0
+            BEDROCK_CACHE_TTL_DAYS=30
+            MAX_BATCH_ROWS=10000
+            JOB_TTL_HOURS=24
+            TRACK_C_MIN_LEN=4
+            CIRCUIT_MATCH_MIN_JACCARD=0.5
+            EOF
+
+            chown ubuntu:ubuntu /app/.env.prod
+            chmod 600 /app/.env.prod
+
+            echo "UserData complete" >> /var/log/user-data.log
+          - RDSEndpoint: !GetAtt RDSInstance.Endpoint.Address
+
+  # ── ALB ──────────────────────────────────────────────────────────────────────
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: amenity-alb
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: amenity-tg
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: instance
+      Targets:
+        - Id: !Ref EC2Instance
+      HealthCheckPath: /api/v1/settings/bedrock/status
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckTimeoutSeconds: 10
+
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
+
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref ACMCertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ── CodePipeline IAM Roles ────────────────────────────────────────────────────
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub "amenity-pipeline-artifacts-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-artifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: amenity-codebuild-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:aws:s3:::amenity-pipeline-artifacts-${AWS::AccountId}/*"
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  - !GetAtt BackendRepository.Arn
+                  - !GetAtt FrontendRepository.Arn
+
+  CodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: amenity-codedeploy-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: amenity-codepipeline-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub "arn:aws:s3:::amenity-pipeline-artifacts-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::amenity-pipeline-artifacts-${AWS::AccountId}/*"
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetApplication
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:RegisterApplicationRevision
+                  - codedeploy:GetDeploymentConfig
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !Ref GitHubConnectionArn
+
+  # ── CodeBuild Projects ────────────────────────────────────────────────────────
+
+  RunTests:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: amenity-run-tests
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        PrivilegedMode: false
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec/buildspec-test.yml
+      Artifacts:
+        Type: CODEPIPELINE
+
+  BuildBackend:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: amenity-build-backend
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: ECR_BACKEND
+            Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${BackendRepository}"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec/buildspec-backend.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+
+  BuildFrontend:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: amenity-build-frontend
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: ECR_FRONTEND
+            Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${FrontendRepository}"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec/buildspec-frontend.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+
+  # ── CodeDeploy ────────────────────────────────────────────────────────────────
+
+  CodeDeployApp:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: amenity-app
+      ComputePlatform: Server
+
+  DeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApp
+      DeploymentGroupName: amenity-prod
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      Ec2TagFilters:
+        - Key: Name
+          Value: amenity-app
+          Type: KEY_AND_VALUE
+      DeploymentStyle:
+        DeploymentType: IN_PLACE
+        DeploymentOption: WITHOUT_TRAFFIC_CONTROL
+
+  # ── CodePipeline ──────────────────────────────────────────────────────────────
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: amenity-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Sub "${GitHubOwner}/${GitHubRepo}"
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts:
+                - Name: SourceArtifact
+
+        - Name: Test
+          Actions:
+            - Name: RunTests
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref RunTests
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: TestArtifact
+
+        - Name: Build
+          Actions:
+            - Name: BuildBackend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref BuildBackend
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BackendArtifact
+              RunOrder: 1
+            - Name: BuildFrontend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref BuildFrontend
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: FrontendArtifact
+              RunOrder: 1
+
+        - Name: Deploy
+          Actions:
+            - Name: DeployToEC2
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: "1"
+              Configuration:
+                ApplicationName: !Ref CodeDeployApp
+                DeploymentGroupName: !Ref DeploymentGroup
+              InputArtifacts:
+                - Name: BackendArtifact
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+Outputs:
+
+  KeyPairId:
+    Description: >
+      EC2 key pair ID. Use this to retrieve your PEM file from SSM:
+      aws ssm get-parameter --name "/ec2/keypair/<KeyPairId>" --with-decryption --query Parameter.Value --output text > amenity-ec2-key.pem && chmod 400 amenity-ec2-key.pem
+    Value: !GetAtt AmenityKeyPair.KeyPairId
+
+  EC2PublicIp:
+    Description: "EC2 instance public IP for SSH"
+    Value: !GetAtt EC2Instance.PublicIp
+
+  ALBDnsName:
+    Description: "Point your domain's A alias record here"
+    Value: !GetAtt ALB.DNSName
+
+  RDSEndpoint:
+    Description: "RDS PostgreSQL endpoint (private — accessible from EC2 only)"
+    Value: !GetAtt RDSInstance.Endpoint.Address
+
+  BackendRepoUri:
+    Description: "ECR URI for backend image"
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${BackendRepository}"
+
+  FrontendRepoUri:
+    Description: "ECR URI for frontend image"
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${FrontendRepository}"
+
+  PipelineUrl:
+    Description: "Direct link to the CodePipeline console"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/amenity-pipeline/view"

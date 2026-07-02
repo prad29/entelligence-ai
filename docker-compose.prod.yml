@@ -1,0 +1,32 @@
+version: "3.9"
+
+# Image tags and ECR URIs are injected at deploy time via .env.compose
+# written by codedeploy/scripts/start_containers.sh
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    image: ${ECR_BACKEND}:${IMAGE_TAG}
+    restart: unless-stopped
+    env_file: /app/.env.prod
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: ${ECR_FRONTEND}:${IMAGE_TAG}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend

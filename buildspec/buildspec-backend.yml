@@ -1,0 +1,36 @@
+version: 0.2
+
+env:
+  variables:
+    IMAGE_TAG: ""   # overridden at runtime with CODEBUILD_RESOLVED_SOURCE_VERSION
+
+phases:
+  pre_build:
+    commands:
+      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-8)
+      - echo "Image tag => $IMAGE_TAG"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_BACKEND
+
+  build:
+    commands:
+      - docker build
+          --platform linux/arm64
+          -f backend/Dockerfile.prod
+          -t $ECR_BACKEND:$IMAGE_TAG
+          -t $ECR_BACKEND:latest
+          ./backend
+
+  post_build:
+    commands:
+      - docker push $ECR_BACKEND:$IMAGE_TAG
+      - docker push $ECR_BACKEND:latest
+      # Write IMAGE_TAG to a file so CodeDeploy scripts can read it
+      - echo $IMAGE_TAG > image_tag.txt
+      - echo "Build complete. Pushed $ECR_BACKEND:$IMAGE_TAG"
+
+artifacts:
+  files:
+    - image_tag.txt
+    - docker-compose.prod.yml
+    - codedeploy/**/*
+    - appspec.yml

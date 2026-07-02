@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     TRACK_C_MIN_LEN: int = 4
     CIRCUIT_MATCH_MIN_JACCARD: float = 0.5
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    REDIS_URL: str = "redis://redis:6379/0"
+    BEDROCK_CACHE_TTL_DAYS: int = 30
 
     class Config:
         env_file = ".env"

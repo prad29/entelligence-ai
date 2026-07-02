@@ -146,9 +146,19 @@ def _process_job(
         known_formats = []
 
     # --- Deduplication cache for Bedrock calls ---
-    # Keyed on (amenity_normalized, circuit_normalized) to avoid repeat calls
-    # for identical amenity+circuit pairs (~60% reduction in Bedrock invocations).
+    # Backed by Redis for cross-job persistence. Falls back to in-memory-only
+    # if Redis is unavailable (non-fatal).
     dedup_cache: dict[tuple[str, str], Optional[Any]] = {}
+    try:
+        from app.cache import get_redis, bedrock_cache_key as _bck
+        _redis_client = get_redis()
+        _redis_client.ping()
+        _redis_available = True
+    except Exception:
+        logger.warning("Redis unavailable — dedup cache will be in-memory only for this job")
+        _redis_client = None
+        _redis_available = False
+    _ttl_seconds = settings.BEDROCK_CACHE_TTL_DAYS * 86400
 
     # =========================================================================
     # Pass 1: Run all rows through Layer 1 detection (fast, in-memory).
@@ -228,11 +238,26 @@ def _process_job(
                 key_to_pending_indices[cache_key] = []
             key_to_pending_indices[cache_key].append(pending_idx)
 
+        # Pre-populate dedup_cache from Redis for keys not already resolved
+        if _redis_available:
+            import json as _json
+            from app.detection.types import BedrockSuggestion as _BS
+            for cache_key in key_to_pending_indices:
+                if cache_key in dedup_cache:
+                    continue
+                rkey = _bck(cache_key[0], cache_key[1])
+                cached = _redis_client.get(rkey)
+                if cached:
+                    try:
+                        dedup_cache[cache_key] = _BS(**_json.loads(cached))
+                    except Exception:
+                        pass  # malformed entry — let it re-call Bedrock
+
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = {}
             for cache_key, pending_indices in key_to_pending_indices.items():
                 if cache_key in dedup_cache:
-                    # Already resolved (shouldn't happen on first pass, but safe)
+                    # Already resolved from Redis or prior in-memory hit
                     continue
                 # Use the first pending item's raw amenity/circuit for the call
                 first_pending_idx = pending_indices[0]
@@ -251,6 +276,15 @@ def _process_job(
                     logger.exception("Bedrock call failed for key %s", cache_key)
                     suggestion = None
                 dedup_cache[cache_key] = suggestion
+
+                # Persist to Redis so future jobs skip this Bedrock call
+                if _redis_available and suggestion is not None:
+                    try:
+                        import json as _json
+                        rkey = _bck(cache_key[0], cache_key[1])
+                        _redis_client.setex(rkey, _ttl_seconds, _json.dumps(suggestion.__dict__))
+                    except Exception:
+                        logger.warning("Failed to write Bedrock result to Redis for key %s", cache_key)
 
                 # Update progress incrementally
                 completed_count += len(key_to_pending_indices[cache_key])

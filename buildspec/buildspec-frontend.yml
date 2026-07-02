@@ -1,0 +1,26 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-8)
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_FRONTEND
+
+  build:
+    commands:
+      - docker build
+          --platform linux/arm64
+          -f frontend/Dockerfile.prod
+          -t $ECR_FRONTEND:$IMAGE_TAG
+          -t $ECR_FRONTEND:latest
+          ./frontend
+
+  post_build:
+    commands:
+      - docker push $ECR_FRONTEND:$IMAGE_TAG
+      - docker push $ECR_FRONTEND:latest
+      - echo "Build complete. Pushed $ECR_FRONTEND:$IMAGE_TAG"
+
+artifacts:
+  files:
+    - "**/*"

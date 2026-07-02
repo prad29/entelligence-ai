@@ -12,8 +12,10 @@ import io
 import json
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 
 import openpyxl
 from openpyxl.styles import PatternFill
@@ -134,11 +136,8 @@ def _process_job(
 
     stats: dict[str, int] = {"matched": 0, "standard": 0, "ai_suggestions": 0, "no_match": 0}
 
-    # Single pass: Layer 1 for all rows, Layer 2 AI only for no-match rows.
-    # Progress is updated every _CHUNK_SIZE rows so the UI stays live.
     ai_enabled = settings.AI_TRIGGER_MODE not in ("off", "")
     pending_review: list[ReviewItem] = []
-    all_results: list[Any] = []
 
     if ai_enabled:
         from app.detection.bedrock_client import bedrock_client
@@ -146,7 +145,22 @@ def _process_job(
     else:
         known_formats = []
 
-    for row_idx, row in enumerate(rows, start=1):
+    # --- Deduplication cache for Bedrock calls ---
+    # Keyed on (amenity_normalized, circuit_normalized) to avoid repeat calls
+    # for identical amenity+circuit pairs (~60% reduction in Bedrock invocations).
+    dedup_cache: dict[tuple[str, str], Optional[Any]] = {}
+
+    # =========================================================================
+    # Pass 1: Run all rows through Layer 1 detection (fast, in-memory).
+    # Separate rows into non-AI (immediately writable) and AI-pending.
+    # =========================================================================
+
+    # Storage for all row results, indexed by original row position (0-based).
+    # Each entry: (amenity, circuit, result, needs_ai)
+    row_data: list[tuple[str, str, Any, bool]] = []
+    ai_pending: list[tuple[int, str, str, Any]] = []  # (row_idx_0based, amenity, circuit, result)
+
+    for row_idx, row in enumerate(rows):
         amenity = str(row[amenities_idx] or "").strip()
         circuit = str(row[circuit_idx] or "").strip()
         result = detection_engine.detect(amenity, circuit)
@@ -154,29 +168,114 @@ def _process_job(
         if result.fired_ai:
             stats["no_match"] += 1
             stats["standard"] += 1
-            if ai_enabled:
-                suggestion = bedrock_client.classify_single(amenity, circuit, known_formats)
-                if suggestion:
-                    result.ai_suggested_format = suggestion.suggested_screen_format
-                    result.ai_reasoning = suggestion.reasoning
-                    stats["ai_suggestions"] += 1
-                    pending_review.append(ReviewItem(
-                        type="ai_suggestion",
-                        source_string=amenity,
-                        circuit=circuit,
-                        suggested_format=suggestion.suggested_screen_format,
-                        confidence=suggestion.confidence,
-                        reasoning=suggestion.reasoning,
-                    ))
-                else:
-                    pending_review.append(ReviewItem(
-                        type="ai_suggestion",
-                        source_string=amenity,
-                        circuit=circuit,
-                        suggested_format="Standard",
-                        confidence=0.0,
-                        reasoning="Bedrock call failed — no match, Standard applied",
-                    ))
+            row_data.append((amenity, circuit, result, True))
+            ai_pending.append((row_idx, amenity, circuit, result))
+        else:
+            if result.screen_format != "Standard":
+                stats["matched"] += 1
+            else:
+                stats["standard"] += 1
+            row_data.append((amenity, circuit, result, False))
+
+    # Write non-AI rows to the output sheet immediately and update progress.
+    non_ai_count = 0
+    for idx, (amenity, circuit, result, needs_ai) in enumerate(row_data):
+        if not needs_ai:
+            out_row: list = [circuit, amenity, result.screen_format]
+            if include_diagnostics:
+                out_row += [
+                    result.detected_keyword or "",
+                    result.match_source or "",
+                    result.match_track or "",
+                    result.confidence,
+                    result.ai_suggested_format or "",
+                    result.ai_reasoning or "",
+                ]
+            ws_out.append(out_row)
+            # Track the output sheet row number for this data row
+            row_data[idx] = (amenity, circuit, result, False)
+            non_ai_count += 1
+
+    # Update progress after pass 1
+    job = session.get(DetectionJob, job_id)
+    if job:
+        job.processed = non_ai_count
+    session.commit()
+
+    # =========================================================================
+    # Pass 2: Concurrent Bedrock calls for AI-pending rows.
+    # Uses ThreadPoolExecutor with a semaphore to cap concurrency at 5.
+    # Applies dedup_cache to skip redundant calls.
+    # =========================================================================
+
+    if ai_enabled and ai_pending:
+        semaphore = threading.Semaphore(5)
+
+        def _classify_with_semaphore(amenity: str, circuit: str):
+            """Call Bedrock under semaphore; returns BedrockSuggestion or None."""
+            with semaphore:
+                return bedrock_client.classify_single(amenity, circuit, known_formats)
+
+        # Build futures only for cache misses
+        # future_map: future -> list of ai_pending indices that share this key
+        future_map: dict[Any, list[int]] = {}
+        # key_to_pending_indices: dedup key -> list of indices into ai_pending
+        key_to_pending_indices: dict[tuple[str, str], list[int]] = {}
+
+        for pending_idx, (row_idx_0, amenity, circuit, result) in enumerate(ai_pending):
+            cache_key = (amenity.strip().lower(), circuit.strip().lower())
+            if cache_key not in key_to_pending_indices:
+                key_to_pending_indices[cache_key] = []
+            key_to_pending_indices[cache_key].append(pending_idx)
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {}
+            for cache_key, pending_indices in key_to_pending_indices.items():
+                if cache_key in dedup_cache:
+                    # Already resolved (shouldn't happen on first pass, but safe)
+                    continue
+                # Use the first pending item's raw amenity/circuit for the call
+                first_pending_idx = pending_indices[0]
+                amenity = ai_pending[first_pending_idx][1]
+                circuit = ai_pending[first_pending_idx][2]
+                future = executor.submit(_classify_with_semaphore, amenity, circuit)
+                futures[future] = cache_key
+
+            # Collect results as they complete
+            completed_count = 0
+            for future in as_completed(futures):
+                cache_key = futures[future]
+                try:
+                    suggestion = future.result()
+                except Exception:
+                    logger.exception("Bedrock call failed for key %s", cache_key)
+                    suggestion = None
+                dedup_cache[cache_key] = suggestion
+
+                # Update progress incrementally
+                completed_count += len(key_to_pending_indices[cache_key])
+                job = session.get(DetectionJob, job_id)
+                if job:
+                    job.processed = non_ai_count + completed_count
+                session.commit()
+
+        # Apply cached results to all AI-pending rows
+        for pending_idx, (row_idx_0, amenity, circuit, result) in enumerate(ai_pending):
+            cache_key = (amenity.strip().lower(), circuit.strip().lower())
+            suggestion = dedup_cache.get(cache_key)
+
+            if suggestion:
+                result.ai_suggested_format = suggestion.suggested_screen_format
+                result.ai_reasoning = suggestion.reasoning
+                stats["ai_suggestions"] += 1
+                pending_review.append(ReviewItem(
+                    type="ai_suggestion",
+                    source_string=amenity,
+                    circuit=circuit,
+                    suggested_format=suggestion.suggested_screen_format,
+                    confidence=suggestion.confidence,
+                    reasoning=suggestion.reasoning,
+                ))
             else:
                 pending_review.append(ReviewItem(
                     type="ai_suggestion",
@@ -184,18 +283,27 @@ def _process_job(
                     circuit=circuit,
                     suggested_format="Standard",
                     confidence=0.0,
-                    reasoning="No keyword match — AI trigger disabled",
+                    reasoning="Bedrock call failed — no match, Standard applied",
                 ))
-        else:
-            if result.screen_format != "Standard":
-                stats["matched"] += 1
-            else:
-                stats["standard"] += 1
 
-        all_results.append((amenity, circuit, result))
+    elif not ai_enabled and ai_pending:
+        # AI disabled but we have no-match rows — create review items
+        for pending_idx, (row_idx_0, amenity, circuit, result) in enumerate(ai_pending):
+            pending_review.append(ReviewItem(
+                type="ai_suggestion",
+                source_string=amenity,
+                circuit=circuit,
+                suggested_format="Standard",
+                confidence=0.0,
+                reasoning="No keyword match — AI trigger disabled",
+            ))
 
-        # Write output row immediately
-        out_row: list = [circuit, amenity, result.screen_format]
+    # =========================================================================
+    # Write AI rows to output sheet in their original order.
+    # =========================================================================
+
+    for pending_idx, (row_idx_0, amenity, circuit, result) in enumerate(ai_pending):
+        out_row = [circuit, amenity, result.screen_format]
         if include_diagnostics:
             out_row += [
                 result.detected_keyword or "",
@@ -208,20 +316,12 @@ def _process_job(
         ws_out.append(out_row)
 
         # Highlight AI rows in light yellow
-        if result.fired_ai:
-            row_num = ws_out.max_row
-            for col in range(1, len(out_row) + 1):
-                ws_out.cell(row=row_num, column=col).fill = _AI_FILL
-
-        # Update progress every row when AI fired (slow path), else every chunk
-        if result.fired_ai or row_idx % _CHUNK_SIZE == 0:
-            job = session.get(DetectionJob, job_id)
-            if job:
-                job.processed = row_idx
-            session.commit()
+        row_num = ws_out.max_row
+        for col in range(1, len(out_row) + 1):
+            ws_out.cell(row=row_num, column=col).fill = _AI_FILL
 
     # Final: flush review items and mark job complete
-    total_rows = len(all_results)
+    total_rows = len(row_data)
     job = session.get(DetectionJob, job_id)
     if job:
         job.processed = total_rows

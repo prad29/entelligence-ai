@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import Optional
 
 import httpx
@@ -31,6 +32,10 @@ def _auth_headers() -> dict:
     return {"Authorization": f"Bearer {settings.BEDROCK_API_KEY}"}
 
 
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 1
+
+
 class BedrockClient:
     def classify_single(
         self, amenity: str, circuit: str, known_formats: list
@@ -49,12 +54,27 @@ class BedrockClient:
                 "temperature": 0,
             }
             url = _base_url() + _INVOKE_PATH.format(model_id=settings.BEDROCK_MODEL_ID)
-            resp = httpx.post(
-                url,
-                headers={**_auth_headers(), "Content-Type": "application/json"},
-                json=body,
-                timeout=30,
-            )
+
+            resp = None
+            for attempt in range(_MAX_RETRIES + 1):
+                resp = httpx.post(
+                    url,
+                    headers={**_auth_headers(), "Content-Type": "application/json"},
+                    json=body,
+                    timeout=10,
+                )
+                if resp.status_code != 429:
+                    break
+                if attempt < _MAX_RETRIES:
+                    time.sleep(_BACKOFF_BASE * (2 ** attempt))
+
+            if resp.status_code == 429:
+                logger.warning(
+                    "bedrock_throttled_after_retries",
+                    extra={"amenity": amenity, "retries": _MAX_RETRIES},
+                )
+                return None
+
             resp.raise_for_status()
             raw = resp.json()
             # Support Mistral (choices[0].message.content) and legacy outputs[0].text shapes

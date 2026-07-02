@@ -1,7 +1,8 @@
 import os
+import threading
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
 from sqlmodel import Session, select
 from typing import Optional
@@ -63,7 +64,6 @@ async def detect_single(
 @router.post("/batch")
 async def detect_batch(
     request: Request,
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     include_diagnostics: str = Form("false"),
     session: Session = Depends(get_session),
@@ -90,7 +90,12 @@ async def detect_batch(
     session.commit()
 
     from app.workers.batch_worker import run_batch_job
-    background_tasks.add_task(run_batch_job, job_id, upload_path, diag_bool, request.app.state.engine)
+    t = threading.Thread(
+        target=run_batch_job,
+        args=(job_id, upload_path, diag_bool, request.app.state.engine),
+        daemon=True,
+    )
+    t.start()
 
     return {"job_id": job_id}
 

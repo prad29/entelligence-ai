@@ -232,7 +232,12 @@ def _process_job(
     # =========================================================================
 
     if ai_enabled and ai_pending:
-        semaphore = threading.Semaphore(5)
+        try:
+            from app.config import settings as _settings
+            _concurrency = getattr(_settings, "BEDROCK_MAX_CONCURRENCY", 20)
+        except Exception:
+            _concurrency = 20
+        semaphore = threading.Semaphore(_concurrency)
 
         def _classify_with_semaphore(amenity: str, circuit: str):
             """Call Bedrock under semaphore; returns BedrockSuggestion or None."""
@@ -266,7 +271,7 @@ def _process_job(
                     except Exception:
                         pass  # malformed entry — let it re-call Bedrock
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=_concurrency) as executor:
             futures = {}
             for cache_key, pending_indices in key_to_pending_indices.items():
                 if cache_key in dedup_cache:

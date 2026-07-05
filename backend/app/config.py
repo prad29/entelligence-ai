@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     REDIS_URL: str = "redis://redis:6379/0"
     BEDROCK_CACHE_TTL_DAYS: int = 30
+    BEDROCK_MAX_CONCURRENCY: int = 20
+    BATCH_AI_SAMPLE_LIMIT: int = 50
 
     class Config:
         env_file = ".env"

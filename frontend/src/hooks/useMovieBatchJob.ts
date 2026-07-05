@@ -27,7 +27,7 @@ export function useMovieBatchJob() {
     }
   }
 
-  const uploadBatch = async (file: File, includeDiagnostics: boolean) => {
+  const uploadBatch = async (file: File, includeDiagnostics: boolean, batchAiMode?: string) => {
     setUploading(true)
     setIsActive(true)
     setError(null)
@@ -38,6 +38,7 @@ export function useMovieBatchJob() {
       const form = new FormData()
       form.append('file', file)
       form.append('include_diagnostics', String(includeDiagnostics))
+      form.append('batch_ai_mode', batchAiMode ?? 'skip')
 
       const res = await api.post<{ job_id: string }>('/api/v1/movie-detect/batch', form, {
         headers: { 'Content-Type': 'multipart/form-data' },

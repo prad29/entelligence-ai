@@ -59,6 +59,7 @@ async def detect_batch_movie(
     request: Request,
     file: UploadFile = File(...),
     include_diagnostics: str = Form("false"),
+    batch_ai_mode: str = Form("skip"),
     session: Session = Depends(get_session),
 ):
     diag_bool = include_diagnostics.lower() in ("true", "1", "yes")
@@ -90,7 +91,7 @@ async def detect_batch_movie(
     from app.workers.movie_batch_worker import run_movie_batch_job
     t = threading.Thread(
         target=run_movie_batch_job,
-        args=(job_id, upload_path, diag_bool, request.app.state.movie_engine),
+        args=(job_id, upload_path, diag_bool, request.app.state.movie_engine, batch_ai_mode),
         daemon=True,
     )
     t.start()

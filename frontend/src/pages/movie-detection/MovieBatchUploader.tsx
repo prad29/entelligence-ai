@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 function MovieBatchUploader() {
   const [file, setFile] = useState<File | null>(null)
   const [includeDiagnostics, setIncludeDiagnostics] = useState(false)
+  const [batchAiMode, setBatchAiMode] = useState<'skip' | 'sample' | 'full'>('skip')
   const { job, uploading, isActive, error, uploadBatch, reset } = useMovieBatchJob()
 
   const onDrop = useCallback((accepted: File[]) => {
@@ -24,7 +25,7 @@ function MovieBatchUploader() {
 
   const handleUpload = async () => {
     if (!file) return
-    await uploadBatch(file, includeDiagnostics)
+    await uploadBatch(file, includeDiagnostics, batchAiMode)
   }
 
   const handleReset = () => {
@@ -124,6 +125,34 @@ function MovieBatchUploader() {
               </div>
               <span className="text-sm text-zinc-700 dark:text-zinc-300">Include diagnostics in output</span>
             </label>
+          )}
+
+          {/* AI Mode selector */}
+          {!job && (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">AI mode</p>
+              <div className="flex gap-2">
+                {([
+                  { value: 'skip', label: 'Skip AI', desc: 'Fast — no Bedrock calls, unmatched → 2D' },
+                  { value: 'sample', label: 'Sample', desc: 'Balanced — AI for first 50 unique no-matches' },
+                  { value: 'full', label: 'Full AI', desc: 'Slow — Bedrock call for every no-match' },
+                ] as const).map(({ value, label, desc }) => (
+                  <button
+                    key={value}
+                    onClick={() => setBatchAiMode(value)}
+                    className={cn(
+                      'flex-1 rounded-lg border px-3 py-2 text-left text-xs transition-colors',
+                      batchAiMode === value
+                        ? 'border-violet-500 bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300'
+                        : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600'
+                    )}
+                  >
+                    <span className="font-semibold block">{label}</span>
+                    <span className="text-zinc-400 dark:text-zinc-500">{desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           {/* Upload button */}

@@ -56,6 +56,7 @@ def run_movie_batch_job(
     upload_path: str,
     include_diagnostics: bool,
     detection_engine,
+    batch_ai_mode: str = "skip",
 ) -> None:
     from app.config import settings
 
@@ -69,7 +70,7 @@ def run_movie_batch_job(
         session.commit()
 
         try:
-            _process_job(job_id, upload_path, include_diagnostics, detection_engine, session, settings)
+            _process_job(job_id, upload_path, include_diagnostics, detection_engine, session, settings, batch_ai_mode)
         except Exception:
             job = session.get(MovieFormatJob, job_id)
             if job:
@@ -86,6 +87,7 @@ def _process_job(
     detection_engine,
     session: Session,
     settings,
+    batch_ai_mode: str = "skip",
 ) -> None:
     headers, rows = _read_rows(upload_path)
     amenities_idx = headers.index("amenities")
@@ -175,8 +177,13 @@ def _process_job(
     session.commit()
 
     # Pass 2: Concurrent Bedrock calls for AI-pending rows
-    if ai_enabled and ai_pending:
-        semaphore = threading.Semaphore(5)
+    effective_ai = ai_enabled and batch_ai_mode == "full"
+    sample_mode = ai_enabled and batch_ai_mode == "sample"
+    sample_limit = getattr(settings, "BATCH_AI_SAMPLE_LIMIT", 50)
+
+    if effective_ai and ai_pending:
+        _concurrency = getattr(settings, "BEDROCK_MAX_CONCURRENCY", 20)
+        semaphore = threading.Semaphore(_concurrency)
 
         def _classify_with_semaphore(amenity: str):
             with semaphore:
@@ -192,18 +199,18 @@ def _process_job(
         if _redis_available:
             import json as _json
             from app.movie_detection.types import MovieFormatBedrockSuggestion as _BS
-            for cache_key in key_to_pending_indices:
-                if cache_key in dedup_cache:
-                    continue
-                rkey = _mck(cache_key)
-                cached = _redis_client.get(rkey)
-                if cached:
-                    try:
-                        dedup_cache[cache_key] = _BS(**_json.loads(cached))
-                    except Exception:
-                        pass
+            uncached_keys = [k for k in key_to_pending_indices if k not in dedup_cache]
+            if uncached_keys:
+                rkeys = [_mck(k) for k in uncached_keys]
+                values = _redis_client.mget(rkeys)
+                for cache_key, raw in zip(uncached_keys, values):
+                    if raw:
+                        try:
+                            dedup_cache[cache_key] = _BS(**_json.loads(raw))
+                        except Exception:
+                            pass
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=_concurrency) as executor:
             futures = {}
             for cache_key, pending_indices in key_to_pending_indices.items():
                 if cache_key in dedup_cache:
@@ -261,7 +268,59 @@ def _process_job(
                     reasoning="Bedrock call failed — no match, 2D applied",
                 ))
 
-    elif not ai_enabled and ai_pending:
+    elif sample_mode and ai_pending:
+        _concurrency_s = getattr(settings, "BEDROCK_MAX_CONCURRENCY", 20)
+        semaphore_s = threading.Semaphore(_concurrency_s)
+
+        def _classify_sample(amenity: str):
+            with semaphore_s:
+                return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
+
+        key_to_pending_indices: dict[str, list[int]] = {}
+        for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+            cache_key = amenity.strip().lower()
+            if cache_key not in key_to_pending_indices:
+                key_to_pending_indices[cache_key] = []
+            key_to_pending_indices[cache_key].append(pending_idx)
+
+        sampled_keys = dict(list(key_to_pending_indices.items())[:sample_limit])
+        with ThreadPoolExecutor(max_workers=_concurrency_s) as executor_s:
+            futures_s = {
+                executor_s.submit(_classify_sample, ai_pending[idxs[0]][1]): ck
+                for ck, idxs in sampled_keys.items()
+                if ck not in dedup_cache
+            }
+            for future_s in as_completed(futures_s):
+                ck = futures_s[future_s]
+                try:
+                    dedup_cache[ck] = future_s.result()
+                except Exception:
+                    dedup_cache[ck] = None
+
+        for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+            cache_key = amenity.strip().lower()
+            suggestion = dedup_cache.get(cache_key)
+            if suggestion:
+                result.ai_suggested_format = suggestion.suggested_screen_format
+                result.ai_reasoning = suggestion.reasoning
+                stats["ai_suggestions"] += 1
+                pending_review.append(MovieFormatReviewItem(
+                    type="ai_suggestion",
+                    source_string=amenity,
+                    suggested_format=suggestion.suggested_screen_format,
+                    confidence=suggestion.confidence,
+                    reasoning=suggestion.reasoning,
+                ))
+            else:
+                pending_review.append(MovieFormatReviewItem(
+                    type="ai_suggestion",
+                    source_string=amenity,
+                    suggested_format="2D",
+                    confidence=0.0,
+                    reasoning="No keyword match — outside AI sample limit",
+                ))
+
+    elif (not effective_ai) and ai_pending:
         for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
             pending_review.append(MovieFormatReviewItem(
                 type="ai_suggestion",
@@ -313,6 +372,13 @@ def _process_job(
         os.remove(upload_path)
     except OSError:
         pass
+
+    if ai_pending:
+        from collections import Counter
+        unmatched_counter = Counter(amenity.strip().lower() for (_, amenity, _) in ai_pending)
+        top_unmatched = unmatched_counter.most_common(10)
+        logger.info("movie_batch_top_unmatched job=%s: %s", job_id, top_unmatched)
+        stats["top_unmatched"] = [{"amenity": a, "count": c} for a, c in top_unmatched]
 
     logger.info(
         "run_movie_batch_job: job %s completed — %d rows, stats=%s",

@@ -6,9 +6,30 @@ import { Button } from '@/components/ui/Button'
 import { Dialog } from '@/components/ui/Dialog'
 import { Textarea } from '@/components/ui/Textarea'
 import { Progress } from '@/components/ui/Progress'
-import { Check, X, CheckCheck } from 'lucide-react'
+import { Check, X, CheckCheck, ChevronDown, ChevronUp } from 'lucide-react'
 import { truncate } from '@/lib/utils'
 import api from '@/lib/api'
+
+function ExpandableReasoning({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const isLong = text.length > 80
+
+  return (
+    <div className="max-w-xs">
+      <p className={`text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed ${!expanded && isLong ? 'line-clamp-2' : ''}`}>
+        {text}
+      </p>
+      {isLong && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
+          className="mt-0.5 inline-flex items-center gap-0.5 text-[11px] text-[#4A9FD4] hover:text-[#3a8fc4] font-medium"
+        >
+          {expanded ? <><ChevronUp className="h-3 w-3" /> Less</> : <><ChevronDown className="h-3 w-3" /> More</>}
+        </button>
+      )}
+    </div>
+  )
+}
 
 interface ReviewItem {
   id: number
@@ -101,11 +122,7 @@ function ReviewTable({ items, onApprove, onReject }: {
     {
       key: 'reasoning',
       header: 'Reasoning',
-      cell: (row) => row.reasoning ? (
-        <span className="text-xs text-zinc-500 dark:text-zinc-400" title={row.reasoning}>
-          {truncate(row.reasoning, 60)}
-        </span>
-      ) : null,
+      cell: (row) => row.reasoning ? <ExpandableReasoning text={row.reasoning} /> : null,
     },
     {
       key: 'confidence',

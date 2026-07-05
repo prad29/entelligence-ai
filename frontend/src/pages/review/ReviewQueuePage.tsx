@@ -7,16 +7,15 @@ import { Dialog } from '@/components/ui/Dialog'
 import { Textarea } from '@/components/ui/Textarea'
 import { Progress } from '@/components/ui/Progress'
 import { Check, X, CheckCheck, ChevronDown, ChevronUp } from 'lucide-react'
-import { truncate } from '@/lib/utils'
 import api from '@/lib/api'
 
-function ExpandableReasoning({ text }: { text: string }) {
+function ExpandableText({ text, mono = false, threshold = 60 }: { text: string; mono?: boolean; threshold?: number }) {
   const [expanded, setExpanded] = useState(false)
-  const isLong = text.length > 80
+  const isLong = text.length > threshold
 
   return (
     <div className="max-w-xs">
-      <p className={`text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed ${!expanded && isLong ? 'line-clamp-2' : ''}`}>
+      <p className={`text-xs leading-relaxed ${mono ? 'font-mono text-zinc-700 dark:text-zinc-300' : 'text-zinc-500 dark:text-zinc-400'} ${!expanded && isLong ? 'line-clamp-2' : ''}`}>
         {text}
       </p>
       {isLong && (
@@ -105,11 +104,9 @@ function ReviewTable({ items, onApprove, onReject }: {
     {
       key: 'source_string',
       header: 'Source String',
-      cell: (row) => (
-        <span className="font-mono text-xs text-zinc-700 dark:text-zinc-300" title={row.source_string ?? undefined}>
-          {truncate(row.source_string ?? '—', 40)}
-        </span>
-      ),
+      cell: (row) => row.source_string
+        ? <ExpandableText text={row.source_string} mono threshold={40} />
+        : <span className="text-xs text-zinc-400">—</span>,
     },
     {
       key: 'suggested_format',
@@ -122,7 +119,7 @@ function ReviewTable({ items, onApprove, onReject }: {
     {
       key: 'reasoning',
       header: 'Reasoning',
-      cell: (row) => row.reasoning ? <ExpandableReasoning text={row.reasoning} /> : null,
+      cell: (row) => row.reasoning ? <ExpandableText text={row.reasoning} threshold={80} /> : null,
     },
     {
       key: 'confidence',

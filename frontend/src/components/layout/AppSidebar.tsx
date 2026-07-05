@@ -78,6 +78,9 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
         <p className="mt-1.5 text-[11px] font-medium tracking-widest text-zinc-400 leading-tight">
           E.R.I.C.A
         </p>
+        <p className="mt-0.5 text-[9px] text-zinc-600 leading-tight">
+          Enttelligence Research & Insights Cinematic Assistant
+        </p>
       </div>
 
       {/* Nav groups */}

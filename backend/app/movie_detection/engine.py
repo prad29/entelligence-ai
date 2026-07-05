@@ -40,6 +40,14 @@ class MovieFormatMappingIndex:
         self.mappings = sorted(mappings, key=lambda m: m.priority_tier)
         self._track_a: dict[str, MovieFormatApprovedMapping] = {m.norm_track_a: m for m in self.mappings}
         self._track_b: dict[str, MovieFormatApprovedMapping] = {m.norm_track_b: m for m in self.mappings}
+        # Pre-built concat-form index for O(1) exact match in Track C.
+        # Mappings are already sorted by priority_tier asc, so first writer
+        # wins (highest priority format) when two keywords share a concat form.
+        self._concat_exact: dict[str, MovieFormatApprovedMapping] = {}
+        for m in self.mappings:
+            cf = _concat_form(m.keyword)
+            if cf and cf not in self._concat_exact:
+                self._concat_exact[cf] = m
 
 
 class MovieFormatEngine:
@@ -81,6 +89,14 @@ class MovieFormatEngine:
         query_tokens = track_c_tokens(segment)
         concat = _concat_form(segment)
 
+        # Track C — sub-check 1: exact concat equality (no min_len guard).
+        # "3 D" / "3-D" both reduce to concat "3d" which equals keyword "3d".
+        # Exact equality is unambiguous at any length — no prefix false-positive risk.
+        if concat and concat in self.index._concat_exact:
+            m = self.index._concat_exact[concat]
+            return (m, "C", f"Bucket Priority {m.priority_tier}")
+
+        # Track C — sub-check 2: token set match + prefix match (min_len guard kept).
         if query_tokens or (concat and len(concat) >= min_len):
             best_score = 0.0
             best_mapping: Optional[MovieFormatApprovedMapping] = None
@@ -90,10 +106,8 @@ class MovieFormatEngine:
                     continue
 
                 kw_concat = _concat_form(m.keyword)
-                if not m.norm_track_c and not kw_concat:
-                    continue
 
-                token_match = bool(m.norm_track_c) and all(t in query_tokens for t in m.norm_track_c)
+                token_match = all(t in query_tokens for t in m.norm_track_c)
                 concat_match = (
                     len(kw_concat) >= min_len
                     and len(concat) >= len(kw_concat)

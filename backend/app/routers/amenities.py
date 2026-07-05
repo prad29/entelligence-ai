@@ -9,7 +9,7 @@ import openpyxl
 
 from app.database import get_session
 from app.models import AmenityMapping, AuditLog, ReviewItem
-from app.schemas import AmenityMappingCreate, ReviewDecision
+from app.schemas import AmenityMappingCreate, AmenityMappingPatch, ReviewDecision
 from app.detection.loader import build_engine_from_db
 
 router = APIRouter(prefix="/api/v1/amenities", tags=["amenities"])
@@ -42,21 +42,22 @@ def write_audit(
 
 @router.get("")
 def list_amenities(
-    keyword: Optional[str] = None,
+    search: Optional[str] = None,
     status: Optional[str] = None,
-    tier: Optional[int] = None,
+    tier: Optional[str] = None,
     circuit: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
     session: Session = Depends(get_session),
 ):
     q = select(AmenityMapping)
-    if keyword:
-        q = q.where(AmenityMapping.amenity_keyword.contains(keyword))
+    if search:
+        q = q.where(AmenityMapping.amenity_keyword.contains(search))
     if status:
         q = q.where(AmenityMapping.status == status)
     if tier:
-        q = q.where(AmenityMapping.priority_tier == tier)
+        tier_int = int(tier.lstrip("P"))
+        q = q.where(AmenityMapping.priority_tier == tier_int)
     if circuit:
         q = q.where(AmenityMapping.circuit_name == circuit)
     q = q.offset(skip).limit(limit)
@@ -78,6 +79,7 @@ def create_amenity(
             mapping_id=m.id,
             source_string=m.amenity_keyword,
             suggested_format=m.screen_format,
+            reasoning=f"Manual submission: {m.amenity_keyword} → {m.screen_format}",
         )
     )
     write_audit(session, "amenity_mappings", m.id, "create", after=data.dict())
@@ -107,9 +109,42 @@ def update_amenity(
             mapping_id=m.id,
             source_string=m.amenity_keyword,
             suggested_format=m.screen_format,
+            reasoning=f"Manual update: {m.amenity_keyword} → {m.screen_format}",
         )
     )
     write_audit(session, "amenity_mappings", id, "update", before=before, after=data.dict())
+    session.commit()
+    session.refresh(m)
+    return m
+
+
+@router.patch("/{id}")
+def patch_amenity(
+    id: int,
+    data: AmenityMappingPatch,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    m = session.get(AmenityMapping, id)
+    if not m:
+        raise HTTPException(404)
+    before = m.dict()
+    patch_data = data.dict(exclude_unset=True)
+    for k, v in patch_data.items():
+        setattr(m, k, v)
+    if "status" not in patch_data:
+        m.status = "pending"
+    m.version += 1
+    session.add(
+        ReviewItem(
+            type="mapping",
+            mapping_id=m.id,
+            source_string=m.amenity_keyword,
+            suggested_format=m.screen_format,
+            reasoning=f"Manual update: {m.amenity_keyword} → {m.screen_format}",
+        )
+    )
+    write_audit(session, "amenity_mappings", id, "patch", before=before, after=patch_data)
     session.commit()
     session.refresh(m)
     return m

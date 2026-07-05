@@ -72,6 +72,7 @@ def create_override(
             source_string=o.keyword,
             circuit=o.circuit_name,
             suggested_format=o.screen_format,
+            reasoning=f"Manual override: {o.keyword} for {o.circuit_name} → {o.screen_format}",
         )
     )
     write_audit(session, "circuit_overrides", o.id, "create", after=data.dict())
@@ -100,6 +101,7 @@ def update_override(
             source_string=o.keyword,
             circuit=o.circuit_name,
             suggested_format=o.screen_format,
+            reasoning=f"Manual update: {o.keyword} for {o.circuit_name} → {o.screen_format}",
         )
     )
     write_audit(session, "circuit_overrides", id, "update", before=before, after=data.dict())

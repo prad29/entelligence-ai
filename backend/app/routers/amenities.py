@@ -60,7 +60,7 @@ def list_amenities(
         tier_int = int(tier.lstrip("P"))
         q = q.where(AmenityMapping.priority_tier == tier_int)
     if circuit:
-        q = q.where(AmenityMapping.circuit_name == circuit)
+        q = q.where(AmenityMapping.circuit_name.contains(circuit))
 
     count_q = select(func.count()).select_from(q.subquery())
     total = session.exec(count_q).one()

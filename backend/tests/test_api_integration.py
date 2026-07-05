@@ -114,7 +114,10 @@ def test_batch_missing_column():
 def test_amenities_list():
     r = client.get("/api/v1/amenities")
     assert r.status_code == 200
-    assert isinstance(r.json(), list)
+    body = r.json()
+    assert isinstance(body, dict)
+    assert "items" in body
+    assert isinstance(body["items"], list)
 
 
 def test_settings_bedrock_status():

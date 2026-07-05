@@ -98,22 +98,6 @@ def _approve_review_item(
         except Exception:
             pass
 
-    elif item.type == "circuit_override":
-        from app.models import CircuitOverride
-        if item.mapping_id:
-            o = session.get(CircuitOverride, item.mapping_id)
-            if o:
-                before = {"status": o.status}
-                o.status = "approved"
-                write_audit(
-                    session,
-                    "circuit_overrides",
-                    o.id,
-                    "approve",
-                    before=before,
-                    after={"status": "approved"},
-                )
-
     item.status = "approved"
     item.decided_at = datetime.utcnow()
 

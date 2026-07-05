@@ -4,6 +4,45 @@ from datetime import datetime
 import uuid
 
 
+class MovieFormatMapping(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    keyword: str = Field(index=True)
+    format: str                         # "70MM" | "35MM" | "3D" | "2D"
+    priority_tier: int                  # 1=70MM, 2=35MM, 3=3D, 4=2D
+    status: str = Field(default="approved")
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    version: int = Field(default=1)
+
+
+class MovieFormatReviewItem(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    type: str
+    payload: Optional[str] = None
+    source_string: Optional[str] = None
+    suggested_format: Optional[str] = None
+    confidence: Optional[float] = None
+    reasoning: Optional[str] = None
+    status: str = Field(default="pending")
+    reviewer: Optional[str] = None
+    decided_at: Optional[datetime] = None
+    mapping_id: Optional[int] = None
+
+
+class MovieFormatJob(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    status: str = Field(default="queued")
+    total: int = Field(default=0)
+    processed: int = Field(default=0)
+    file_path: Optional[str] = None
+    output_path: Optional[str] = None
+    include_diagnostics: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    ttl: Optional[datetime] = None
+    stats: Optional[str] = None
+
+
 class AmenityMapping(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     amenity_keyword: str = Field(index=True)

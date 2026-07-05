@@ -45,6 +45,7 @@ export interface AmenityFilters {
   search?: string
   status?: string
   tier?: string
+  circuit?: string
   page?: number
   pageSize?: number
 }
@@ -66,6 +67,7 @@ export function useAmenities(filters: AmenityFilters = {}) {
       if (filters.search) params.set('search', filters.search)
       if (filters.status) params.set('status', filters.status)
       if (filters.tier) params.set('tier', filters.tier)
+      if (filters.circuit) params.set('circuit', filters.circuit)
       params.set('page', String(page))
       params.set('page_size', String(pageSize))
 
@@ -79,7 +81,7 @@ export function useAmenities(filters: AmenityFilters = {}) {
     } finally {
       setLoading(false)
     }
-  }, [filters.search, filters.status, filters.tier, page, pageSize])
+  }, [filters.search, filters.status, filters.tier, filters.circuit, page, pageSize])
 
   useEffect(() => { void fetchAmenities() }, [fetchAmenities])
 

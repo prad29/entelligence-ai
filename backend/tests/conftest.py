@@ -7,7 +7,7 @@ DB or Bedrock dependency.
 
 import pytest
 
-from app.detection.types import ApprovedMapping, CircuitOverrideEntry
+from app.detection.types import ApprovedMapping
 from app.detection.normalizer import normalize_string, track_a_clean, track_b_clean, track_c_tokens
 from app.detection.engine import MappingIndex, ScreenFormatEngine
 
@@ -19,7 +19,6 @@ def _make_mapping(
     circuit_name: str | None = None,
     na_default: str | None = None,
 ) -> ApprovedMapping:
-    """Build an ApprovedMapping with pre-computed norm fields."""
     return ApprovedMapping(
         amenity_keyword=keyword,
         screen_format=fmt,
@@ -33,7 +32,6 @@ def _make_mapping(
     )
 
 
-# Canonical circuit aliases used throughout tests
 CIRCUIT_ALIASES: dict[str, str] = {
     "amc entertainment inc": "AMC Entertainment Inc",
     "amc": "AMC Entertainment Inc",
@@ -60,12 +58,12 @@ _DOLBY = _make_mapping("Dolby Cinema", "Dolby Cinema", 2)
 _BTX = _make_mapping("BTX", "BTX", 3)
 _SCREENX = _make_mapping("ScreenX", "ScreenX", 3)
 
-# P4 — Circuit-branded PLFs
-_XL = _make_mapping("XL", "XL at AMC", 4, circuit_name="AMC Entertainment Inc", na_default=None)
+# P4 — Circuit-branded PLFs (circuit_name set, na_default as fallback)
+_XL = _make_mapping("XL", "XL at AMC", 4, circuit_name="AMC Entertainment Inc")
 _XD = _make_mapping("XD", "Cinemark XD", 4, circuit_name="Cinemark Theatres", na_default="XD Strike + Reel")
-_ACX = _make_mapping("ACX", "ACX at Apple Cinemas", 4, circuit_name="Apple Cinemas", na_default="ACX")
+_ACX = _make_mapping("ACX", "ACX Apple", 4, circuit_name="Apple Cinemas", na_default="ACX")
 _GDX = _make_mapping("GDX", "GDX", 4)
-_CINE_XL = _make_mapping("CINE XL", "Cine XL Harkins", 4, circuit_name="Harkins Theatres", na_default=None)
+_CINE_XL = _make_mapping("CINE XL", "Cine XL Harkins", 4, circuit_name="Harkins Theatres")
 _ULTRA_AVX = _make_mapping("UltraAVX", "UltraAVX", 4, circuit_name="Cineplex Entertainment")
 _ACX_INFINITY = _make_mapping("ACX Infinity", "ACX Infinity", 4)
 _DCX = _make_mapping("DCX", "DCX", 4)
@@ -87,21 +85,11 @@ ALL_MAPPINGS: list[ApprovedMapping] = [
     _DIGITAL_3D, _70MM, _DIGITAL, _3D,
 ]
 
-CIRCUIT_OVERRIDES: list[CircuitOverrideEntry] = [
-    CircuitOverrideEntry(keyword="XL", circuit_name="AMC Entertainment Inc", screen_format="XL at AMC"),
-    CircuitOverrideEntry(keyword="XD", circuit_name="Cinemark Theatres", screen_format="Cnmk XD"),
-    CircuitOverrideEntry(keyword="ACX", circuit_name="Apple Cinemas", screen_format="ACX Apple"),
-    CircuitOverrideEntry(keyword="CINE XL", circuit_name="Harkins Theatres", screen_format="Cine XL Harkins"),
-    CircuitOverrideEntry(keyword="UltraAVX", circuit_name="Cineplex Entertainment", screen_format="UltraAVX"),
-    CircuitOverrideEntry(keyword="RPX", circuit_name="Regal Cinemas", screen_format="RPX Regal"),
-]
+# Kept for backward compat — engine ignores it
+CIRCUIT_OVERRIDES: list = []
 
 
 @pytest.fixture(scope="module")
 def engine() -> ScreenFormatEngine:
-    idx = MappingIndex(
-        mappings=ALL_MAPPINGS,
-        overrides=CIRCUIT_OVERRIDES,
-        aliases=CIRCUIT_ALIASES,
-    )
+    idx = MappingIndex(mappings=ALL_MAPPINGS, aliases=CIRCUIT_ALIASES)
     return ScreenFormatEngine(idx)

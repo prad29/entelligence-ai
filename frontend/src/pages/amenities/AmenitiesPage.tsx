@@ -40,6 +40,7 @@ function AmenitiesPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [tierFilter, setTierFilter] = useState('')
+  const [circuitFilter, setCircuitFilter] = useState('')
   const [page, setPage] = useState(1)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<Amenity | null>(null)
@@ -48,6 +49,7 @@ function AmenitiesPage() {
     search,
     status: statusFilter || undefined,
     tier: tierFilter || undefined,
+    circuit: circuitFilter || undefined,
     page,
   })
 
@@ -197,6 +199,15 @@ function AmenitiesPage() {
           options={tierOptions}
           triggerClassName="w-28"
         />
+        <div className="relative min-w-36">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
+          <input
+            value={circuitFilter}
+            onChange={(e) => { setCircuitFilter(e.target.value); resetPage() }}
+            placeholder="Filter by circuit…"
+            className="h-9 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 pl-9 pr-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[#4A9FD4]/30 focus:border-[#4A9FD4] transition-colors"
+          />
+        </div>
         <div className="flex items-center gap-1.5 ml-auto">
           <Button variant="secondary" size="sm">
             <Upload className="h-3.5 w-3.5" />

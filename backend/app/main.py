@@ -36,8 +36,8 @@ async def startup() -> None:
     Initialize the database tables (if they don't exist yet) and load the
     detection engine from approved DB rows.
 
-    Phase 2: engine is built from approved AmenityMapping / CircuitOverride /
-    CircuitAlias rows stored in the database.  Seed the DB first via the CLI:
+    Engine is built from approved AmenityMapping rows and CircuitAlias rows.
+    Seed the DB first via the CLI:
         python app/cli.py seed-from-xlsx path/to/Amenities_Priority.xlsx
     """
     from app.database import create_db_and_tables, engine as db_engine

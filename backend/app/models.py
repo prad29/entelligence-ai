@@ -18,14 +18,6 @@ class AmenityMapping(SQLModel, table=True):
     version: int = Field(default=1)
 
 
-class CircuitOverride(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    keyword: str = Field(index=True)
-    circuit_name: str = Field(index=True)
-    screen_format: str
-    na_default: Optional[str] = None
-    status: str = Field(default="approved")
-
 
 class CircuitAlias(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

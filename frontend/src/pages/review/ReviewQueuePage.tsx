@@ -6,9 +6,29 @@ import { Button } from '@/components/ui/Button'
 import { Dialog } from '@/components/ui/Dialog'
 import { Textarea } from '@/components/ui/Textarea'
 import { Progress } from '@/components/ui/Progress'
-import { Check, X, CheckCheck } from 'lucide-react'
-import { truncate } from '@/lib/utils'
+import { Check, X, CheckCheck, ChevronDown, ChevronUp } from 'lucide-react'
 import api from '@/lib/api'
+
+function ExpandableText({ text, mono = false, threshold = 60 }: { text: string; mono?: boolean; threshold?: number }) {
+  const [expanded, setExpanded] = useState(false)
+  const isLong = text.length > threshold
+
+  return (
+    <div className="max-w-xs">
+      <p className={`text-xs leading-relaxed ${mono ? 'font-mono text-zinc-700 dark:text-zinc-300' : 'text-zinc-500 dark:text-zinc-400'} ${!expanded && isLong ? 'line-clamp-2' : ''}`}>
+        {text}
+      </p>
+      {isLong && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
+          className="mt-0.5 inline-flex items-center gap-0.5 text-[11px] text-[#4A9FD4] hover:text-[#3a8fc4] font-medium"
+        >
+          {expanded ? <><ChevronUp className="h-3 w-3" /> Less</> : <><ChevronDown className="h-3 w-3" /> More</>}
+        </button>
+      )}
+    </div>
+  )
+}
 
 interface ReviewItem {
   id: number
@@ -84,11 +104,9 @@ function ReviewTable({ items, onApprove, onReject }: {
     {
       key: 'source_string',
       header: 'Source String',
-      cell: (row) => (
-        <span className="font-mono text-xs text-zinc-700 dark:text-zinc-300" title={row.source_string ?? undefined}>
-          {truncate(row.source_string ?? '—', 40)}
-        </span>
-      ),
+      cell: (row) => row.source_string
+        ? <ExpandableText text={row.source_string} mono threshold={40} />
+        : <span className="text-xs text-zinc-400">—</span>,
     },
     {
       key: 'suggested_format',
@@ -101,11 +119,7 @@ function ReviewTable({ items, onApprove, onReject }: {
     {
       key: 'reasoning',
       header: 'Reasoning',
-      cell: (row) => row.reasoning ? (
-        <span className="text-xs text-zinc-500 dark:text-zinc-400" title={row.reasoning}>
-          {truncate(row.reasoning, 60)}
-        </span>
-      ) : null,
+      cell: (row) => row.reasoning ? <ExpandableText text={row.reasoning} threshold={80} /> : null,
     },
     {
       key: 'confidence',

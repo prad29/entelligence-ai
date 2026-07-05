@@ -39,13 +39,13 @@ function SidebarNavItem({ to, icon, label, onClick }: NavItem & { onClick?: () =
       className={cn(
         'group flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 relative',
         isActive
-          ? 'bg-zinc-800 text-white dark:bg-zinc-700 before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-4 before:w-0.5 before:rounded-full before:bg-violet-400'
+          ? 'bg-zinc-800 text-white dark:bg-zinc-700 before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-4 before:w-0.5 before:rounded-full before:bg-[#4A9FD4]'
           : 'text-zinc-400 dark:text-zinc-400 hover:bg-zinc-800/60 dark:hover:bg-zinc-800/40 hover:text-zinc-100'
       )}
     >
       <span className={cn(
         'shrink-0 transition-colors',
-        isActive ? 'text-violet-400' : 'text-zinc-500 group-hover:text-zinc-300'
+        isActive ? 'text-[#4A9FD4]' : 'text-zinc-500 group-hover:text-zinc-300'
       )}>
         {icon}
       </span>
@@ -73,16 +73,14 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
   return (
     <div className="flex flex-col h-full">
       {/* Logo */}
-      <div className="px-6 py-5 border-b border-zinc-800 dark:border-zinc-800">
-        <div className="flex items-center gap-2.5">
-          <div className="h-8 w-8 rounded-lg bg-violet-600 flex items-center justify-center shadow-md shadow-violet-900/30">
-            <Sparkles className="h-4 w-4 text-white" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-white leading-none">Entelligence</p>
-            <p className="text-[10px] text-zinc-500 mt-0.5 leading-none">Format Detector</p>
-          </div>
-        </div>
+      <div className="px-5 py-4 border-b border-zinc-800 dark:border-zinc-800">
+        <img src="/logo.png" alt="EntTelligence" className="h-8 w-auto" />
+        <p className="mt-1.5 text-[11px] font-medium tracking-widest text-zinc-400 leading-tight">
+          E.R.I.C.A
+        </p>
+        <p className="mt-0.5 text-[9px] text-zinc-600 leading-tight">
+          Enttelligence Research & Insights Cinematic Assistant
+        </p>
       </div>
 
       {/* Nav groups */}

@@ -30,7 +30,7 @@ function Tabs({ defaultValue, tabs, children, className }: TabsProps) {
               'data-[state=active]:bg-white dark:data-[state=active]:bg-zinc-900',
               'data-[state=active]:text-zinc-900 dark:data-[state=active]:text-zinc-50',
               'data-[state=active]:shadow-sm',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50'
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4A9FD4]/50'
             )}
           >
             {tab.label}

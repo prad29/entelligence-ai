@@ -80,7 +80,7 @@ function UserMenu() {
           className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
           aria-label="User menu"
         >
-          <div className="h-7 w-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-sm">
+          <div className="h-7 w-7 rounded-full bg-gradient-to-br from-[#4A9FD4] to-[#2A7FB4] flex items-center justify-center shadow-sm">
             <User className="h-3.5 w-3.5 text-white" />
           </div>
           <span className="hidden sm:block">Admin</span>

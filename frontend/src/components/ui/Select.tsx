@@ -39,7 +39,7 @@ function Select({ value, onValueChange, options, placeholder = 'Select…', labe
         <Trigger
           className={cn(
             'flex h-9 w-full items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100',
-            'focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500',
+            'focus:outline-none focus:ring-2 focus:ring-[#4A9FD4]/30 focus:border-[#4A9FD4]',
             'data-[placeholder]:text-zinc-400 dark:data-[placeholder]:text-zinc-500',
             'transition-colors duration-150',
             triggerClassName
@@ -88,7 +88,7 @@ function SelectItem({ value, children }: { value: string; children: ReactNode })
       className={cn(
         'relative flex w-full cursor-pointer select-none items-center rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 outline-none',
         'focus:bg-zinc-100 dark:focus:bg-zinc-800',
-        'data-[state=checked]:text-violet-600 dark:data-[state=checked]:text-violet-400',
+        'data-[state=checked]:text-[#4A9FD4] dark:data-[state=checked]:text-[#4A9FD4]',
         'data-[disabled]:pointer-events-none data-[disabled]:opacity-50'
       )}
     >

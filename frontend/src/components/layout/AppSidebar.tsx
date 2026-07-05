@@ -75,6 +75,9 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
       {/* Logo */}
       <div className="px-5 py-4 border-b border-zinc-800 dark:border-zinc-800">
         <img src="/logo.png" alt="EntTelligence" className="h-8 w-auto" />
+        <p className="mt-1.5 text-[11px] font-medium tracking-wide text-zinc-400 leading-tight">
+          Encore — Every insight, center stage
+        </p>
       </div>
 
       {/* Nav groups */}

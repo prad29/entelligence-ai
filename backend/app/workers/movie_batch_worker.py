@@ -137,9 +137,7 @@ def _process_job(
     ai_pending: list[tuple[int, str, Any]] = []  # (row_idx_0based, amenity, result)
 
     for row_idx, row in enumerate(rows):
-        if len(row) <= amenities_idx:
-            continue
-        amenity = str(row[amenities_idx] or "").strip()
+        amenity = str(row[amenities_idx] if len(row) > amenities_idx else "").strip()
         result = detection_engine.detect(amenity)
 
         if result.fired_ai:

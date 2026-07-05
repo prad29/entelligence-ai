@@ -1,6 +1,16 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Generic, TypeVar, List
 from datetime import datetime
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: List[T]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
 
 
 class AmenityMappingCreate(BaseModel):

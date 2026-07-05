@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 from typing import Optional
 import io
 import json
+import math
 
 import openpyxl
 
 from app.database import get_session
 from app.models import AmenityMapping, AuditLog, ReviewItem
-from app.schemas import AmenityMappingCreate, AmenityMappingPatch, ReviewDecision
+from app.schemas import AmenityMappingCreate, AmenityMappingPatch, ReviewDecision, PaginatedResponse
 from app.detection.loader import build_engine_from_db
 
 router = APIRouter(prefix="/api/v1/amenities", tags=["amenities"])
@@ -46,8 +47,8 @@ def list_amenities(
     status: Optional[str] = None,
     tier: Optional[str] = None,
     circuit: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 50,
+    page: int = 1,
+    page_size: int = 50,
     session: Session = Depends(get_session),
 ):
     q = select(AmenityMapping)
@@ -60,8 +61,18 @@ def list_amenities(
         q = q.where(AmenityMapping.priority_tier == tier_int)
     if circuit:
         q = q.where(AmenityMapping.circuit_name == circuit)
-    q = q.offset(skip).limit(limit)
-    return session.exec(q).all()
+
+    count_q = select(func.count()).select_from(q.subquery())
+    total = session.exec(count_q).one()
+
+    items = session.exec(q.offset((page - 1) * page_size).limit(page_size)).all()
+    return PaginatedResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=max(1, math.ceil(total / page_size)),
+    )
 
 
 @router.post("")

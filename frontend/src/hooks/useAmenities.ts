@@ -21,6 +21,14 @@ interface ApiAmenity {
   updated_at: string
 }
 
+interface PaginatedResponse {
+  items: ApiAmenity[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
 function fromApi(a: ApiAmenity): Amenity {
   return {
     id: a.id,
@@ -37,12 +45,19 @@ export interface AmenityFilters {
   search?: string
   status?: string
   tier?: string
+  page?: number
+  pageSize?: number
 }
 
 export function useAmenities(filters: AmenityFilters = {}) {
   const [amenities, setAmenities] = useState<Amenity[]>([])
+  const [total, setTotal] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const page = filters.page ?? 1
+  const pageSize = filters.pageSize ?? 50
 
   const fetchAmenities = useCallback(async () => {
     setLoading(true)
@@ -51,16 +66,20 @@ export function useAmenities(filters: AmenityFilters = {}) {
       if (filters.search) params.set('search', filters.search)
       if (filters.status) params.set('status', filters.status)
       if (filters.tier) params.set('tier', filters.tier)
+      params.set('page', String(page))
+      params.set('page_size', String(pageSize))
 
-      const res = await api.get<ApiAmenity[]>(`/api/v1/amenities?${params.toString()}`)
-      setAmenities(res.data.map(fromApi))
+      const res = await api.get<PaginatedResponse>(`/api/v1/amenities?${params.toString()}`)
+      setAmenities(res.data.items.map(fromApi))
+      setTotal(res.data.total)
+      setTotalPages(res.data.total_pages)
       setError(null)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load amenities')
     } finally {
       setLoading(false)
     }
-  }, [filters.search, filters.status, filters.tier])
+  }, [filters.search, filters.status, filters.tier, page, pageSize])
 
   useEffect(() => { void fetchAmenities() }, [fetchAmenities])
 
@@ -97,6 +116,8 @@ export function useAmenities(filters: AmenityFilters = {}) {
 
   return {
     amenities,
+    total,
+    totalPages,
     loading,
     error,
     createAmenity,

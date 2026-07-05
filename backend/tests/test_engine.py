@@ -31,7 +31,7 @@ class TestAcceptanceSuite:
 
     def test_at06_xd_cinemark(self, engine):
         result = engine.detect("XD", "Cinemark Theatres")
-        assert result.screen_format == "Cnmk XD"
+        assert result.screen_format == "Cinemark XD"
 
     def test_at07_xd_na_default(self, engine):
         result = engine.detect("XD", "")

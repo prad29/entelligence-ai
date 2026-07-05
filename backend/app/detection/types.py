@@ -15,12 +15,6 @@ class ApprovedMapping:
     norm_track_c: frozenset
 
 
-@dataclass(frozen=True)
-class CircuitOverrideEntry:
-    keyword: str
-    circuit_name: str
-    screen_format: str
-
 
 @dataclass
 class DetectionResult:

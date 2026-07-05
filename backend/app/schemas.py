@@ -52,12 +52,6 @@ class ReviewDecision(BaseModel):
     reason: Optional[str] = None
 
 
-class CircuitOverrideCreate(BaseModel):
-    keyword: str
-    circuit_name: str
-    screen_format: str
-    na_default: Optional[str] = None
-
 
 class CircuitAliasCreate(BaseModel):
     raw_or_alias: str

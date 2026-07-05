@@ -3,7 +3,6 @@ import { cn } from '@/lib/utils'
 import {
   Sparkles,
   List,
-  GitBranch,
   ClipboardCheck,
   Settings,
   Menu,
@@ -20,7 +19,6 @@ interface NavItem {
 const detectionGroup: NavItem[] = [
   { to: '/detection', icon: <Sparkles className="h-4 w-4" />, label: 'AI Amenity Detection' },
   { to: '/amenities', icon: <List className="h-4 w-4" />, label: 'Master Amenity List' },
-  { to: '/circuits', icon: <GitBranch className="h-4 w-4" />, label: 'Circuit Mappings' },
   { to: '/review', icon: <ClipboardCheck className="h-4 w-4" />, label: 'Review Queue' },
 ]
 

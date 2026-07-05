@@ -49,12 +49,11 @@ app.dependency_overrides[get_session] = _override_get_session
 SQLModel.metadata.create_all(_sqlite_engine)
 
 # ── Build and inject a seeded detection engine ────────────────────────────────
-from tests.conftest import ALL_MAPPINGS, CIRCUIT_OVERRIDES, CIRCUIT_ALIASES  # noqa: E402
+from tests.conftest import ALL_MAPPINGS, CIRCUIT_ALIASES  # noqa: E402
 from app.detection.engine import MappingIndex, ScreenFormatEngine  # noqa: E402
 
 _idx = MappingIndex(
     mappings=ALL_MAPPINGS,
-    overrides=CIRCUIT_OVERRIDES,
     aliases=CIRCUIT_ALIASES,
 )
 _seeded_engine = ScreenFormatEngine(_idx)

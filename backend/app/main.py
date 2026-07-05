@@ -5,6 +5,7 @@ from app.config import settings
 from app.logging_config import configure_logging
 from app.routers import detect, amenities, circuits, review, jobs
 from app.routers import settings as settings_router
+from app.routers import movie_detect, movie_formats, movie_review, movie_jobs
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -28,6 +29,34 @@ app.include_router(circuits.router)
 app.include_router(review.router)
 app.include_router(settings_router.router)
 app.include_router(jobs.router)
+app.include_router(movie_detect.router)
+app.include_router(movie_formats.router)
+app.include_router(movie_review.router)
+app.include_router(movie_jobs.router)
+
+
+_DEFAULT_MOVIE_FORMAT_SEEDS = [
+    ("70mm", "70MM", 1),
+    ("35mm", "35MM", 2),
+    ("3d", "3D", 3),
+    ("2d", "2D", 4),
+]
+
+
+def _seed_default_movie_formats(session) -> None:
+    from sqlmodel import select
+    from app.models import MovieFormatMapping
+    exists = session.exec(select(MovieFormatMapping).limit(1)).first()
+    if exists:
+        return
+    for keyword, fmt, tier in _DEFAULT_MOVIE_FORMAT_SEEDS:
+        session.add(MovieFormatMapping(
+            keyword=keyword,
+            format=fmt,
+            priority_tier=tier,
+            status="approved",
+        ))
+    session.commit()
 
 
 @app.on_event("startup")
@@ -43,8 +72,11 @@ async def startup() -> None:
     from app.database import create_db_and_tables, engine as db_engine
     from sqlmodel import Session
     from app.detection.loader import build_engine_from_db
+    from app.movie_detection.loader import build_movie_format_engine_from_db
 
     create_db_and_tables()
 
     with Session(db_engine) as session:
         app.state.engine = build_engine_from_db(session)
+        _seed_default_movie_formats(session)
+        app.state.movie_engine = build_movie_format_engine_from_db(session)

@@ -37,7 +37,7 @@ function BatchUploader() {
   const isRunning = job?.status === 'running' || job?.status === 'pending'
 
   return (
-    <div className="max-w-2xl flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">

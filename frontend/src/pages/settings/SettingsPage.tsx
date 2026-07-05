@@ -151,7 +151,7 @@ function BedrockConfigCard() {
 
 function SettingsPage() {
   return (
-    <div className="max-w-2xl flex flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <BedrockConfigCard />
     </div>
   )

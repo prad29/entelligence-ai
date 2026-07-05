@@ -48,6 +48,35 @@ class AmenityMappingPatch(BaseModel):
     status: Optional[str] = None
 
 
+class MovieFormatMappingCreate(BaseModel):
+    keyword: str
+    format: str
+    priority_tier: int
+    notes: Optional[str] = None
+
+
+class MovieFormatMappingRead(BaseModel):
+    id: int
+    keyword: str
+    format: str
+    priority_tier: int
+    status: str
+    notes: Optional[str]
+    updated_at: datetime
+    version: int
+
+    class Config:
+        from_attributes = True
+
+
+class MovieFormatMappingPatch(BaseModel):
+    keyword: Optional[str] = None
+    format: Optional[str] = None
+    priority_tier: Optional[int] = None
+    notes: Optional[str] = None
+    status: Optional[str] = None
+
+
 class ReviewDecision(BaseModel):
     reason: Optional[str] = None
 

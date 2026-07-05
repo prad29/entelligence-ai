@@ -18,3 +18,7 @@ def get_redis() -> _redis.Redis:
 
 def bedrock_cache_key(amenity: str, circuit: str) -> str:
     return f"bedrock:v1:{amenity.strip().lower()}:{circuit.strip().lower()}"
+
+
+def movie_format_cache_key(amenity: str) -> str:
+    return f"movie_format:v1:{amenity.strip().lower()}"

@@ -65,6 +65,7 @@ def list_amenities(
     count_q = select(func.count()).select_from(q.subquery())
     total = session.exec(count_q).one()
 
+    q = q.order_by(AmenityMapping.priority_tier, AmenityMapping.amenity_keyword)
     items = session.exec(q.offset((page - 1) * page_size).limit(page_size)).all()
     return PaginatedResponse(
         items=items,

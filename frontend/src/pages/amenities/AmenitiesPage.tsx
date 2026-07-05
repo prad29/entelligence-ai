@@ -255,7 +255,7 @@ function AmenitiesPage() {
                     onClick={() => setPage(p as number)}
                     className={`min-w-[2rem] rounded-md px-2 py-1 text-xs font-medium transition-colors ${
                       page === p
-                        ? 'bg-violet-600 text-white'
+                        ? 'bg-[#4A9FD4] text-white'
                         : 'hover:bg-zinc-100 dark:hover:bg-zinc-800'
                     }`}
                   >

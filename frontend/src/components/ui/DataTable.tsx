@@ -149,7 +149,7 @@ function DataTable<T>({
                       'bg-white dark:bg-zinc-900 transition-colors duration-100',
                       'hover:bg-zinc-50 dark:hover:bg-zinc-800/60',
                       onRowClick && 'cursor-pointer',
-                      isSelected && 'bg-violet-50 dark:bg-violet-950/20'
+                      isSelected && 'bg-[#4A9FD4]/10 dark:bg-[#4A9FD4]/10'
                     )}
                   >
                     {selectable && (

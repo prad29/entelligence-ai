@@ -38,6 +38,7 @@ class MovieFormatJob(SQLModel, table=True):
     file_path: Optional[str] = None
     output_path: Optional[str] = None
     include_diagnostics: bool = Field(default=False)
+    audit_mode: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ttl: Optional[datetime] = None
     stats: Optional[str] = None
@@ -72,6 +73,7 @@ class DetectionJob(SQLModel, table=True):
     file_path: Optional[str] = None
     output_path: Optional[str] = None
     include_diagnostics: bool = Field(default=False)
+    audit_mode: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ttl: Optional[datetime] = None
     stats: Optional[str] = None

@@ -2,7 +2,7 @@ import os
 import threading
 import uuid
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile, File
 from pydantic import BaseModel
 from sqlmodel import Session
 from typing import Optional
@@ -80,6 +80,7 @@ async def detect_batch_movie(
     file: UploadFile = File(...),
     include_diagnostics: str = Form("false"),
     batch_ai_mode: str = Form("skip"),
+    audit_mode: bool = Query(False),
     session: Session = Depends(get_session),
 ):
     diag_bool = include_diagnostics.lower() in ("true", "1", "yes")
@@ -95,8 +96,13 @@ async def detect_batch_movie(
 
     from app.workers.movie_batch_worker import _peek_headers
     headers = _peek_headers(contents, ext)
-    if "amenities" not in headers:
-        raise HTTPException(400, detail="Missing required column: amenities")
+    if audit_mode:
+        missing = [col for col in ("amenities_string", "movie_format") if col not in headers]
+        if missing:
+            raise HTTPException(400, detail=f"audit_mode requires columns: {', '.join(missing)}")
+    else:
+        if "amenities_string" not in headers and "amenities" not in headers:
+            raise HTTPException(400, detail="Missing required column: amenities_string")
 
     os.makedirs(_UPLOAD_DIR, exist_ok=True)
     job_id = str(uuid.uuid4())
@@ -104,14 +110,20 @@ async def detect_batch_movie(
     with open(upload_path, "wb") as f_out:
         f_out.write(contents)
 
-    job = MovieFormatJob(id=job_id, status="queued", total=row_count, include_diagnostics=diag_bool)
+    job = MovieFormatJob(
+        id=job_id,
+        status="queued",
+        total=row_count,
+        include_diagnostics=diag_bool,
+        audit_mode=audit_mode,
+    )
     session.add(job)
     session.commit()
 
     from app.workers.movie_batch_worker import run_movie_batch_job
     t = threading.Thread(
         target=run_movie_batch_job,
-        args=(job_id, upload_path, diag_bool, request.app.state.movie_engine, batch_ai_mode),
+        args=(job_id, upload_path, diag_bool, request.app.state.movie_engine, batch_ai_mode, audit_mode),
         daemon=True,
     )
     t.start()

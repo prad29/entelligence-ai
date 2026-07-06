@@ -2,7 +2,7 @@ import os
 import threading
 import uuid
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile, File
 from pydantic import BaseModel
 from sqlmodel import Session, select
 from typing import Optional
@@ -66,6 +66,7 @@ async def detect_batch(
     request: Request,
     file: UploadFile = File(...),
     include_diagnostics: str = Form("false"),
+    audit_mode: bool = Query(False),
     session: Session = Depends(get_session),
 ):
     diag_bool = include_diagnostics.lower() in ("true", "1", "yes")
@@ -82,7 +83,10 @@ async def detect_batch(
     # Validate required columns before accepting the job
     from app.workers.batch_worker import _peek_headers
     headers = _peek_headers(contents, ext)
-    missing = [col for col in ("amenities", "circuit_name") if col not in headers]
+    required_cols = ["amenities", "circuit_name"]
+    if audit_mode:
+        required_cols.append("screen_format")
+    missing = [col for col in required_cols if col not in headers]
     if missing:
         raise HTTPException(400, detail=f"Missing required column(s): {', '.join(missing)}")
 
@@ -92,7 +96,13 @@ async def detect_batch(
     with open(upload_path, "wb") as f_out:
         f_out.write(contents)
 
-    job = DetectionJob(id=job_id, status="queued", total=row_count, include_diagnostics=diag_bool)
+    job = DetectionJob(
+        id=job_id,
+        status="queued",
+        total=row_count,
+        include_diagnostics=diag_bool,
+        audit_mode=audit_mode,
+    )
     session.add(job)
     session.commit()
 
@@ -100,6 +110,7 @@ async def detect_batch(
     t = threading.Thread(
         target=run_batch_job,
         args=(job_id, upload_path, diag_bool, request.app.state.engine),
+        kwargs={"audit_mode": audit_mode},
         daemon=True,
     )
     t.start()

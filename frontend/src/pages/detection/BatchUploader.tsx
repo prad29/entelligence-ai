@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 function BatchUploader() {
   const [file, setFile] = useState<File | null>(null)
   const [includeDiagnostics, setIncludeDiagnostics] = useState(false)
+  const [auditMode, setAuditMode] = useState(false)
   const { job, uploading, isActive, error, uploadBatch, reset } = useBatchJob()
 
   const onDrop = useCallback((accepted: File[]) => {
@@ -24,7 +25,7 @@ function BatchUploader() {
 
   const handleUpload = async () => {
     if (!file) return
-    await uploadBatch(file, includeDiagnostics)
+    await uploadBatch(file, includeDiagnostics, auditMode)
   }
 
   const handleReset = () => {
@@ -124,6 +125,40 @@ function BatchUploader() {
             </label>
           )}
 
+          {/* Audit mode toggle */}
+          {!job && (
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    checked={auditMode}
+                    onChange={(e) => setAuditMode(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className={cn(
+                    'h-5 w-9 rounded-full border-2 transition-colors duration-200',
+                    auditMode
+                      ? 'bg-violet-600 border-violet-600'
+                      : 'bg-zinc-200 dark:bg-zinc-700 border-zinc-200 dark:border-zinc-700'
+                  )}>
+                    <div className={cn(
+                      'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform duration-200',
+                      auditMode ? 'translate-x-4' : 'translate-x-0'
+                    )} />
+                  </div>
+                </div>
+                <span className="text-sm text-zinc-700 dark:text-zinc-300">Audit mode</span>
+              </label>
+              {auditMode && (
+                <div className="ml-12 flex flex-col gap-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                  <p>CSV must include: <code className="font-mono">circuit_name</code>, <code className="font-mono">amenities</code>, <code className="font-mono">screen_format</code></p>
+                  <p>Output adds: <code className="font-mono">detected_format</code>, <code className="font-mono">anomaly</code>, <code className="font-mono">ai_suggested_format</code>, <code className="font-mono">reasoning</code></p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Upload button */}
           {!job && (
             <Button
@@ -179,7 +214,7 @@ function BatchUploader() {
               </div>
 
               {/* Stats */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className={cn('grid gap-3', auditMode && job.anomaly_count != null ? 'grid-cols-4' : 'grid-cols-3')}>
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-3 text-center">
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">Matched</p>
                   <p className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{job.matched}</p>
@@ -192,6 +227,12 @@ function BatchUploader() {
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">Total</p>
                   <p className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{job.total}</p>
                 </div>
+                {auditMode && job.anomaly_count != null && (
+                  <div className="rounded-lg bg-red-50 dark:bg-red-950/30 p-3 text-center">
+                    <p className="text-xs text-red-600 dark:text-red-400">Anomalies</p>
+                    <p className="text-lg font-bold text-red-800 dark:text-red-300">{job.anomaly_count}</p>
+                  </div>
+                )}
               </div>
 
               {/* Download */}

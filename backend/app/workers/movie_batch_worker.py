@@ -57,6 +57,7 @@ def run_movie_batch_job(
     include_diagnostics: bool,
     detection_engine,
     batch_ai_mode: str = "skip",
+    audit_mode: bool = False,
 ) -> None:
     from app.config import settings
 
@@ -70,7 +71,7 @@ def run_movie_batch_job(
         session.commit()
 
         try:
-            _process_job(job_id, upload_path, include_diagnostics, detection_engine, session, settings, batch_ai_mode)
+            _process_job(job_id, upload_path, include_diagnostics, detection_engine, session, settings, batch_ai_mode, audit_mode)
         except Exception:
             job = session.get(MovieFormatJob, job_id)
             if job:
@@ -88,9 +89,37 @@ def _process_job(
     session: Session,
     settings,
     batch_ai_mode: str = "skip",
+    audit_mode: bool = False,
 ) -> None:
     headers, rows = _read_rows(upload_path)
-    amenities_idx = headers.index("amenities")
+
+    # Resolve amenity column: audit mode always uses amenities_string
+    if audit_mode:
+        if "amenities_string" not in headers:
+            job = session.get(MovieFormatJob, job_id)
+            if job:
+                job.status = "failed"
+                job.stats = json.dumps({"error": "audit_mode requires column: amenities_string"})
+                session.commit()
+            logger.error("_process_job: job %s missing amenities_string column", job_id)
+            return
+        if "movie_format" not in headers:
+            job = session.get(MovieFormatJob, job_id)
+            if job:
+                job.status = "failed"
+                job.stats = json.dumps({"error": "audit_mode requires column: movie_format"})
+                session.commit()
+            logger.error("_process_job: job %s missing movie_format column", job_id)
+            return
+        amenities_idx = headers.index("amenities_string")
+        user_format_idx: Optional[int] = headers.index("movie_format")
+    else:
+        # Support both legacy "amenities" and new "amenities_string" column names
+        if "amenities_string" in headers:
+            amenities_idx = headers.index("amenities_string")
+        else:
+            amenities_idx = headers.index("amenities")
+        user_format_idx = None
 
     actual_total = len(rows)
     job = session.get(MovieFormatJob, job_id)
@@ -102,7 +131,7 @@ def _process_job(
     ws_out = wb_out.active
     _AI_FILL = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid")
 
-    out_headers = ["amenities", "movie_format"]
+    out_headers = ["amenities_string", "movie_format"]
     if include_diagnostics:
         out_headers += [
             "detected_keyword",
@@ -112,9 +141,18 @@ def _process_job(
             "ai_suggested_format",
             "ai_reasoning",
         ]
+    if audit_mode:
+        out_headers += [
+            "detected_format",
+            "ai_suggested_format",
+            "anomaly",
+            "reasoning",
+        ]
     ws_out.append(out_headers)
 
-    stats: dict[str, int] = {"matched": 0, "standard": 0, "ai_suggestions": 0, "no_match": 0}
+    stats: dict[str, Any] = {"matched": 0, "standard": 0, "ai_suggestions": 0, "no_match": 0}
+    if audit_mode:
+        stats["anomaly_count"] = 0
 
     ai_enabled = settings.AI_TRIGGER_MODE not in ("off", "")
     pending_review: list[MovieFormatReviewItem] = []
@@ -135,28 +173,30 @@ def _process_job(
     _ttl_seconds = settings.BEDROCK_CACHE_TTL_DAYS * 86400
 
     # Pass 1: Layer 1 detection on all rows
-    row_data: list[tuple[str, Any, bool]] = []
-    ai_pending: list[tuple[int, str, Any]] = []  # (row_idx_0based, amenity, result)
+    # row_data tuple: (amenity, result, needs_ai, user_format)
+    row_data: list[tuple[str, Any, bool, str]] = []
+    ai_pending: list[tuple[int, str, Any, str]] = []  # (row_idx_0based, amenity, result, user_format)
 
     for row_idx, row in enumerate(rows):
         amenity = str(row[amenities_idx] if len(row) > amenities_idx else "").strip()
+        user_format = str(row[user_format_idx] if user_format_idx is not None and len(row) > user_format_idx else "").strip()
         result = detection_engine.detect(amenity)
 
         if result.fired_ai:
             stats["no_match"] += 1
             stats["standard"] += 1
-            row_data.append((amenity, result, True))
-            ai_pending.append((row_idx, amenity, result))
+            row_data.append((amenity, result, True, user_format))
+            ai_pending.append((row_idx, amenity, result, user_format))
         else:
             if result.movie_format != "2D":
                 stats["matched"] += 1
             else:
                 stats["standard"] += 1
-            row_data.append((amenity, result, False))
+            row_data.append((amenity, result, False, user_format))
 
     # Write non-AI rows immediately
     non_ai_count = 0
-    for idx, (amenity, result, needs_ai) in enumerate(row_data):
+    for idx, (amenity, result, needs_ai, user_format) in enumerate(row_data):
         if not needs_ai:
             out_row: list = [amenity, result.movie_format]
             if include_diagnostics:
@@ -167,6 +207,16 @@ def _process_job(
                     result.confidence,
                     result.ai_suggested_format or "",
                     result.ai_reasoning or "",
+                ]
+            if audit_mode:
+                anomaly = user_format.strip().lower() != result.movie_format.strip().lower()
+                if anomaly:
+                    stats["anomaly_count"] += 1
+                out_row += [
+                    result.movie_format,
+                    result.ai_suggested_format or "",
+                    "TRUE" if anomaly else "FALSE",
+                    result.ai_reasoning if result.fired_ai else "",
                 ]
             ws_out.append(out_row)
             non_ai_count += 1
@@ -190,7 +240,7 @@ def _process_job(
                 return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
 
         key_to_pending_indices: dict[str, list[int]] = {}
-        for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
             cache_key = amenity.strip().lower()
             if cache_key not in key_to_pending_indices:
                 key_to_pending_indices[cache_key] = []
@@ -244,7 +294,7 @@ def _process_job(
                     job.processed = non_ai_count + completed_count
                 session.commit()
 
-        for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
             cache_key = amenity.strip().lower()
             suggestion = dedup_cache.get(cache_key)
 
@@ -277,7 +327,7 @@ def _process_job(
                 return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
 
         key_to_pending_indices: dict[str, list[int]] = {}
-        for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
             cache_key = amenity.strip().lower()
             if cache_key not in key_to_pending_indices:
                 key_to_pending_indices[cache_key] = []
@@ -297,7 +347,7 @@ def _process_job(
                 except Exception:
                     dedup_cache[ck] = None
 
-        for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
             cache_key = amenity.strip().lower()
             suggestion = dedup_cache.get(cache_key)
             if suggestion:
@@ -321,7 +371,7 @@ def _process_job(
                 ))
 
     elif (not effective_ai) and ai_pending:
-        for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
             pending_review.append(MovieFormatReviewItem(
                 type="ai_suggestion",
                 source_string=amenity,
@@ -331,7 +381,7 @@ def _process_job(
             ))
 
     # Write AI rows to output
-    for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+    for pending_idx, (row_idx_0, amenity, result, user_format) in enumerate(ai_pending):
         out_row = [amenity, result.movie_format]
         if include_diagnostics:
             out_row += [
@@ -341,6 +391,16 @@ def _process_job(
                 result.confidence,
                 result.ai_suggested_format or "",
                 result.ai_reasoning or "",
+            ]
+        if audit_mode:
+            anomaly = user_format.strip().lower() != result.movie_format.strip().lower()
+            if anomaly:
+                stats["anomaly_count"] += 1
+            out_row += [
+                result.movie_format,
+                result.ai_suggested_format or "",
+                "TRUE" if anomaly else "FALSE",
+                result.ai_reasoning if result.fired_ai else "",
             ]
         ws_out.append(out_row)
 
@@ -375,7 +435,7 @@ def _process_job(
 
     if ai_pending:
         from collections import Counter
-        unmatched_counter = Counter(amenity.strip().lower() for (_, amenity, _) in ai_pending)
+        unmatched_counter = Counter(amenity.strip().lower() for (_, amenity, _r, _uf) in ai_pending)
         top_unmatched = unmatched_counter.most_common(10)
         logger.info("movie_batch_top_unmatched job=%s: %s", job_id, top_unmatched)
         stats["top_unmatched"] = [{"amenity": a, "count": c} for a, c in top_unmatched]

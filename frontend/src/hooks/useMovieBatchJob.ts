@@ -9,6 +9,7 @@ export interface MovieBatchJob {
   processed: number
   matched: number
   ai_suggestions: number
+  anomaly_count?: number
   output_url?: string
   error?: string
 }
@@ -27,7 +28,7 @@ export function useMovieBatchJob() {
     }
   }
 
-  const uploadBatch = async (file: File, includeDiagnostics: boolean, batchAiMode?: string) => {
+  const uploadBatch = async (file: File, includeDiagnostics: boolean, batchAiMode?: string, auditMode?: boolean) => {
     setUploading(true)
     setIsActive(true)
     setError(null)
@@ -40,7 +41,11 @@ export function useMovieBatchJob() {
       form.append('include_diagnostics', String(includeDiagnostics))
       form.append('batch_ai_mode', batchAiMode ?? 'skip')
 
-      const res = await api.post<{ job_id: string }>('/api/v1/movie-detect/batch', form, {
+      const url = auditMode
+        ? '/api/v1/movie-detect/batch?audit_mode=true'
+        : '/api/v1/movie-detect/batch'
+
+      const res = await api.post<{ job_id: string }>(url, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
 

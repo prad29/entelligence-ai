@@ -236,7 +236,7 @@ def _process_job(
     non_ai_count = 0
     for idx, (amenity, circuit, user_format, result, needs_ai) in enumerate(row_data):
         if not needs_ai:
-            out_row: list = [circuit, amenity, result.screen_format]
+            out_row: list = [circuit, amenity, user_format if audit_mode else result.screen_format]
             if include_diagnostics:
                 out_row += [
                     result.detected_keyword or "",
@@ -397,7 +397,8 @@ def _process_job(
     # =========================================================================
 
     for pending_idx, (row_idx_0, amenity, circuit, result) in enumerate(ai_pending):
-        out_row = [circuit, amenity, result.screen_format]
+        user_format_ai = row_data[row_idx_0][2]
+        out_row = [circuit, amenity, user_format_ai if audit_mode else result.screen_format]
         if include_diagnostics:
             out_row += [
                 result.detected_keyword or "",
@@ -408,8 +409,7 @@ def _process_job(
                 result.ai_reasoning or "",
             ]
         if audit_mode:
-            user_format = row_data[row_idx_0][2]
-            anomaly = user_format.strip().lower() != result.screen_format.strip().lower()
+            anomaly = user_format_ai.strip().lower() != result.screen_format.strip().lower()
             if anomaly:
                 stats["anomaly_count"] += 1
             out_row += [

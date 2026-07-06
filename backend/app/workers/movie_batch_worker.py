@@ -93,15 +93,19 @@ def _process_job(
 ) -> None:
     headers, rows = _read_rows(upload_path)
 
-    # Resolve amenity column: audit mode always uses amenities_string
+    # Resolve amenity column: accept either "amenities_string" or "amenities"
     if audit_mode:
-        if "amenities_string" not in headers:
+        if "amenities_string" in headers:
+            amenities_idx = headers.index("amenities_string")
+        elif "amenities" in headers:
+            amenities_idx = headers.index("amenities")
+        else:
             job = session.get(MovieFormatJob, job_id)
             if job:
                 job.status = "failed"
-                job.stats = json.dumps({"error": "audit_mode requires column: amenities_string"})
+                job.stats = json.dumps({"error": "audit_mode requires an amenities or amenities_string column"})
                 session.commit()
-            logger.error("_process_job: job %s missing amenities_string column", job_id)
+            logger.error("_process_job: job %s missing amenities column", job_id)
             return
         if "movie_format" not in headers:
             job = session.get(MovieFormatJob, job_id)
@@ -111,7 +115,6 @@ def _process_job(
                 session.commit()
             logger.error("_process_job: job %s missing movie_format column", job_id)
             return
-        amenities_idx = headers.index("amenities_string")
         user_format_idx: Optional[int] = headers.index("movie_format")
     else:
         # Support both legacy "amenities" and new "amenities_string" column names
@@ -198,7 +201,7 @@ def _process_job(
     non_ai_count = 0
     for idx, (amenity, result, needs_ai, user_format) in enumerate(row_data):
         if not needs_ai:
-            out_row: list = [amenity, result.movie_format]
+            out_row: list = [amenity, user_format if audit_mode else result.movie_format]
             if include_diagnostics:
                 out_row += [
                     result.detected_keyword or "",
@@ -382,7 +385,7 @@ def _process_job(
 
     # Write AI rows to output
     for pending_idx, (row_idx_0, amenity, result, user_format) in enumerate(ai_pending):
-        out_row = [amenity, result.movie_format]
+        out_row = [amenity, user_format if audit_mode else result.movie_format]
         if include_diagnostics:
             out_row += [
                 result.detected_keyword or "",

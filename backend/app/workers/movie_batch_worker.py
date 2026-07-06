@@ -180,8 +180,12 @@ def _process_job(
     row_data: list[tuple[str, Any, bool, str]] = []
     ai_pending: list[tuple[int, str, Any, str]] = []  # (row_idx_0based, amenity, result, user_format)
 
+    _SENTINEL_VALUES = {"undefined", "null", "none", "n/a", "na"}
+
     for row_idx, row in enumerate(rows):
         amenity = str(row[amenities_idx] if len(row) > amenities_idx else "").strip()
+        if amenity.lower() in _SENTINEL_VALUES:
+            amenity = ""
         user_format = str(row[user_format_idx] if user_format_idx is not None and len(row) > user_format_idx else "").strip()
         result = detection_engine.detect(amenity)
 

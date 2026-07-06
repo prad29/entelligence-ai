@@ -210,9 +210,13 @@ def _process_job(
     row_data: list[tuple[str, str, str, Any, bool]] = []
     ai_pending: list[tuple[int, str, str, Any]] = []  # (row_idx_0based, amenity, circuit, result)
 
+    _SENTINEL_VALUES = {"undefined", "null", "none", "n/a", "na"}
+
     for row_idx, row in enumerate(rows):
         amenity = str(row[amenities_idx] if len(row) > amenities_idx else "").strip()
         circuit = str(row[circuit_idx] if len(row) > circuit_idx else "").strip()
+        if circuit.lower() in _SENTINEL_VALUES:
+            circuit = ""
         user_format = (
             str(row[user_format_idx] if len(row) > user_format_idx else "").strip()
             if audit_mode and user_format_idx is not None

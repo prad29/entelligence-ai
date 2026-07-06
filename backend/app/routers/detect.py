@@ -28,8 +28,12 @@ async def detect_single(
     request: Request,
     session: Session = Depends(get_session),
 ):
+    _SENTINEL_VALUES = {"undefined", "null", "none", "n/a", "na"}
+    circuit = (payload.circuit_name or "").strip()
+    if circuit.lower() in _SENTINEL_VALUES:
+        circuit = ""
     engine = request.app.state.engine
-    result = engine.detect(payload.amenity, payload.circuit_name or "")
+    result = engine.detect(payload.amenity, circuit)
 
     if result.fired_ai and settings.AI_TRIGGER_MODE != "off":
         known_formats = sorted({
@@ -40,7 +44,7 @@ async def detect_single(
         })
         suggestion = bedrock_client.classify_single(
             amenity=payload.amenity,
-            circuit=payload.circuit_name or "",
+            circuit=circuit,
             known_formats=known_formats,
         )
         if suggestion:
@@ -51,7 +55,7 @@ async def detect_single(
             session.add(ReviewItem(
                 type="ai_suggestion",
                 source_string=payload.amenity,
-                circuit=payload.circuit_name or None,
+                circuit=circuit or None,
                 suggested_format=suggestion.suggested_screen_format,
                 confidence=suggestion.confidence,
                 reasoning=suggestion.reasoning,

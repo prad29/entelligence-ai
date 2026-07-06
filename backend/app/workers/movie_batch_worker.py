@@ -179,6 +179,7 @@ def _process_job(
     # Pass 2: Concurrent Bedrock calls for AI-pending rows
     effective_ai = ai_enabled and batch_ai_mode == "full"
     sample_mode = ai_enabled and batch_ai_mode == "sample"
+    async_batch_available = ai_enabled and batch_ai_mode == "async_batch"
     sample_limit = getattr(settings, "BATCH_AI_SAMPLE_LIMIT", 50)
 
     if effective_ai and ai_pending:
@@ -187,7 +188,7 @@ def _process_job(
 
         def _classify_with_semaphore(amenity: str):
             with semaphore:
-                return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
+                return bedrock_client.classify_batch_fast(amenity)
 
         key_to_pending_indices: dict[str, list[int]] = {}
         for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
@@ -274,7 +275,7 @@ def _process_job(
 
         def _classify_sample(amenity: str):
             with semaphore_s:
-                return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
+                return bedrock_client.classify_batch_fast(amenity)
 
         key_to_pending_indices: dict[str, list[int]] = {}
         for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
@@ -318,6 +319,87 @@ def _process_job(
                     suggested_format="2D",
                     confidence=0.0,
                     reasoning="No keyword match — outside AI sample limit",
+                ))
+
+    elif async_batch_available and ai_pending:
+        from app.detection.bedrock_batch import is_configured, run_async_batch
+
+        amenity_list = [amenity for (_, amenity, _) in ai_pending]
+
+        if is_configured():
+            logger.info("movie_batch_async_batch job=%s unique=%d", job_id, len(set(a.strip().lower() for a in amenity_list)))
+            batch_results = run_async_batch(job_id, amenity_list)
+        else:
+            logger.warning("Async batch not configured, falling back to ThreadPoolExecutor for job %s", job_id)
+            batch_results = {}
+
+        if batch_results:
+            for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+                cache_key = amenity.strip().lower()
+                suggestion = batch_results.get(cache_key)
+                if suggestion:
+                    result.ai_suggested_format = suggestion.suggested_screen_format
+                    result.ai_reasoning = suggestion.reasoning
+                    stats["ai_suggestions"] += 1
+                    if _redis_available:
+                        try:
+                            import json as _json
+                            rkey = _mck(cache_key)
+                            _redis_client.setex(rkey, _ttl_seconds, _json.dumps(suggestion.__dict__))
+                        except Exception:
+                            pass
+                    pending_review.append(MovieFormatReviewItem(
+                        type="ai_suggestion",
+                        source_string=amenity,
+                        suggested_format=suggestion.suggested_screen_format,
+                        confidence=suggestion.confidence,
+                        reasoning=suggestion.reasoning,
+                    ))
+                else:
+                    pending_review.append(MovieFormatReviewItem(
+                        type="ai_suggestion",
+                        source_string=amenity,
+                        suggested_format="2D",
+                        confidence=0.0,
+                        reasoning="Async batch — no result returned",
+                    ))
+        else:
+            # Fallback to synchronous ThreadPoolExecutor (same as effective_ai path)
+            logger.info("Async batch returned no results, falling back to sync for job %s", job_id)
+            _concurrency_fb = getattr(settings, "BEDROCK_MAX_CONCURRENCY", 20)
+            semaphore_fb = threading.Semaphore(_concurrency_fb)
+            key_to_pending_fb: dict[str, list[int]] = {}
+            for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+                ck = amenity.strip().lower()
+                key_to_pending_fb.setdefault(ck, []).append(pending_idx)
+
+            def _classify_fb(amenity: str):
+                with semaphore_fb:
+                    return bedrock_client.classify_batch_fast(amenity)
+
+            with ThreadPoolExecutor(max_workers=_concurrency_fb) as ex_fb:
+                futures_fb = {ex_fb.submit(_classify_fb, ai_pending[idxs[0]][1]): ck
+                              for ck, idxs in key_to_pending_fb.items() if ck not in dedup_cache}
+                for future_fb in as_completed(futures_fb):
+                    ck = futures_fb[future_fb]
+                    try:
+                        dedup_cache[ck] = future_fb.result()
+                    except Exception:
+                        dedup_cache[ck] = None
+
+            for pending_idx, (row_idx_0, amenity, result) in enumerate(ai_pending):
+                cache_key = amenity.strip().lower()
+                suggestion = dedup_cache.get(cache_key)
+                if suggestion:
+                    result.ai_suggested_format = suggestion.suggested_screen_format
+                    result.ai_reasoning = suggestion.reasoning
+                    stats["ai_suggestions"] += 1
+                pending_review.append(MovieFormatReviewItem(
+                    type="ai_suggestion",
+                    source_string=amenity,
+                    suggested_format=suggestion.suggested_screen_format if suggestion else "2D",
+                    confidence=suggestion.confidence if suggestion else 0.0,
+                    reasoning=suggestion.reasoning if suggestion else "Fallback sync — no match",
                 ))
 
     elif (not effective_ai) and ai_pending:

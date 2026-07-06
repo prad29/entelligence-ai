@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-me"
     BEDROCK_REGION: str = "us-east-1"
     BEDROCK_MODEL_ID: str = "mistral.mistral-large-2407-v1:0"
+    BATCH_MODEL_ID: str = "mistral.mistral-7b-instruct-v0:2"
     BEDROCK_API_KEY: str = ""
     AI_TRIGGER_MODE: str = "on"
     AI_AUTOAPPLY_CONFIDENCE: Optional[float] = None
@@ -19,6 +20,11 @@ class Settings(BaseSettings):
     BEDROCK_CACHE_TTL_DAYS: int = 30
     BEDROCK_MAX_CONCURRENCY: int = 20
     BATCH_AI_SAMPLE_LIMIT: int = 50
+    S3_BATCH_BUCKET: str = ""
+    ASYNC_BATCH_MODEL_ID: str = "anthropic.claude-3-5-haiku-20241022-v1:0"
+    BATCH_JOB_POLL_INTERVAL: int = 10
+    BATCH_JOB_MAX_WAIT: int = 600
+    BEDROCK_BATCH_ROLE_ARN: str = ""
 
     class Config:
         env_file = ".env"

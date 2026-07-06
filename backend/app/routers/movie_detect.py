@@ -33,11 +33,31 @@ async def detect_single_movie(
     result = engine.detect(payload.amenity)
 
     if result.fired_ai and settings.AI_TRIGGER_MODE != "off":
-        suggestion = bedrock_client.classify_single(
-            amenity=payload.amenity,
-            circuit="",
-            known_formats=_KNOWN_FORMATS,
-        )
+        from app.cache import get_redis, movie_format_cache_key
+        import json as _json
+
+        cache_key = movie_format_cache_key(payload.amenity)
+        suggestion = None
+
+        try:
+            redis = get_redis()
+            cached = redis.get(cache_key)
+            if cached:
+                from app.movie_detection.types import MovieFormatBedrockSuggestion
+                data = _json.loads(cached)
+                suggestion = MovieFormatBedrockSuggestion(**data)
+        except Exception:
+            redis = None
+
+        if suggestion is None:
+            suggestion = bedrock_client.classify_single(payload.amenity, "", _KNOWN_FORMATS)
+            if suggestion and redis:
+                try:
+                    ttl = settings.BEDROCK_CACHE_TTL_DAYS * 86400
+                    redis.setex(cache_key, ttl, _json.dumps(suggestion.__dict__))
+                except Exception:
+                    pass
+
         if suggestion:
             result.ai_suggested_format = suggestion.suggested_screen_format
             result.ai_reasoning = suggestion.reasoning

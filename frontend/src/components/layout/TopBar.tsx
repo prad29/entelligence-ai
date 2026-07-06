@@ -10,6 +10,9 @@ const pageTitles: Record<string, string> = {
   '/amenities': 'Master Amenity List',
   '/circuits': 'Circuit Mappings',
   '/review': 'Review Queue',
+  '/movie-detection': 'AI Movie Format Detection',
+  '/movie-formats': 'Master Movie Format List',
+  '/movie-review': 'Movie Format Review Queue',
   '/settings': 'Settings',
 }
 

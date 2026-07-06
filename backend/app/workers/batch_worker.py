@@ -73,6 +73,7 @@ def run_batch_job(
     upload_path: str,
     include_diagnostics: bool,
     detection_engine,
+    audit_mode: bool = False,
 ) -> None:
     """
     Background task entry-point.  Called by FastAPI BackgroundTasks.
@@ -89,6 +90,10 @@ def run_batch_job(
         are appended to every output row.
     detection_engine:
         A ScreenFormatEngine instance loaded from app.state.engine.
+    audit_mode:
+        When True, the input must contain a ``screen_format`` column.
+        Four extra audit columns are appended to each output row and
+        anomalies are counted in the job stats.
     """
     from app.config import settings
 
@@ -102,7 +107,7 @@ def run_batch_job(
         session.commit()
 
         try:
-            _process_job(job_id, upload_path, include_diagnostics, detection_engine, session, settings)
+            _process_job(job_id, upload_path, include_diagnostics, detection_engine, session, settings, audit_mode=audit_mode)
         except Exception:
             job = session.get(DetectionJob, job_id)
             if job:
@@ -119,10 +124,22 @@ def _process_job(
     detection_engine,
     session: Session,
     settings,
+    audit_mode: bool = False,
 ) -> None:
     headers, rows = _read_rows(upload_path)
     amenities_idx = headers.index("amenities")
     circuit_idx = headers.index("circuit_name")
+
+    if audit_mode and "screen_format" not in headers:
+        job = session.get(DetectionJob, job_id)
+        if job:
+            job.status = "failed"
+            job.stats = json.dumps({"error": "audit_mode requires a 'screen_format' column in the input file"})
+            session.commit()
+        logger.error("_process_job: job %s failed — audit_mode=True but 'screen_format' column missing", job_id)
+        return
+
+    user_format_idx: Optional[int] = headers.index("screen_format") if audit_mode else None
 
     # Update total to the actual row count (estimate may be off by ±1 for CSV)
     actual_total = len(rows)
@@ -145,9 +162,18 @@ def _process_job(
             "ai_suggested_format",
             "ai_reasoning",
         ]
+    if audit_mode:
+        out_headers += [
+            "detected_format",
+            "ai_suggested_format",
+            "anomaly",
+            "reasoning",
+        ]
     ws_out.append(out_headers)
 
-    stats: dict[str, int] = {"matched": 0, "standard": 0, "ai_suggestions": 0, "no_match": 0}
+    stats: dict[str, Any] = {"matched": 0, "standard": 0, "ai_suggestions": 0, "no_match": 0}
+    if audit_mode:
+        stats["anomaly_count"] = 0
 
     ai_enabled = settings.AI_TRIGGER_MODE not in ("off", "")
     pending_review: list[ReviewItem] = []
@@ -179,30 +205,36 @@ def _process_job(
     # =========================================================================
 
     # Storage for all row results, indexed by original row position (0-based).
-    # Each entry: (amenity, circuit, result, needs_ai)
-    row_data: list[tuple[str, str, Any, bool]] = []
+    # Each entry: (amenity, circuit, user_format, result, needs_ai)
+    # user_format is empty string when audit_mode is False.
+    row_data: list[tuple[str, str, str, Any, bool]] = []
     ai_pending: list[tuple[int, str, str, Any]] = []  # (row_idx_0based, amenity, circuit, result)
 
     for row_idx, row in enumerate(rows):
-        amenity = str(row[amenities_idx] or "").strip()
-        circuit = str(row[circuit_idx] or "").strip()
+        amenity = str(row[amenities_idx] if len(row) > amenities_idx else "").strip()
+        circuit = str(row[circuit_idx] if len(row) > circuit_idx else "").strip()
+        user_format = (
+            str(row[user_format_idx] if len(row) > user_format_idx else "").strip()
+            if audit_mode and user_format_idx is not None
+            else ""
+        )
         result = detection_engine.detect(amenity, circuit)
 
         if result.fired_ai:
             stats["no_match"] += 1
             stats["standard"] += 1
-            row_data.append((amenity, circuit, result, True))
+            row_data.append((amenity, circuit, user_format, result, True))
             ai_pending.append((row_idx, amenity, circuit, result))
         else:
             if result.screen_format != "Standard":
                 stats["matched"] += 1
             else:
                 stats["standard"] += 1
-            row_data.append((amenity, circuit, result, False))
+            row_data.append((amenity, circuit, user_format, result, False))
 
     # Write non-AI rows to the output sheet immediately and update progress.
     non_ai_count = 0
-    for idx, (amenity, circuit, result, needs_ai) in enumerate(row_data):
+    for idx, (amenity, circuit, user_format, result, needs_ai) in enumerate(row_data):
         if not needs_ai:
             out_row: list = [circuit, amenity, result.screen_format]
             if include_diagnostics:
@@ -214,9 +246,19 @@ def _process_job(
                     result.ai_suggested_format or "",
                     result.ai_reasoning or "",
                 ]
+            if audit_mode:
+                anomaly = user_format.strip().lower() != result.screen_format.strip().lower()
+                if anomaly:
+                    stats["anomaly_count"] += 1
+                out_row += [
+                    result.screen_format,
+                    result.ai_suggested_format or "",
+                    "TRUE" if anomaly else "FALSE",
+                    result.ai_reasoning if result.fired_ai else "",
+                ]
             ws_out.append(out_row)
             # Track the output sheet row number for this data row
-            row_data[idx] = (amenity, circuit, result, False)
+            row_data[idx] = (amenity, circuit, user_format, result, False)
             non_ai_count += 1
 
     # Update progress after pass 1
@@ -232,7 +274,12 @@ def _process_job(
     # =========================================================================
 
     if ai_enabled and ai_pending:
-        semaphore = threading.Semaphore(5)
+        try:
+            from app.config import settings as _settings
+            _concurrency = getattr(_settings, "BEDROCK_MAX_CONCURRENCY", 20)
+        except Exception:
+            _concurrency = 20
+        semaphore = threading.Semaphore(_concurrency)
 
         def _classify_with_semaphore(amenity: str, circuit: str):
             """Call Bedrock under semaphore; returns BedrockSuggestion or None."""
@@ -266,7 +313,7 @@ def _process_job(
                     except Exception:
                         pass  # malformed entry — let it re-call Bedrock
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=_concurrency) as executor:
             futures = {}
             for cache_key, pending_indices in key_to_pending_indices.items():
                 if cache_key in dedup_cache:
@@ -359,6 +406,17 @@ def _process_job(
                 result.confidence,
                 result.ai_suggested_format or "",
                 result.ai_reasoning or "",
+            ]
+        if audit_mode:
+            user_format = row_data[row_idx_0][2]
+            anomaly = user_format.strip().lower() != result.screen_format.strip().lower()
+            if anomaly:
+                stats["anomaly_count"] += 1
+            out_row += [
+                result.screen_format,
+                result.ai_suggested_format or "",
+                "TRUE" if anomaly else "FALSE",
+                result.ai_reasoning if result.fired_ai else "",
             ]
         ws_out.append(out_row)
 

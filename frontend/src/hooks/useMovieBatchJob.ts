@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import api from '@/lib/api'
 
-export interface BatchJob {
+export interface MovieBatchJob {
   job_id: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   progress: number
@@ -14,8 +14,8 @@ export interface BatchJob {
   error?: string
 }
 
-export function useBatchJob() {
-  const [job, setJob] = useState<BatchJob | null>(null)
+export function useMovieBatchJob() {
+  const [job, setJob] = useState<MovieBatchJob | null>(null)
   const [uploading, setUploading] = useState(false)
   const [isActive, setIsActive] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -28,7 +28,7 @@ export function useBatchJob() {
     }
   }
 
-  const uploadBatch = async (file: File, includeDiagnostics: boolean, auditMode?: boolean) => {
+  const uploadBatch = async (file: File, includeDiagnostics: boolean, batchAiMode?: string, auditMode?: boolean) => {
     setUploading(true)
     setIsActive(true)
     setError(null)
@@ -39,8 +39,12 @@ export function useBatchJob() {
       const form = new FormData()
       form.append('file', file)
       form.append('include_diagnostics', String(includeDiagnostics))
+      form.append('batch_ai_mode', batchAiMode ?? 'skip')
 
-      const url = auditMode ? '/api/v1/detect/batch?audit_mode=true' : '/api/v1/detect/batch'
+      const url = auditMode
+        ? '/api/v1/movie-detect/batch?audit_mode=true'
+        : '/api/v1/movie-detect/batch'
+
       const res = await api.post<{ job_id: string }>(url, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
@@ -49,7 +53,7 @@ export function useBatchJob() {
 
       pollRef.current = setInterval(async () => {
         try {
-          const poll = await api.get<BatchJob>(`/api/v1/jobs/${job_id}`)
+          const poll = await api.get<MovieBatchJob>(`/api/v1/movie-jobs/${job_id}`)
           setJob(poll.data)
           if (poll.data.status === 'completed' || poll.data.status === 'failed') {
             stopPolling()

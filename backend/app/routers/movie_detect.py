@@ -4,54 +4,67 @@ import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile, File
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import Session
 from typing import Optional
 
 from app.config import settings
 from app.database import get_session
 from app.detection.bedrock_client import bedrock_client
-from app.models import AmenityMapping, DetectionJob, ReviewItem
+from app.models import MovieFormatJob, MovieFormatReviewItem
 
-router = APIRouter(prefix="/api/v1/detect", tags=["detect"])
+router = APIRouter(prefix="/api/v1/movie-detect", tags=["movie-detect"])
 
-_UPLOAD_DIR = "/tmp/amenity_uploads"
+_UPLOAD_DIR = "/tmp/movie_uploads"
+
+_KNOWN_FORMATS = ["70MM", "35MM", "3D", "2D"]
 
 
-class DetectSingleRequest(BaseModel):
+class MovieDetectSingleRequest(BaseModel):
     amenity: str
-    circuit_name: Optional[str] = ""
 
 
 @router.post("/single")
-async def detect_single(
-    payload: DetectSingleRequest,
+async def detect_single_movie(
+    payload: MovieDetectSingleRequest,
     request: Request,
     session: Session = Depends(get_session),
 ):
-    engine = request.app.state.engine
-    result = engine.detect(payload.amenity, payload.circuit_name or "")
+    engine = request.app.state.movie_engine
+    result = engine.detect(payload.amenity)
 
     if result.fired_ai and settings.AI_TRIGGER_MODE != "off":
-        known_formats = sorted({
-            m.screen_format
-            for m in session.exec(
-                select(AmenityMapping).where(AmenityMapping.status == "approved")
-            ).all()
-        })
-        suggestion = bedrock_client.classify_single(
-            amenity=payload.amenity,
-            circuit=payload.circuit_name or "",
-            known_formats=known_formats,
-        )
+        from app.cache import get_redis, movie_format_cache_key
+        import json as _json
+
+        cache_key = movie_format_cache_key(payload.amenity)
+        suggestion = None
+
+        try:
+            redis = get_redis()
+            cached = redis.get(cache_key)
+            if cached:
+                from app.movie_detection.types import MovieFormatBedrockSuggestion
+                data = _json.loads(cached)
+                suggestion = MovieFormatBedrockSuggestion(**data)
+        except Exception:
+            redis = None
+
+        if suggestion is None:
+            suggestion = bedrock_client.classify_single(payload.amenity, "", _KNOWN_FORMATS)
+            if suggestion and redis:
+                try:
+                    ttl = settings.BEDROCK_CACHE_TTL_DAYS * 86400
+                    redis.setex(cache_key, ttl, _json.dumps(suggestion.__dict__))
+                except Exception:
+                    pass
+
         if suggestion:
             result.ai_suggested_format = suggestion.suggested_screen_format
             result.ai_reasoning = suggestion.reasoning
 
-            # Push to review queue so a human can approve → becomes a mapping
-            session.add(ReviewItem(
+            session.add(MovieFormatReviewItem(
                 type="ai_suggestion",
                 source_string=payload.amenity,
-                circuit=payload.circuit_name or None,
                 suggested_format=suggestion.suggested_screen_format,
                 confidence=suggestion.confidence,
                 reasoning=suggestion.reasoning,
@@ -62,10 +75,11 @@ async def detect_single(
 
 
 @router.post("/batch")
-async def detect_batch(
+async def detect_batch_movie(
     request: Request,
     file: UploadFile = File(...),
     include_diagnostics: str = Form("false"),
+    batch_ai_mode: str = Form("skip"),
     audit_mode: bool = Query(False),
     session: Session = Depends(get_session),
 ):
@@ -80,15 +94,15 @@ async def detect_batch(
     if row_count > settings.MAX_BATCH_ROWS:
         raise HTTPException(400, detail=f"File exceeds {settings.MAX_BATCH_ROWS} row limit")
 
-    # Validate required columns before accepting the job
-    from app.workers.batch_worker import _peek_headers
+    from app.workers.movie_batch_worker import _peek_headers
     headers = _peek_headers(contents, ext)
-    required_cols = ["amenities", "circuit_name"]
     if audit_mode:
-        required_cols.append("screen_format")
-    missing = [col for col in required_cols if col not in headers]
-    if missing:
-        raise HTTPException(400, detail=f"Missing required column(s): {', '.join(missing)}")
+        missing = [col for col in ("amenities_string", "movie_format") if col not in headers]
+        if missing:
+            raise HTTPException(400, detail=f"audit_mode requires columns: {', '.join(missing)}")
+    else:
+        if "amenities_string" not in headers and "amenities" not in headers:
+            raise HTTPException(400, detail="Missing required column: amenities_string")
 
     os.makedirs(_UPLOAD_DIR, exist_ok=True)
     job_id = str(uuid.uuid4())
@@ -96,7 +110,7 @@ async def detect_batch(
     with open(upload_path, "wb") as f_out:
         f_out.write(contents)
 
-    job = DetectionJob(
+    job = MovieFormatJob(
         id=job_id,
         status="queued",
         total=row_count,
@@ -106,11 +120,10 @@ async def detect_batch(
     session.add(job)
     session.commit()
 
-    from app.workers.batch_worker import run_batch_job
+    from app.workers.movie_batch_worker import run_movie_batch_job
     t = threading.Thread(
-        target=run_batch_job,
-        args=(job_id, upload_path, diag_bool, request.app.state.engine),
-        kwargs={"audit_mode": audit_mode},
+        target=run_movie_batch_job,
+        args=(job_id, upload_path, diag_bool, request.app.state.movie_engine, batch_ai_mode, audit_mode),
         daemon=True,
     )
     t.start()
@@ -119,12 +132,10 @@ async def detect_batch(
 
 
 def _estimate_rows(contents: bytes, ext: str) -> int:
-    """Fast row count without full parse — used for limit check."""
     if ext == ".csv":
         import io as _io
         text = contents.decode("utf-8-sig", errors="replace")
         return max(0, text.count("\n") - 1)
-    # xlsx: load header only for speed
     try:
         import openpyxl
         import io as _io

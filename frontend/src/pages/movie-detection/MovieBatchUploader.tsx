@@ -1,17 +1,18 @@
 import { useCallback, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { useBatchJob } from '@/hooks/useBatchJob'
+import { useMovieBatchJob } from '@/hooks/useMovieBatchJob'
 import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card'
 import { Upload, FileText, X, Download, CheckCircle2, AlertCircle, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-function BatchUploader() {
+function MovieBatchUploader() {
   const [file, setFile] = useState<File | null>(null)
   const [includeDiagnostics, setIncludeDiagnostics] = useState(false)
+  const [batchAiMode, setBatchAiMode] = useState<'skip' | 'sample' | 'full'>('skip')
   const [auditMode, setAuditMode] = useState(false)
-  const { job, uploading, isActive, error, uploadBatch, reset } = useBatchJob()
+  const { job, uploading, isActive, error, uploadBatch, reset } = useMovieBatchJob()
 
   const onDrop = useCallback((accepted: File[]) => {
     if (accepted[0]) setFile(accepted[0])
@@ -25,7 +26,7 @@ function BatchUploader() {
 
   const handleUpload = async () => {
     if (!file) return
-    await uploadBatch(file, includeDiagnostics, auditMode)
+    await uploadBatch(file, includeDiagnostics, batchAiMode, auditMode)
   }
 
   const handleReset = () => {
@@ -47,7 +48,9 @@ function BatchUploader() {
             </div>
             <div>
               <CardTitle>Batch Upload</CardTitle>
-              <CardDescription>Upload a CSV or XLSX file to detect formats in bulk</CardDescription>
+              <CardDescription>
+                Upload a CSV or XLSX with an <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">amenities</code> column to detect movie formats in bulk
+              </CardDescription>
             </div>
           </div>
         </CardHeader>
@@ -93,7 +96,7 @@ function BatchUploader() {
                   <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                     {isDragActive ? 'Drop your file here' : 'Drag & drop or click to browse'}
                   </p>
-                  <p className="text-xs text-zinc-400 dark:text-zinc-500">CSV or XLSX files supported</p>
+                  <p className="text-xs text-zinc-400 dark:text-zinc-500">CSV or XLSX — requires an <code className="font-mono text-[11px]">amenities</code> column</p>
                 </div>
               )}
             </div>
@@ -125,6 +128,34 @@ function BatchUploader() {
             </label>
           )}
 
+          {/* AI Mode selector */}
+          {!job && (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">AI mode</p>
+              <div className="flex gap-2">
+                {([
+                  { value: 'skip', label: 'Skip AI', desc: 'Fast — no Bedrock calls, unmatched → 2D' },
+                  { value: 'sample', label: 'Sample', desc: 'Balanced — AI for first 50 unique no-matches' },
+                  { value: 'full', label: 'Full AI', desc: 'Slow — Bedrock call for every no-match' },
+                ] as const).map(({ value, label, desc }) => (
+                  <button
+                    key={value}
+                    onClick={() => setBatchAiMode(value)}
+                    className={cn(
+                      'flex-1 rounded-lg border px-3 py-2 text-left text-xs transition-colors',
+                      batchAiMode === value
+                        ? 'border-violet-500 bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300'
+                        : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600'
+                    )}
+                  >
+                    <span className="font-semibold block">{label}</span>
+                    <span className="text-zinc-400 dark:text-zinc-500">{desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Audit mode toggle */}
           {!job && (
             <div className="flex flex-col gap-1.5">
@@ -152,8 +183,8 @@ function BatchUploader() {
               </label>
               {auditMode && (
                 <div className="ml-12 flex flex-col gap-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                  <p>CSV must include: <code className="font-mono">circuit_name</code>, <code className="font-mono">amenities</code>, <code className="font-mono">screen_format</code></p>
-                  <p>Output adds: <code className="font-mono">detected_format</code>, <code className="font-mono">anomaly</code>, <code className="font-mono">ai_suggested_format</code>, <code className="font-mono">reasoning</code></p>
+                  <p>CSV must include: <code className="font-mono text-[11px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">amenities_string</code>, <code className="font-mono text-[11px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">movie_format</code></p>
+                  <p>Output adds: <code className="font-mono text-[11px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">detected_format</code>, <code className="font-mono text-[11px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">anomaly</code>, <code className="font-mono text-[11px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">ai_suggested_format</code>, <code className="font-mono text-[11px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">reasoning</code></p>
                 </div>
               )}
             </div>
@@ -183,7 +214,6 @@ function BatchUploader() {
           {/* Job progress */}
           {job && (
             <div className="flex flex-col gap-4">
-              {/* Status header */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   {isCompleted && <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
@@ -201,7 +231,6 @@ function BatchUploader() {
                 </Button>
               </div>
 
-              {/* Progress bar */}
               <div className="flex flex-col gap-1.5">
                 <Progress
                   value={job.progress * 100}
@@ -213,7 +242,6 @@ function BatchUploader() {
                 </div>
               </div>
 
-              {/* Stats */}
               <div className={cn('grid gap-3', auditMode && job.anomaly_count != null ? 'grid-cols-4' : 'grid-cols-3')}>
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-3 text-center">
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">Matched</p>
@@ -235,7 +263,6 @@ function BatchUploader() {
                 )}
               </div>
 
-              {/* Download */}
               {isCompleted && job.output_url && (
                 <Button
                   variant="success"
@@ -249,7 +276,6 @@ function BatchUploader() {
                 </Button>
               )}
 
-              {/* Error */}
               {isFailed && job.error && (
                 <div className="rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 px-4 py-3 text-sm text-red-700 dark:text-red-400">
                   {job.error}
@@ -263,4 +289,4 @@ function BatchUploader() {
   )
 }
 
-export { BatchUploader }
+export { MovieBatchUploader }

@@ -7,6 +7,7 @@ import {
   Settings,
   Menu,
   X,
+  Film,
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -20,6 +21,12 @@ const detectionGroup: NavItem[] = [
   { to: '/detection', icon: <Sparkles className="h-4 w-4" />, label: 'AI Amenity Detection' },
   { to: '/amenities', icon: <List className="h-4 w-4" />, label: 'Master Amenity List' },
   { to: '/review', icon: <ClipboardCheck className="h-4 w-4" />, label: 'Review Queue' },
+]
+
+const movieFormatGroup: NavItem[] = [
+  { to: '/movie-detection', icon: <Film className="h-4 w-4" />, label: 'AI Movie Format Detection' },
+  { to: '/movie-formats', icon: <List className="h-4 w-4" />, label: 'Master Movie Format List' },
+  { to: '/movie-review', icon: <ClipboardCheck className="h-4 w-4" />, label: 'Review Queue' },
 ]
 
 const systemGroup: NavItem[] = [
@@ -84,6 +91,7 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
       {/* Nav groups */}
       <div className="flex-1 overflow-y-auto py-4 flex flex-col gap-6">
         <NavGroup title="Amenities Detection" items={detectionGroup} onItemClick={onItemClick} />
+        <NavGroup title="Movie Format Detection" items={movieFormatGroup} onItemClick={onItemClick} />
         <NavGroup title="System" items={systemGroup} onItemClick={onItemClick} />
       </div>
 

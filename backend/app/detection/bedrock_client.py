@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 import time
 from typing import Optional
 
@@ -102,78 +101,6 @@ class BedrockClient:
         except Exception as e:
             logger.error(
                 "bedrock_classify_single_error",
-                extra={"error": str(e), "amenity": amenity},
-            )
-            return None
-
-    def classify_batch_fast(self, amenity: str) -> Optional[BedrockSuggestion]:
-        try:
-            prompt = (
-                f'Amenity: "{amenity}"\n'
-                'Reply ONLY: {"format": "<70MM|35MM|3D|2D>", "confidence": <0.0-1.0>, "reasoning": "<one sentence>"}'
-            )
-            body = {
-                "messages": [{"role": "user", "content": prompt}],
-                "system": "Classify the theater amenity string into exactly one movie format: 70MM, 35MM, 3D, or 2D. Reply with ONLY valid JSON.",
-                "max_tokens": 100,
-                "temperature": 0,
-            }
-            url = _base_url() + _INVOKE_PATH.format(model_id=settings.BATCH_MODEL_ID)
-
-            resp = None
-            for attempt in range(_MAX_RETRIES + 1):
-                resp = httpx.post(
-                    url,
-                    headers={**_auth_headers(), "Content-Type": "application/json"},
-                    json=body,
-                    timeout=8,
-                )
-                if resp.status_code != 429:
-                    break
-                if attempt < _MAX_RETRIES:
-                    time.sleep(_BACKOFF_BASE * (2 ** attempt))
-
-            if resp.status_code == 429:
-                logger.warning(
-                    "bedrock_batch_throttled_after_retries",
-                    extra={"amenity": amenity, "retries": _MAX_RETRIES},
-                )
-                return None
-
-            resp.raise_for_status()
-            raw = resp.json()
-            text = (raw.get("outputs") or [{}])[0].get("text") or (
-                raw.get("choices") or [{}]
-            )[0].get("message", {}).get("content", "{}")
-            text = text.strip()
-            if text.startswith("```"):
-                parts = text.split("```", 2)
-                inner = parts[1] if len(parts) >= 2 else text
-                if inner.startswith("json"):
-                    inner = inner[4:]
-                text = inner.strip()
-
-            try:
-                parsed = json.loads(text)
-                return BedrockSuggestion(
-                    detected_keyword=None,
-                    suggested_screen_format=parsed.get("format", "2D"),
-                    confidence=float(parsed.get("confidence", 0.5)),
-                    reasoning=parsed.get("reasoning", ""),
-                )
-            except (json.JSONDecodeError, ValueError):
-                match = re.search(r"\b(70MM|35MM|3D|2D)\b", text, re.IGNORECASE)
-                if match:
-                    return BedrockSuggestion(
-                        detected_keyword=None,
-                        suggested_screen_format=match.group(1).upper(),
-                        confidence=0.6,
-                        reasoning="Extracted via regex fallback",
-                    )
-                return None
-        except Exception as e:
-            logger.error(
-                "bedrock_classify_batch_fast_error",
                 extra={"error": str(e), "amenity": amenity},
             )
             return None

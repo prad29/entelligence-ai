@@ -96,13 +96,15 @@ async def detect_batch_movie(
 
     from app.workers.movie_batch_worker import _peek_headers
     headers = _peek_headers(contents, ext)
+    has_amenities = "amenities_string" in headers or "amenities" in headers
     if audit_mode:
-        missing = [col for col in ("amenities_string", "movie_format") if col not in headers]
-        if missing:
-            raise HTTPException(400, detail=f"audit_mode requires columns: {', '.join(missing)}")
+        if not has_amenities:
+            raise HTTPException(400, detail="audit_mode requires an amenities or amenities_string column")
+        if "movie_format" not in headers:
+            raise HTTPException(400, detail="audit_mode requires column: movie_format")
     else:
-        if "amenities_string" not in headers and "amenities" not in headers:
-            raise HTTPException(400, detail="Missing required column: amenities_string")
+        if not has_amenities:
+            raise HTTPException(400, detail="Missing required column: amenities or amenities_string")
 
     os.makedirs(_UPLOAD_DIR, exist_ok=True)
     job_id = str(uuid.uuid4())

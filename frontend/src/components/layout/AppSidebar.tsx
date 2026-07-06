@@ -26,7 +26,7 @@ const detectionGroup: NavItem[] = [
 const movieFormatGroup: NavItem[] = [
   { to: '/movie-detection', icon: <Film className="h-4 w-4" />, label: 'AI Movie Format Detection' },
   { to: '/movie-formats', icon: <List className="h-4 w-4" />, label: 'Master Movie Format List' },
-  { to: '/movie-review', icon: <ClipboardCheck className="h-4 w-4" />, label: 'Movie Format Review Queue' },
+  { to: '/movie-review', icon: <ClipboardCheck className="h-4 w-4" />, label: 'Review Queue' },
 ]
 
 const systemGroup: NavItem[] = [

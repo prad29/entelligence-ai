@@ -6,6 +6,9 @@ from typing import FrozenSet
 _NOISE_PATTERN = re.compile(r"[^a-z0-9\s]")
 _MULTI_SPACE = re.compile(r"\s+")
 
+# Collapse "70 M M" → "70MM" (spaced-out unit letters after a digit)
+_DIGIT_SPACED_LETTERS = re.compile(r"(\d+)\s+([a-zA-Z])\s+([a-zA-Z])(?=\s|$)")
+
 # Collapse "70 MM" → "70MM", "35 mm" → "35mm" etc. before any other normalization
 _DIGIT_SPACE_UNIT = re.compile(r"(\d+)\s+([a-zA-Z]+)")
 
@@ -44,6 +47,8 @@ def _pre_normalize(text: str) -> str:
     # Smart quotes → straight
     text = text.replace("'", "'").replace("'", "'")
     text = text.replace(""", '"').replace(""", '"')
+    # Collapse "70 M M" -> "70MM" (unit split across spaces)
+    text = _DIGIT_SPACED_LETTERS.sub(r"\1\2\3", text)
     # Collapse "70 MM" -> "70MM", "35 mm" -> "35mm"
     text = _DIGIT_SPACE_UNIT.sub(r"\1\2", text)
     return text

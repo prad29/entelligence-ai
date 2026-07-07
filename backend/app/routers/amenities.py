@@ -82,21 +82,15 @@ def create_amenity(
     request: Request,
     session: Session = Depends(get_session),
 ):
-    m = AmenityMapping(**data.dict(), status="pending")
+    incoming = data.dict()
+    status = "approved" if incoming.get("status") == "approved" else "pending"
+    m = AmenityMapping(**incoming, status=status)
     session.add(m)
-    session.flush()
-    session.add(
-        ReviewItem(
-            type="mapping",
-            mapping_id=m.id,
-            source_string=m.amenity_keyword,
-            suggested_format=m.screen_format,
-            reasoning=f"Manual submission: {m.amenity_keyword} → {m.screen_format}",
-        )
-    )
-    write_audit(session, "amenity_mappings", m.id, "create", after=data.dict())
+    write_audit(session, "amenity_mappings", m.id, "create", after=incoming)
     session.commit()
     session.refresh(m)
+    if m.status == "approved":
+        request.app.state.engine = build_engine_from_db(session)
     return m
 
 

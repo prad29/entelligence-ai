@@ -111,22 +111,17 @@ def update_amenity(
     if not m:
         raise HTTPException(404)
     before = m.dict()
-    for k, v in data.dict().items():
+    incoming = data.dict()
+    for k, v in incoming.items():
         setattr(m, k, v)
-    m.status = "pending"
+    if incoming.get("status") != "approved":
+        m.status = "pending"
     m.version += 1
-    session.add(
-        ReviewItem(
-            type="mapping",
-            mapping_id=m.id,
-            source_string=m.amenity_keyword,
-            suggested_format=m.screen_format,
-            reasoning=f"Manual update: {m.amenity_keyword} → {m.screen_format}",
-        )
-    )
-    write_audit(session, "amenity_mappings", id, "update", before=before, after=data.dict())
+    write_audit(session, "amenity_mappings", id, "update", before=before, after=incoming)
     session.commit()
     session.refresh(m)
+    if m.status == "approved":
+        request.app.state.engine = build_engine_from_db(session)
     return m
 
 
@@ -144,21 +139,14 @@ def patch_amenity(
     patch_data = data.dict(exclude_unset=True)
     for k, v in patch_data.items():
         setattr(m, k, v)
-    if "status" not in patch_data:
+    if patch_data.get("status") != "approved":
         m.status = "pending"
     m.version += 1
-    session.add(
-        ReviewItem(
-            type="mapping",
-            mapping_id=m.id,
-            source_string=m.amenity_keyword,
-            suggested_format=m.screen_format,
-            reasoning=f"Manual update: {m.amenity_keyword} → {m.screen_format}",
-        )
-    )
     write_audit(session, "amenity_mappings", id, "patch", before=before, after=patch_data)
     session.commit()
     session.refresh(m)
+    if m.status == "approved":
+        request.app.state.engine = build_engine_from_db(session)
     return m
 
 

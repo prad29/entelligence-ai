@@ -153,3 +153,85 @@ class TestEdgeCases:
         result = engine.detect("RPX", "Some Other Theatre")
         assert result.screen_format == "Standard"
         assert result.fired_ai is False
+
+
+class TestImaxCircuitOverride:
+    def test_blank_amenity_returns_imax(self, engine):
+        result = engine.detect("", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_blank_amenity_returns_imax_lowercase_circuit(self, engine):
+        result = engine.detect("", "imax")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_p1_4dx_not_overridden(self, engine):
+        result = engine.detect("4DX", "IMAX")
+        assert result.screen_format == "4DX"
+        assert result.match_source != "IMAX Circuit Override"
+
+    def test_p1_mx4d_not_overridden(self, engine):
+        result = engine.detect("MX4D", "IMAX")
+        assert result.screen_format == "MX4D"
+        assert result.match_source != "IMAX Circuit Override"
+
+    def test_p2_dolby_cinema_overridden(self, engine):
+        result = engine.detect("Dolby Cinema", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_p2_imax_keyword_overridden(self, engine):
+        result = engine.detect("IMAX", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_p3_btx_overridden(self, engine):
+        result = engine.detect("BTX", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_p3_screenx_overridden(self, engine):
+        result = engine.detect("ScreenX", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_p4_gdx_overridden(self, engine):
+        result = engine.detect("GDX", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_p6_standard_overridden(self, engine):
+        result = engine.detect("Digital 3D", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_no_match_returns_imax_not_ai(self, engine):
+        result = engine.detect("Holographic Surround Plus", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+        assert result.fired_ai is False
+
+    def test_dolby_and_imax_keywords_returns_imax(self, engine):
+        result = engine.detect("Dolby Cinema | IMAX", "IMAX")
+        assert result.screen_format == "IMAX"
+        assert result.match_source == "IMAX Circuit Override"
+
+    def test_p1_4dx_wins_among_mixed_segments(self, engine):
+        result = engine.detect("Dolby Cinema | 4DX | BTX", "IMAX")
+        assert result.screen_format == "4DX"
+
+    def test_amc_imax_not_overridden(self, engine):
+        result = engine.detect("Dolby Cinema", "AMC IMAX")
+        assert result.screen_format == "Dolby Cinema"
+        assert result.match_source != "IMAX Circuit Override"
+
+    def test_abc_imax_not_overridden(self, engine):
+        result = engine.detect("BTX", "ABC IMAX")
+        assert result.screen_format == "BTX"
+        assert result.match_source != "IMAX Circuit Override"
+
+    def test_abc_imax_blank_amenity_returns_standard(self, engine):
+        result = engine.detect("", "ABC IMAX")
+        assert result.screen_format == "Standard"
+        assert result.match_source == "Empty Input"

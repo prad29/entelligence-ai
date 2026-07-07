@@ -49,7 +49,7 @@ function MovieBatchUploader() {
             <div>
               <CardTitle>Batch Upload</CardTitle>
               <CardDescription>
-                Upload a CSV or XLSX with an <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">amenities</code> column to detect movie formats in bulk
+                Upload a CSV or XLSX with an <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">amenities</code> column to detect movie formats in bulk. An optional <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">circuit_name</code> column is passed through to the output unchanged.
               </CardDescription>
             </div>
           </div>
@@ -96,7 +96,7 @@ function MovieBatchUploader() {
                   <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                     {isDragActive ? 'Drop your file here' : 'Drag & drop or click to browse'}
                   </p>
-                  <p className="text-xs text-zinc-400 dark:text-zinc-500">CSV or XLSX — requires an <code className="font-mono text-[11px]">amenities</code> column</p>
+                  <p className="text-xs text-zinc-400 dark:text-zinc-500">CSV or XLSX — requires <code className="font-mono text-[11px]">amenities</code>; optional <code className="font-mono text-[11px]">circuit_name</code> passes through</p>
                 </div>
               )}
             </div>

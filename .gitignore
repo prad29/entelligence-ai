@@ -38,6 +38,19 @@ AWS_DEPLOYMENT.md
 PROD_DEPLOYMENT.md
 amenity-screen-format-detector.md
 CLAUDE_CODE_BUILD_BRIEF.md
+movieformat.md
+
+# Plans and scratch docs
+plans/
+
+# Scratch / one-off scripts
+tmp.sh
+fix-bedrock-key.sh
+backend/annotate_anomalies.py
+backend/test_movie_format_csv.py
+
+# Assets (logos etc — not part of deployment)
+assets/
 
 # Old split CloudFormation stacks — superseded by infra/amenity-all.yml
 infra/1-ecr.yml

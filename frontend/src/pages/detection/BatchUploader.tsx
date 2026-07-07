@@ -214,18 +214,22 @@ function BatchUploader() {
               </div>
 
               {/* Stats */}
-              <div className={cn('grid gap-3', auditMode && job.anomaly_count != null ? 'grid-cols-4' : 'grid-cols-3')}>
-                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-3 text-center">
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400">Matched</p>
-                  <p className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{job.matched}</p>
-                </div>
-                <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-3 text-center">
-                  <p className="text-xs text-amber-600 dark:text-amber-400">AI Used</p>
-                  <p className="text-lg font-bold text-amber-800 dark:text-amber-300">{job.ai_suggestions}</p>
-                </div>
+              <div className={cn('grid gap-3', auditMode && job.anomaly_count != null ? 'grid-cols-5' : 'grid-cols-4')}>
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-3 text-center">
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">Total</p>
                   <p className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{job.total}</p>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 p-3 text-center">
+                  <p className="text-xs text-emerald-600 dark:text-emerald-400">Keyword Match</p>
+                  <p className="text-lg font-bold text-emerald-800 dark:text-emerald-300">{job.matched}</p>
+                </div>
+                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-3 text-center">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">No Match → Standard</p>
+                  <p className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{job.no_match ?? (job.total - job.matched - job.ai_suggestions)}</p>
+                </div>
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-3 text-center">
+                  <p className="text-xs text-amber-600 dark:text-amber-400">AI Classified</p>
+                  <p className="text-lg font-bold text-amber-800 dark:text-amber-300">{job.ai_suggestions}</p>
                 </div>
                 {auditMode && job.anomaly_count != null && (
                   <div className="rounded-lg bg-red-50 dark:bg-red-950/30 p-3 text-center">

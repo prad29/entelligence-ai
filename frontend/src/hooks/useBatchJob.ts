@@ -9,6 +9,7 @@ export interface BatchJob {
   processed: number
   matched: number
   ai_suggestions: number
+  no_match: number
   anomaly_count?: number
   output_url?: string
   error?: string

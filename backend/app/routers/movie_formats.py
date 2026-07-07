@@ -82,21 +82,15 @@ def create_movie_format(
     request: Request,
     session: Session = Depends(get_session),
 ):
-    m = MovieFormatMapping(**data.dict(), status="pending")
+    incoming = data.dict()
+    status = incoming.get("status") if incoming.get("status") == "approved" else "pending"
+    m = MovieFormatMapping(**incoming, status=status)
     session.add(m)
-    session.flush()
-    session.add(
-        MovieFormatReviewItem(
-            type="mapping",
-            mapping_id=m.id,
-            source_string=m.keyword,
-            suggested_format=m.format,
-            reasoning=f"Manual submission: {m.keyword} → {m.format}",
-        )
-    )
-    write_audit(session, "movie_format_mappings", m.id, "create", after=data.dict())
+    write_audit(session, "movie_format_mappings", m.id, "create", after=incoming)
     session.commit()
     session.refresh(m)
+    if m.status == "approved":
+        request.app.state.movie_engine = build_movie_format_engine_from_db(session)
     return m
 
 
@@ -111,22 +105,17 @@ def update_movie_format(
     if not m:
         raise HTTPException(404)
     before = m.dict()
-    for k, v in data.dict().items():
+    incoming = data.dict()
+    for k, v in incoming.items():
         setattr(m, k, v)
-    m.status = "pending"
+    if incoming.get("status") != "approved":
+        m.status = "pending"
     m.version += 1
-    session.add(
-        MovieFormatReviewItem(
-            type="mapping",
-            mapping_id=m.id,
-            source_string=m.keyword,
-            suggested_format=m.format,
-            reasoning=f"Manual update: {m.keyword} → {m.format}",
-        )
-    )
-    write_audit(session, "movie_format_mappings", id, "update", before=before, after=data.dict())
+    write_audit(session, "movie_format_mappings", id, "update", before=before, after=incoming)
     session.commit()
     session.refresh(m)
+    if m.status == "approved":
+        request.app.state.movie_engine = build_movie_format_engine_from_db(session)
     return m
 
 
@@ -144,21 +133,14 @@ def patch_movie_format(
     patch_data = data.dict(exclude_unset=True)
     for k, v in patch_data.items():
         setattr(m, k, v)
-    if "status" not in patch_data:
+    if patch_data.get("status") != "approved":
         m.status = "pending"
     m.version += 1
-    session.add(
-        MovieFormatReviewItem(
-            type="mapping",
-            mapping_id=m.id,
-            source_string=m.keyword,
-            suggested_format=m.format,
-            reasoning=f"Manual update: {m.keyword} → {m.format}",
-        )
-    )
     write_audit(session, "movie_format_mappings", id, "patch", before=before, after=patch_data)
     session.commit()
     session.refresh(m)
+    if m.status == "approved":
+        request.app.state.movie_engine = build_movie_format_engine_from_db(session)
     return m
 
 

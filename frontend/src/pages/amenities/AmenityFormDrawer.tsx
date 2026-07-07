@@ -13,7 +13,7 @@ const amenitySchema = z.object({
   screen_format: z.string().min(1, 'Screen format is required'),
   tier: z.enum(['P1', 'P2', 'P3', 'P4', 'P5', 'P6']),
   circuit: z.string().optional(),
-  status: z.enum(['active', 'pending', 'inactive']),
+  status: z.enum(['approved', 'pending', 'rejected']),
 })
 
 type AmenityFormData = z.infer<typeof amenitySchema>
@@ -27,9 +27,9 @@ interface AmenityFormDrawerProps {
 
 const tierOptions = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6'].map((t) => ({ value: t, label: t }))
 const statusOptions = [
-  { value: 'active', label: 'Active' },
+  { value: 'approved', label: 'Approved' },
   { value: 'pending', label: 'Pending' },
-  { value: 'inactive', label: 'Inactive' },
+  { value: 'rejected', label: 'Rejected' },
 ]
 
 function AmenityFormDrawer({ open, onOpenChange, amenity, onSubmit }: AmenityFormDrawerProps) {
@@ -42,7 +42,7 @@ function AmenityFormDrawer({ open, onOpenChange, amenity, onSubmit }: AmenityFor
     formState: { errors, isSubmitting },
   } = useForm<AmenityFormData>({
     resolver: zodResolver(amenitySchema),
-    defaultValues: { tier: 'P3', status: 'active' },
+    defaultValues: { tier: 'P3', status: 'pending' },
   })
 
   useEffect(() => {
@@ -52,10 +52,10 @@ function AmenityFormDrawer({ open, onOpenChange, amenity, onSubmit }: AmenityFor
         screen_format: amenity.screen_format,
         tier: amenity.tier as 'P1' | 'P2' | 'P3' | 'P4' | 'P5' | 'P6',
         circuit: amenity.circuit ?? '',
-        status: amenity.status as 'pending' | 'active' | 'inactive',
+        status: amenity.status as 'approved' | 'pending' | 'rejected',
       })
     } else {
-      reset({ tier: 'P3', status: 'active', keyword: '', screen_format: '', circuit: '' })
+      reset({ tier: 'P3', status: 'pending', keyword: '', screen_format: '', circuit: '' })
     }
   }, [amenity, reset, open])
 

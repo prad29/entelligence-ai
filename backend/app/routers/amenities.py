@@ -210,6 +210,22 @@ def reject_amenity(
     return {"ok": True}
 
 
+@router.delete("/{id}")
+def delete_amenity(
+    id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    m = session.get(AmenityMapping, id)
+    if not m:
+        raise HTTPException(404)
+    write_audit(session, "amenity_mappings", id, "delete", before=m.dict())
+    session.delete(m)
+    session.commit()
+    request.app.state.engine = build_engine_from_db(session)
+    return {"ok": True}
+
+
 @router.post("/import")
 async def import_xlsx(
     file: UploadFile = File(...),

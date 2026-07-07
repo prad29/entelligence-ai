@@ -124,6 +124,8 @@ def _process_job(
             amenities_idx = headers.index("amenities")
         user_format_idx = None
 
+    circuit_idx: Optional[int] = headers.index("circuit_name") if "circuit_name" in headers else None
+
     actual_total = len(rows)
     job = session.get(MovieFormatJob, job_id)
     if job and job.total != actual_total:
@@ -134,7 +136,7 @@ def _process_job(
     ws_out = wb_out.active
     _AI_FILL = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid")
 
-    out_headers = ["amenities_string", "movie_format"]
+    out_headers = (["circuit_name"] if circuit_idx is not None else []) + ["amenities_string", "movie_format"]
     if include_diagnostics:
         out_headers += [
             "detected_keyword",
@@ -186,26 +188,28 @@ def _process_job(
         amenity = str(row[amenities_idx] if len(row) > amenities_idx else "").strip()
         if amenity.lower() in _SENTINEL_VALUES:
             amenity = ""
+        circuit = str(row[circuit_idx] if circuit_idx is not None and len(row) > circuit_idx else "").strip()
         user_format = str(row[user_format_idx] if user_format_idx is not None and len(row) > user_format_idx else "").strip()
         result = detection_engine.detect(amenity)
 
         if result.fired_ai:
             stats["no_match"] += 1
             stats["standard"] += 1
-            row_data.append((amenity, result, True, user_format))
-            ai_pending.append((row_idx, amenity, result, user_format))
+            row_data.append((amenity, result, True, user_format, circuit))
+            ai_pending.append((row_idx, amenity, result, user_format, circuit))
         else:
             if result.movie_format != "2D":
                 stats["matched"] += 1
             else:
                 stats["standard"] += 1
-            row_data.append((amenity, result, False, user_format))
+            row_data.append((amenity, result, False, user_format, circuit))
 
     # Write non-AI rows immediately
     non_ai_count = 0
-    for idx, (amenity, result, needs_ai, user_format) in enumerate(row_data):
+    for idx, (amenity, result, needs_ai, user_format, circuit) in enumerate(row_data):
         if not needs_ai:
-            out_row: list = [amenity, user_format if audit_mode else result.movie_format]
+            out_row: list = (([circuit] if circuit_idx is not None else []) +
+                             [amenity, user_format if audit_mode else result.movie_format])
             if include_diagnostics:
                 out_row += [
                     result.detected_keyword or "",
@@ -247,7 +251,7 @@ def _process_job(
                 return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
 
         key_to_pending_indices: dict[str, list[int]] = {}
-        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf, _circ) in enumerate(ai_pending):
             cache_key = amenity.strip().lower()
             if cache_key not in key_to_pending_indices:
                 key_to_pending_indices[cache_key] = []
@@ -301,7 +305,7 @@ def _process_job(
                     job.processed = non_ai_count + completed_count
                 session.commit()
 
-        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf, _circ) in enumerate(ai_pending):
             cache_key = amenity.strip().lower()
             suggestion = dedup_cache.get(cache_key)
 
@@ -334,7 +338,7 @@ def _process_job(
                 return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
 
         key_to_pending_indices: dict[str, list[int]] = {}
-        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf, _circ) in enumerate(ai_pending):
             cache_key = amenity.strip().lower()
             if cache_key not in key_to_pending_indices:
                 key_to_pending_indices[cache_key] = []
@@ -354,7 +358,7 @@ def _process_job(
                 except Exception:
                     dedup_cache[ck] = None
 
-        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf, _circ) in enumerate(ai_pending):
             cache_key = amenity.strip().lower()
             suggestion = dedup_cache.get(cache_key)
             if suggestion:
@@ -378,7 +382,7 @@ def _process_job(
                 ))
 
     elif (not effective_ai) and ai_pending:
-        for pending_idx, (row_idx_0, amenity, result, _uf) in enumerate(ai_pending):
+        for pending_idx, (row_idx_0, amenity, result, _uf, _circ) in enumerate(ai_pending):
             pending_review.append(MovieFormatReviewItem(
                 type="ai_suggestion",
                 source_string=amenity,
@@ -388,8 +392,9 @@ def _process_job(
             ))
 
     # Write AI rows to output
-    for pending_idx, (row_idx_0, amenity, result, user_format) in enumerate(ai_pending):
-        out_row = [amenity, user_format if audit_mode else result.movie_format]
+    for pending_idx, (row_idx_0, amenity, result, user_format, circuit) in enumerate(ai_pending):
+        out_row = (([circuit] if circuit_idx is not None else []) +
+                   [amenity, user_format if audit_mode else result.movie_format])
         if include_diagnostics:
             out_row += [
                 result.detected_keyword or "",
@@ -442,7 +447,7 @@ def _process_job(
 
     if ai_pending:
         from collections import Counter
-        unmatched_counter = Counter(amenity.strip().lower() for (_, amenity, _r, _uf) in ai_pending)
+        unmatched_counter = Counter(amenity.strip().lower() for (_, amenity, _r, _uf, _circ) in ai_pending)
         top_unmatched = unmatched_counter.most_common(10)
         logger.info("movie_batch_top_unmatched job=%s: %s", job_id, top_unmatched)
         stats["top_unmatched"] = [{"amenity": a, "count": c} for a, c in top_unmatched]

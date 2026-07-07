@@ -40,6 +40,9 @@ _IGNORE_TOKENS: frozenset[str] = frozenset(
 _P6_TIER = 6
 _NON_ALNUM = re.compile(r"[^a-z0-9]")
 
+_IMAX_CIRCUIT = "imax"
+_IMAX_P1_THRESHOLD = 1
+
 
 def _concat_form(text: str) -> str:
     return _NON_ALNUM.sub("", text.lower())
@@ -169,7 +172,19 @@ class ScreenFormatEngine:
 
     def detect(self, amenity: str, circuit_name: str = "") -> DetectionResult:
         stripped = amenity.strip() if amenity else ""
+        norm_circuit_lower = self._resolve_circuit(circuit_name) if circuit_name else ""
+        is_imax_circuit = norm_circuit_lower == _IMAX_CIRCUIT
+
         if not stripped:
+            if is_imax_circuit:
+                return DetectionResult(
+                    screen_format="IMAX",
+                    match_track="none",
+                    confidence=1.0,
+                    match_source="IMAX Circuit Override",
+                    fired_ai=False,
+                    circuit_name=circuit_name or None,
+                )
             return DetectionResult(
                 screen_format="Standard",
                 match_track="none",
@@ -177,8 +192,6 @@ class ScreenFormatEngine:
                 match_source="Empty Input",
                 fired_ai=False,
             )
-
-        norm_circuit_lower = self._resolve_circuit(circuit_name) if circuit_name else ""
 
         if circuit_name and circuit_name.strip():
             known = circuit_name.strip().lower() in self.index.aliases
@@ -254,6 +267,21 @@ class ScreenFormatEngine:
 
         if best_hit is not None:
             mapping, track, source, pos = best_hit
+
+            # IMAX Circuit Override: only P1 results escape
+            if is_imax_circuit and mapping.priority_tier > _IMAX_P1_THRESHOLD:
+                return DetectionResult(
+                    screen_format="IMAX",
+                    match_track=track,
+                    confidence=1.0 if track == "A" else (0.9 if track == "B" else 0.75),
+                    matched_keyword=mapping.amenity_keyword,
+                    detected_keyword=mapping.amenity_keyword,
+                    circuit_name=circuit_name or None,
+                    na_default=None,
+                    match_source="IMAX Circuit Override",
+                    fired_ai=False,
+                )
+
             resolved_format = self._resolve_circuit_format(mapping, norm_circuit_lower)
             is_deliberate_standard = mapping.priority_tier == _P6_TIER
 
@@ -276,6 +304,16 @@ class ScreenFormatEngine:
             )
 
         # Layer 2 — No match → AI
+        if is_imax_circuit:
+            return DetectionResult(
+                screen_format="IMAX",
+                match_track="none",
+                confidence=1.0,
+                match_source="IMAX Circuit Override",
+                fired_ai=False,
+                circuit_name=circuit_name or None,
+            )
+
         logger.info(
             "ai_invocation",
             extra={"amenity": amenity, "circuit": circuit_name, "ai_invocation": True},

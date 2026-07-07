@@ -6,6 +6,9 @@ from typing import FrozenSet
 _NOISE_PATTERN = re.compile(r"[^a-z0-9\s]")
 _MULTI_SPACE = re.compile(r"\s+")
 
+# Collapse "70 MM" → "70MM", "35 mm" → "35mm" etc. before any other normalization
+_DIGIT_SPACE_UNIT = re.compile(r"(\d+)\s+([a-zA-Z]+)")
+
 # Matches the literal ASCII sequence x-a-0 (OCR artifact for \xa0)
 _LITERAL_XA0 = re.compile(r"xa0", re.IGNORECASE)
 
@@ -30,6 +33,7 @@ def _pre_normalize(text: str) -> str:
     - Replace literal 'xa0' sequence with empty string
     - Fold accents (CINÉ → CINE)
     - Normalize smart quotes / curly apostrophes
+    - Collapse digit+space+unit (e.g. "70 MM" -> "70MM", "35 mm" -> "35mm")
     """
     # Real non-breaking space
     text = text.replace("\xa0", " ")
@@ -38,8 +42,10 @@ def _pre_normalize(text: str) -> str:
     # Accent folding
     text = _fold_accents(text)
     # Smart quotes → straight
-    text = text.replace("‘", "'").replace("’", "'")
-    text = text.replace("“", '"').replace("”", '"')
+    text = text.replace("'", "'").replace("'", "'")
+    text = text.replace(""", '"').replace(""", '"')
+    # Collapse "70 MM" -> "70MM", "35 mm" -> "35mm"
+    text = _DIGIT_SPACE_UNIT.sub(r"\1\2", text)
     return text
 
 

@@ -30,5 +30,23 @@ def seed_from_xlsx(
     typer.echo(f"Seeded from {path}")
 
 
+@cli.command()
+def seed_movie_master(
+    path: str = typer.Argument(..., help="Path to movie_master.csv"),
+    reset: bool = typer.Option(False, "--reset", help="Truncate table before seeding"),
+) -> None:
+    """
+    Seed the moviemaster table from a CSV dump.
+
+    Safe to re-run without --reset; rows are upserted by id.
+    Use --reset to truncate and reload from scratch.
+    """
+    create_db_and_tables()
+    from app.title_matching.seed_loader import seed_movie_master as _seed
+    with Session(db_engine) as session:
+        total = _seed(session, path, reset=reset)
+    typer.echo(f"Done: {total} rows seeded from {path}")
+
+
 if __name__ == "__main__":
     cli()

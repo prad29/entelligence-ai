@@ -14,6 +14,29 @@ export interface EliminatedCandidate {
   why: string
 }
 
+export interface PageMetadata {
+  extracted_runtime_min?: number | null
+  extracted_director?: string | null
+  extracted_cast?: string | null
+  extracted_rating?: string | null
+  extraction_platform?: string
+  extraction_tier?: string
+  extraction_outcome?: string
+  extracted_at?: string | null
+}
+
+export interface RuntimeCheck {
+  page?: number | null
+  master?: number | null
+  label?: string
+}
+
+export interface DirectorCheck {
+  page?: string | null
+  master?: string | null
+  label?: string
+}
+
 export interface MovieTitleMatchResult {
   suggested_movie_id: number
   suggested_movie_title: string
@@ -25,10 +48,13 @@ export interface MovieTitleMatchResult {
     fuzzy_top?: Array<{ id: number; title: string; score: number }>
     date_window?: string
     eliminated?: EliminatedCandidate[]
+    runtime_check?: RuntimeCheck
+    director_check?: DirectorCheck
   }
   cover_image?: string | null
   ticketing_poster_url?: string | null
   fired_ai: boolean
+  page_metadata?: PageMetadata | null
 }
 
 export function useMovieTitleMatch() {

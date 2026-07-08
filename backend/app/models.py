@@ -103,3 +103,28 @@ class AuditLog(SQLModel, table=True):
     after_json: Optional[str] = None
     actor: Optional[str] = None
     ts: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MovieMaster(SQLModel, table=True):
+    id: int = Field(primary_key=True)
+    movie_title: str = Field(index=True)
+    release_date: Optional[str] = None
+    imdb_id: Optional[str] = None
+    cover_image: Optional[str] = None
+    director: Optional[str] = None
+    cast_list: Optional[str] = None
+    running_time: Optional[int] = None
+    parent_id: Optional[int] = None
+    search_tags: Optional[str] = None
+    title_tag: Optional[str] = None
+    short_name: Optional[str] = None
+    cover_image_phash: Optional[str] = None
+
+
+class MovieTitleAlias(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    normalized_alias: str = Field(index=True)
+    country_code: Optional[str] = None
+    movie_master_id: int = Field(foreign_key="moviemaster.id")
+    source: str = Field(default="human")
+    created_at: datetime = Field(default_factory=datetime.utcnow)

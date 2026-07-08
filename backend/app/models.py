@@ -106,11 +106,11 @@ class AuditLog(SQLModel, table=True):
 
 
 class MovieMaster(SQLModel, table=True):
-    id: int = Field(primary_key=True)      # PK from CSV
+    id: int = Field(primary_key=True)
     movie_title: str = Field(index=True)
-    release_date: Optional[str] = None    # "YYYY-MM-DD" or "0000-00-00"
+    release_date: Optional[str] = None
     imdb_id: Optional[str] = None
-    cover_image: Optional[str] = None     # S3 URL or "noimage.jpg"
+    cover_image: Optional[str] = None
     director: Optional[str] = None
     cast_list: Optional[str] = None
     running_time: Optional[int] = None
@@ -126,5 +126,5 @@ class MovieTitleAlias(SQLModel, table=True):
     normalized_alias: str = Field(index=True)
     country_code: Optional[str] = None
     movie_master_id: int = Field(foreign_key="moviemaster.id")
-    source: str                            # "human" | "seeded"
+    source: str = Field(default="human")
     created_at: datetime = Field(default_factory=datetime.utcnow)

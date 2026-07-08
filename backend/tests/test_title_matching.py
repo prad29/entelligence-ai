@@ -338,9 +338,12 @@ class TestCandidateGenerator:
 # STAGE 2 — OG IMAGE FETCHER (T1)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_T1_HTTPX_PATCH = "app.title_matching.extractors.t1_http.httpx.get"
+
+
 class TestOGImageFetcher:
     """
-    Stage 2 (T1 only): fetches og:image from ticketing URL via plain HTTP.
+    Stage 2 (T1 only): fetches og:image from ticketing URL via T1HttpExtractor.
     Stage 3 (pHash / CLIP) is Phase 2 — NOT YET BUILT.
     """
 
@@ -348,7 +351,7 @@ class TestOGImageFetcher:
         _section("STAGE 2 — OG IMAGE FETCHER (T1 plain HTTP)")
 
     def test_og_image_extracted_from_html(self):
-        from app.title_matching.engine import _fetch_og_image
+        from app.title_matching.extractors.t1_http import T1HttpExtractor
 
         html = textwrap.dedent("""
             <html><head>
@@ -359,49 +362,51 @@ class TestOGImageFetcher:
         mock_resp.status_code = 200
         mock_resp.text = html
 
-        with patch("httpx.get", return_value=mock_resp):
-            result = _fetch_og_image("https://tickets.example.com/moana")
+        with patch(_T1_HTTPX_PATCH, return_value=mock_resp):
+            result = T1HttpExtractor().extract("https://tickets.example.com/moana", "GENERIC")
 
-        assert result == "https://example.com/poster.jpg"
-        _pass("Stage2/OGFetch", "og_image_parse", f"url={result}")
+        assert result.ticketing_poster_url == "https://example.com/poster.jpg"
+        _pass("Stage2/OGFetch", "og_image_parse", f"url={result.ticketing_poster_url}")
 
     def test_og_image_missing_returns_none(self):
-        from app.title_matching.engine import _fetch_og_image
+        from app.title_matching.extractors.t1_http import T1HttpExtractor
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = "<html><head></head><body>no og tags</body></html>"
 
-        with patch("httpx.get", return_value=mock_resp):
-            result = _fetch_og_image("https://tickets.example.com/movie")
+        with patch(_T1_HTTPX_PATCH, return_value=mock_resp):
+            result = T1HttpExtractor().extract("https://tickets.example.com/movie", "GENERIC")
 
-        assert result is None
-        _pass("Stage2/OGFetch", "og_missing_returns_none", "result=None")
+        assert result.ticketing_poster_url is None
+        _pass("Stage2/OGFetch", "og_missing_returns_none", "ticketing_poster_url=None")
 
     def test_http_error_returns_none(self):
-        from app.title_matching.engine import _fetch_og_image
+        from app.title_matching.extractors.t1_http import T1HttpExtractor
 
         mock_resp = MagicMock()
         mock_resp.status_code = 404
 
-        with patch("httpx.get", return_value=mock_resp):
-            result = _fetch_og_image("https://tickets.example.com/404")
+        with patch(_T1_HTTPX_PATCH, return_value=mock_resp):
+            result = T1HttpExtractor().extract("https://tickets.example.com/404", "GENERIC")
 
-        assert result is None
-        _pass("Stage2/OGFetch", "http_404_returns_none", "result=None")
+        assert result.ticketing_poster_url is None
+        assert result.extraction_outcome == "FAILED_T1"
+        _pass("Stage2/OGFetch", "http_404_returns_none", "ticketing_poster_url=None")
 
     def test_network_exception_returns_none(self):
-        from app.title_matching.engine import _fetch_og_image
+        from app.title_matching.extractors.t1_http import T1HttpExtractor
 
-        with patch("httpx.get", side_effect=Exception("Connection refused")):
-            result = _fetch_og_image("https://unreachable.example.com")
+        with patch(_T1_HTTPX_PATCH, side_effect=Exception("Connection refused")):
+            result = T1HttpExtractor().extract("https://unreachable.example.com", "GENERIC")
 
-        assert result is None
-        _pass("Stage2/OGFetch", "network_error_silent", "result=None (no exception raised)")
+        assert result.ticketing_poster_url is None
+        assert result.extraction_outcome == "FAILED_T1"
+        _pass("Stage2/OGFetch", "network_error_silent", "ticketing_poster_url=None (no exception raised)")
 
     def test_og_image_only_parses_first_50kb(self):
         """Parser should not crash on large pages; only parses first 50000 chars."""
-        from app.title_matching.engine import _fetch_og_image
+        from app.title_matching.extractors.t1_http import T1HttpExtractor
 
         big_content = "x" * 40000
         og_part = '<meta property="og:image" content="https://example.com/found.jpg" />'
@@ -411,11 +416,11 @@ class TestOGImageFetcher:
         mock_resp.status_code = 200
         mock_resp.text = html
 
-        with patch("httpx.get", return_value=mock_resp):
-            result = _fetch_og_image("https://example.com/large-page")
+        with patch(_T1_HTTPX_PATCH, return_value=mock_resp):
+            result = T1HttpExtractor().extract("https://example.com/large-page", "GENERIC")
 
-        assert result == "https://example.com/found.jpg"
-        _pass("Stage2/OGFetch", "large_page_ok", f"url={result}")
+        assert result.ticketing_poster_url == "https://example.com/found.jpg"
+        _pass("Stage2/OGFetch", "large_page_ok", f"url={result.ticketing_poster_url}")
 
     def test_stage3_phash_not_implemented(self):
         """
@@ -741,7 +746,9 @@ class TestTitleMatchEngineE2E:
         mock_resp.status_code = 200
         mock_resp.text = html
 
-        with patch("httpx.get", return_value=mock_resp):
+        with patch(_T1_HTTPX_PATCH, return_value=mock_resp), \
+             patch("app.title_matching.evidence_cache.get", return_value=None), \
+             patch("app.title_matching.evidence_cache.set"):
             result = engine.match("Moana", ticketing_url="https://tickets.example.com/moana")
 
         assert result.ticketing_poster_url == "https://cdn.tickets.com/moana.jpg"

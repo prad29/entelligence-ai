@@ -35,3 +35,4 @@ class TitleMatchResult:
     cover_image: Optional[str] = None
     ticketing_poster_url: Optional[str] = None
     fired_ai: bool = False
+    page_metadata: Optional[dict] = None

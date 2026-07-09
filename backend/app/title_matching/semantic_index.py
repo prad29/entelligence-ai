@@ -26,7 +26,8 @@ _VESPA_SCHEMA = "movie_master"
 _VESPA_APP_NAME = "movie-title-matching"
 _BEDROCK_MAX_RETRIES = 3
 _BEDROCK_BACKOFF_BASE = 0.5
-_FEED_BATCH_SIZE = 50
+_EMBED_CONCURRENCY = 50  # threads; quota is 6,000 RPM = 100 req/s
+_LOG_PROGRESS_EVERY = 500
 
 
 # ---------------------------------------------------------------------------
@@ -107,15 +108,35 @@ def _embed_batch(
     settings,
     client,
 ) -> list[Optional[list[float]]]:
-    """Embed a list of rows, returning None for any that fail."""
-    results: list[Optional[list[float]]] = []
-    for i, row in enumerate(rows):
+    """
+    Embed rows concurrently using a thread pool.
+
+    Each thread gets its own boto3 client (boto3 clients are not thread-safe).
+    Concurrency is capped at _EMBED_CONCURRENCY to stay within the 6,000 RPM
+    on-demand quota (~100 req/s).
+    """
+    import concurrent.futures
+    import threading
+
+    results: list[Optional[list[float]]] = [None] * len(rows)
+    completed = [0]
+    lock = threading.Lock()
+
+    def _embed_one(idx: int, row: dict) -> None:
+        thread_client = _get_bedrock_client(settings)
         text = _compose_embed_text(row)
-        emb = get_embedding(text, settings, client=client)
-        results.append(emb)
-        # Pace requests to avoid Bedrock throttling
-        if (i + 1) % _FEED_BATCH_SIZE == 0:
-            time.sleep(0.2)
+        results[idx] = get_embedding(text, settings, client=thread_client)
+        with lock:
+            completed[0] += 1
+            if completed[0] % _LOG_PROGRESS_EVERY == 0:
+                logger.info(
+                    "semantic_index: embedded %d/%d rows", completed[0], len(rows)
+                )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_EMBED_CONCURRENCY) as pool:
+        futures = [pool.submit(_embed_one, i, row) for i, row in enumerate(rows)]
+        concurrent.futures.wait(futures)
+
     return results
 
 

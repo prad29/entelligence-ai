@@ -242,7 +242,7 @@ class TestCandidateGenerator:
     @pytest.fixture
     def gen(self, master_rows):
         from app.title_matching.candidate_generator import CandidateGenerator
-        return CandidateGenerator(master_rows)
+        return CandidateGenerator(master_rows, semantic_index=None)
 
     def test_fuzzy_exact_hit(self, gen):
         from app.title_matching.normalizer import normalize_title
@@ -707,7 +707,7 @@ class TestTitleMatchEngineE2E:
             (13868, "Toy Story",               "1995-11-22", None, None),
             (105988, "Toy Story 4",            "2019-06-21", None, None),
         ])
-        gen = CandidateGenerator(rows)
+        gen = CandidateGenerator(rows, semantic_index=None)
         return TitleMatchEngine(gen, {})
 
     def test_exact_match_inception(self, engine):
@@ -805,7 +805,7 @@ class TestAPIEndpoint:
             (1, "Inception", "2010-07-16", None, None),
             (2, "Interstellar", "2014-11-07", None, None),
         ])
-        gen = CandidateGenerator(rows)
+        gen = CandidateGenerator(rows, semantic_index=None)
         app.state.title_match_engine = TitleMatchEngine(gen, {})
         return TestClient(app)
 

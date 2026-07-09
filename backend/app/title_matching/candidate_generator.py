@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _get_embedding_fn():
+    """Lazy import of get_embedding to avoid circular imports at module load."""
+    from app.title_matching.semantic_index import get_embedding
+    return get_embedding
+
 _JUNK_TITLES = frozenset(['3', '4', 'la', 'prince', 'phoenix', 'the order', 'night', 'king', 'nix'])
 
 # Franchise map: (franchise_hint, ordinal) → movie_master_id
@@ -56,7 +62,7 @@ class CandidateGenerator:
             return []
         try:
             from app.config import settings
-            from app.title_matching.semantic_index import get_embedding
+            get_embedding = _get_embedding_fn()
 
             query_embedding = get_embedding(query, settings)
             if query_embedding is None:

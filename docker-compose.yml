@@ -1,5 +1,19 @@
 version: "3.9"
 services:
+  vespa:
+    image: vespaengine/vespa:8
+    ports:
+      - "8080:8080"   # query/feed API
+      - "19071:19071" # config server
+    volumes:
+      - vespa_data:/opt/vespa/var
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:19071/state/v1/health | grep -q '\"status\":\"up\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
   redis:
     image: redis:7-alpine
     ports:
@@ -31,11 +45,14 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      VESPA_URL: http://vespa:8080
     env_file: .env
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      vespa:
         condition: service_healthy
 
   frontend:
@@ -48,3 +65,6 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+
+volumes:
+  vespa_data:

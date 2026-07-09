@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     BEDROCK_CACHE_TTL_DAYS: int = 30
     BEDROCK_MAX_CONCURRENCY: int = 20
     BATCH_AI_SAMPLE_LIMIT: int = 50
+    VESPA_URL: str = "http://localhost:8080"
+    EMBEDDING_MODEL_ID: str = "amazon.titan-embed-text-v2:0"
+    EMBEDDING_DIMENSION: int = 1024
+    SEMANTIC_SEARCH_ENABLED: bool = True
 
     class Config:
         env_file = ".env"

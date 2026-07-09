@@ -36,8 +36,10 @@ schema movie_master {
         }
 
         first-phase {
-            expression: reciprocal_rank_fusion(bm25(title), closeness(field, embedding))
+            expression: bm25(title) + closeness(field, embedding)
         }
+
+        match-features: bm25(title) closeness(field, embedding)
     }
 
 }

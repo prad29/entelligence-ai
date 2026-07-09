@@ -226,18 +226,17 @@ class VespaSemanticIndex:
             import numpy as np
             vec = list(map(float, query_embedding))
 
+            fetch_k = k + len(exclude_ids) + 10
             body = {
                 "yql": (
-                    f'select movie_master_id, relevance() '
-                    f'from {_VESPA_SCHEMA} '
-                    f'where ({{"targetHits": {k + len(exclude_ids) + 10}}})'
-                    f'nearestNeighbor(embedding, q_embedding) '
-                    f'or userQuery()'
+                    f"select movie_master_id from {_VESPA_SCHEMA} "
+                    f"where ({{targetHits:{fetch_k}}}nearestNeighbor(embedding,q_embedding)) "
+                    f"or userQuery()"
                 ),
                 "query": query_text,
                 "ranking": "hybrid",
                 "input.query(q_embedding)": vec,
-                "hits": k + len(exclude_ids) + 10,
+                "hits": fetch_k,
             }
 
             result = self._app.query(body=body)

@@ -1,14 +1,31 @@
 import { useState } from 'react'
-import { type MovieTitleMatchResult } from '@/hooks/useMovieTitleMatch'
+import { type MovieTitleMatchResult, type PageMetadata } from '@/hooks/useMovieTitleMatch'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Sparkles, Percent, ChevronDown } from 'lucide-react'
+import { Sparkles, Percent, ChevronDown, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { formatPercent } from '@/lib/utils'
 
 function getDecisionVariant(decision: string) {
   if (decision === 'AUTO_ACCEPT') return 'imax' as const
   if (decision === 'REVIEW') return 'warning' as const
   return 'standard' as const
+}
+
+function formatRuntime(minutes: number): string {
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
+
+function hasPageMetadataContent(meta: PageMetadata): boolean {
+  if (!meta.extraction_outcome || meta.extraction_outcome === 'NOT_ATTEMPTED') return false
+  return (
+    meta.extracted_runtime_min != null ||
+    meta.extracted_director != null ||
+    meta.extracted_cast != null ||
+    meta.extraction_platform != null ||
+    meta.extraction_tier != null
+  )
 }
 
 interface MovieTitleMatchCardProps {
@@ -79,6 +96,64 @@ function MovieTitleMatchCard({ result }: MovieTitleMatchCardProps) {
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
                 />
               </div>
+            )}
+          </div>
+        )}
+
+        {/* Page metadata */}
+        {result.page_metadata && hasPageMetadataContent(result.page_metadata) && (
+          <div className="rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-4 py-3 flex flex-col gap-2">
+            <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Ticketing Page Data</p>
+
+            {/* Extraction info chips */}
+            {result.page_metadata.extraction_outcome && result.page_metadata.extraction_outcome !== 'NOT_ATTEMPTED' && (
+              <div className="flex flex-wrap gap-1.5">
+                {result.page_metadata.extraction_platform && (
+                  <span className="rounded-full bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-400 uppercase tracking-wide">
+                    {result.page_metadata.extraction_platform}
+                  </span>
+                )}
+                {result.page_metadata.extraction_tier && (
+                  <span className="rounded-full bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-400 uppercase tracking-wide">
+                    {result.page_metadata.extraction_tier}
+                  </span>
+                )}
+                <span className="rounded-full bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-400 uppercase tracking-wide">
+                  {result.page_metadata.extraction_outcome}
+                </span>
+              </div>
+            )}
+
+            {/* Runtime row */}
+            {result.page_metadata.extracted_runtime_min != null && (
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">Runtime:</span>{' '}
+                {formatRuntime(result.page_metadata.extracted_runtime_min)} from ticketing page
+              </p>
+            )}
+
+            {/* Director row */}
+            {result.page_metadata.extracted_director != null && (
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Director:</span>{' '}
+                  {result.page_metadata.extracted_director}
+                </p>
+                {result.evidence?.director_check?.label?.includes('MATCH') && !result.evidence.director_check.label.includes('MISMATCH') && (
+                  <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                )}
+                {result.evidence?.director_check?.label?.includes('MISMATCH') && (
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                )}
+              </div>
+            )}
+
+            {/* Cast row */}
+            {result.page_metadata.extracted_cast != null && (
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 truncate">
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">Cast:</span>{' '}
+                {result.page_metadata.extracted_cast}
+              </p>
             )}
           </div>
         )}

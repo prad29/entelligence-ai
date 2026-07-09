@@ -8,7 +8,7 @@ services:
     volumes:
       - vespa_data:/opt/vespa/var
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:19071/state/v1/health | grep -q '\"status\":\"up\"'"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:19071/state/v1/health | grep -q 'up'"]
       interval: 15s
       timeout: 10s
       retries: 12

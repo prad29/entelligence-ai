@@ -82,6 +82,51 @@ def _recency_boost(candidates: list[CandidateResult], winner_idx: int) -> float:
     return 0.05
 
 
+def _runtime_check(
+    page_runtime_min: Optional[int],
+    master_runtime_min: Optional[int],
+) -> tuple[float, str]:
+    """Return (boost, label). +0.10 if runtimes within 5 min of each other."""
+    if page_runtime_min is None or master_runtime_min is None:
+        return 0.0, 'RUNTIME_UNKNOWN'
+    delta = abs(page_runtime_min - master_runtime_min)
+    if delta <= 5:
+        return 0.10, 'RUNTIME_MATCH'
+    return 0.0, f'RUNTIME_MISMATCH_{delta}min'
+
+
+def _director_check(
+    page_director: Optional[str],
+    master_director: Optional[str],
+) -> tuple[float, str]:
+    """Return (boost, label). +0.10 if directors match (rapidfuzz ratio >= 80)."""
+    if not page_director or not master_director:
+        return 0.0, 'DIRECTOR_UNKNOWN'
+    try:
+        from rapidfuzz import fuzz
+        ratio = fuzz.ratio(page_director.lower().strip(), master_director.lower().strip())
+        if ratio >= 80:
+            return 0.10, 'DIRECTOR_MATCH'
+        return 0.0, f'DIRECTOR_MISMATCH_{int(ratio)}'
+    except Exception:
+        return 0.0, 'DIRECTOR_UNKNOWN'
+
+
+def _cast_check(
+    page_cast: Optional[str],
+    master_cast_list: Optional[str],
+) -> tuple[float, str]:
+    """Return (boost, label). +0.05 if any cast overlap between page and master."""
+    if not page_cast or not master_cast_list:
+        return 0.0, 'CAST_UNKNOWN'
+    page_names = {n.strip().lower() for n in page_cast.replace(',', ';').split(';') if n.strip()}
+    master_names = {n.strip().lower() for n in master_cast_list.replace(',', ';').split(';') if n.strip()}
+    overlap = page_names & master_names
+    if overlap:
+        return 0.05, f'CAST_MATCH_{len(overlap)}'
+    return 0.0, 'CAST_NO_OVERLAP'
+
+
 def _compute_composite_score(
     candidate: CandidateResult,
     normalized: NormalizedTitle,
@@ -191,6 +236,7 @@ def score_and_decide(
     show_date: Optional[str],
     theater: Optional[str],
     id_to_row: Optional[dict[int, dict]] = None,
+    page_metadata: Optional[dict] = None,
 ) -> TitleMatchResult:
     """Score all candidates, pick a winner, resolve parent_id, and determine decision."""
     if not candidates:
@@ -221,6 +267,30 @@ def score_and_decide(
         recency = _recency_boost(candidates, winner_idx)
         best_score = min(1.0, best_score + recency)
 
+    # Metadata checks require id_to_row to look up master-side runtime/director/cast fields.
+    # Stage 4: apply page metadata checks if available
+    pre_metadata_score = best_score
+    page_runtime = None
+    page_director = None
+    page_cast = None
+    runtime_label = 'RUNTIME_UNKNOWN'
+    director_label = 'DIRECTOR_UNKNOWN'
+    cast_label = 'CAST_UNKNOWN'
+
+    if page_metadata and id_to_row is not None:
+        page_runtime = page_metadata.get('extracted_runtime_min')
+        page_director = page_metadata.get('extracted_director')
+        page_cast = page_metadata.get('extracted_cast')
+        winner_row = id_to_row.get(winner.movie_master_id, {})
+        master_runtime = winner_row.get('running_time')
+        master_director = winner_row.get('director')
+        master_cast = winner_row.get('cast_list')
+
+        rt_boost, runtime_label = _runtime_check(page_runtime, master_runtime)
+        dir_boost, director_label = _director_check(page_director, master_director)
+        cast_boost, cast_label = _cast_check(page_cast, master_cast)
+        best_score = min(1.0, best_score + rt_boost + dir_boost + cast_boost)
+
     # Resolve parent_id
     if id_to_row is not None:
         canonical_movie_id = _resolve_parent(winner.movie_master_id, id_to_row)
@@ -237,7 +307,12 @@ def score_and_decide(
 
     # Build evidence dict
     eliminated_list = [
-        {"id": c.movie_master_id, "title": c.movie_title, "score": round(s, 4)}
+        {
+            "id": c.movie_master_id,
+            "title": c.movie_title,
+            "score": round(s, 4),
+            "why": f"score={round(s, 4):.2f} (winner scored {round(pre_metadata_score, 4):.2f} pre-metadata, {round(best_score, 4):.2f} final)",
+        }
         for s, _, c, _ in scored[1:]
     ]
     evidence = {
@@ -252,6 +327,16 @@ def score_and_decide(
             else "none"
         ),
         "eliminated": eliminated_list[:4],
+        "runtime_check": {
+            "page": page_runtime,
+            "master": id_to_row.get(winner.movie_master_id, {}).get('running_time') if id_to_row else None,
+            "label": runtime_label,
+        },
+        "director_check": {
+            "page": page_director,
+            "master": id_to_row.get(winner.movie_master_id, {}).get('director') if id_to_row else None,
+            "label": director_label,
+        },
     }
 
     # Generate reasoning — try Bedrock first, fall back to template

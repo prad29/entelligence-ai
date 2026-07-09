@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from urllib.parse import ParseResult, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 from app.title_matching.evidence_types import ExtractionPlatform, ExtractionTier
 
@@ -37,11 +37,11 @@ _INDY_SYSTEMS_DOMAINS: frozenset[str] = frozenset(
     }
 )
 
-# Regex for extracting the show slug from a VIFF path (matches both /checkout/ and /cart/)
-_VIFF_SLUG_RE = re.compile(r"/(?:checkout|cart)/(?:event/)?([^/?#]+)")
+# Regex for extracting the show slug from a VIFF path
+_VIFF_SLUG_RE = re.compile(r"/checkout/(?:event/)?([^/?#]+)")
 
 
-def _repair_viff(parsed: ParseResult, url: str) -> str:
+def _repair_viff(parsed: "SplitResult", url: str) -> str:  # type: ignore[name-defined]
     """Redirect VIFF checkout/cart URLs to the whats-on page."""
     path = parsed.path
     if "/checkout/" not in path and "/cart/" not in path:
@@ -60,7 +60,7 @@ def _repair_viff(parsed: ParseResult, url: str) -> str:
     return repaired
 
 
-def _repair_indy_systems(parsed: ParseResult, url: str) -> str:
+def _repair_indy_systems(parsed: "SplitResult", url: str) -> str:  # type: ignore[name-defined]
     """Strip /checkout or /cart suffix from Indy Systems URLs."""
     path = parsed.path
     if "/checkout" not in path and "/cart" not in path:
@@ -75,7 +75,7 @@ def _repair_indy_systems(parsed: ParseResult, url: str) -> str:
     return repaired
 
 
-def _repair_event_cinemas(parsed: ParseResult, url: str) -> str:
+def _repair_event_cinemas(parsed: "SplitResult", url: str) -> str:  # type: ignore[name-defined]
     """Strip URL fragment from Event Cinemas URLs."""
     if not parsed.fragment:
         return url

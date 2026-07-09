@@ -1,9 +1,14 @@
+from __future__ import annotations
+
+import logging
 from typing import Optional
 
 from app.title_matching.normalizer import normalize_title
 from app.title_matching.candidate_generator import CandidateGenerator
 from app.title_matching.decision_engine import score_and_decide
 from app.title_matching.types import TitleMatchResult
+
+logger = logging.getLogger(__name__)
 
 
 class TitleMatchEngine:
@@ -42,11 +47,17 @@ class TitleMatchEngine:
             id_to_row=self._id_to_row,
         )
 
-        # T1 ticketing URL poster fetch (best-effort)
+        # Stage 2: Evidence fetcher (best-effort — never raises)
         if ticketing_url:
-            poster_url = _fetch_og_image(ticketing_url)
-            if poster_url:
-                result.ticketing_poster_url = poster_url
+            try:
+                from app.title_matching.evidence_fetcher import fetch_evidence
+                evidence = fetch_evidence(ticketing_url)
+                if evidence.ticketing_poster_url:
+                    result.ticketing_poster_url = evidence.ticketing_poster_url
+                import dataclasses
+                result.page_metadata = dataclasses.asdict(evidence)
+            except Exception as exc:
+                logger.debug("evidence_fetch_skipped url=%s error=%s", ticketing_url, exc)
 
         # Attach cover_image from winner
         winner_row = self._id_to_row.get(result.suggested_movie_id)
@@ -56,34 +67,3 @@ class TitleMatchEngine:
                 result.cover_image = img
 
         return result
-
-
-def _fetch_og_image(url: str) -> Optional[str]:
-    try:
-        import httpx
-        from html.parser import HTMLParser
-
-        class OGParser(HTMLParser):
-            def __init__(self) -> None:
-                super().__init__()
-                self.og_image: Optional[str] = None
-
-            def handle_starttag(self, tag: str, attrs: list) -> None:
-                if tag == 'meta':
-                    d = dict(attrs)
-                    if d.get('property') == 'og:image' and 'content' in d:
-                        self.og_image = d['content']
-
-        resp = httpx.get(
-            url,
-            timeout=5,
-            follow_redirects=True,
-            headers={'User-Agent': 'Mozilla/5.0'},
-        )
-        if resp.status_code == 200:
-            parser = OGParser()
-            parser.feed(resp.text[:50000])   # only parse first 50kb
-            return parser.og_image
-    except Exception:
-        pass
-    return None

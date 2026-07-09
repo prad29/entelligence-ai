@@ -1,50 +1,32 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
 class ExtractionTier:
-    """String constants for extraction tiers."""
-
-    T1_HTTP: str = "T1_HTTP"
-    T2_HEADLESS: str = "T2_HEADLESS"
-    T3_GEO_PROXY: str = "T3_GEO_PROXY"
-    NONE: str = "NONE"
+    T1_SIMPLE_HTTP = "T1_SIMPLE_HTTP"
+    T2_HEADLESS = "T2_HEADLESS"
+    T3_GEO_PROXY = "T3_GEO_PROXY"
 
 
 class ExtractionPlatform:
-    """String constants for known ticketing platforms."""
-
-    CINEMAPLUS: str = "CINEMAPLUS"
-    AGILE_TICKETING: str = "AGILE_TICKETING"
-    VIFF: str = "VIFF"
-    INDY_SYSTEMS: str = "INDY_SYSTEMS"
-    CINEPLEX_DE: str = "CINEPLEX_DE"
-    EVENT_CINEMAS: str = "EVENT_CINEMAS"
-    GENERIC: str = "GENERIC"
+    GENERIC = "GENERIC"
+    INDY_SYSTEMS = "INDY_SYSTEMS"
+    EVENT_CINEMAS = "EVENT_CINEMAS"
+    VISTA = "VISTA"
 
 
 @dataclass
 class EvidenceResult:
-    """
-    Holds extracted evidence gathered from a ticketing URL.
-
-    extraction_outcome values:
-        SUCCESS        — data was successfully extracted
-        FAILED_T1      — T1_HTTP extraction failed
-        FAILED_T2      — T2_HEADLESS extraction failed
-        UNAVAILABLE    — the resource was unreachable or blocked
-        NOT_ATTEMPTED  — extraction has not been started yet
-    """
-
-    ticketing_poster_url: Optional[str] = None
+    extraction_tier: str = ""
+    extraction_platform: str = ""
+    extraction_outcome: str = ""
+    og_image: Optional[str] = None
     page_title: Optional[str] = None
-    extracted_runtime_min: Optional[int] = None
-    extracted_director: Optional[str] = None
-    extracted_cast: Optional[str] = None
-    extracted_rating: Optional[str] = None
-    extraction_platform: str = "UNKNOWN"
-    extraction_tier: str = "NONE"
-    extraction_outcome: str = "NOT_ATTEMPTED"
+    h1_text: Optional[str] = None
+    runtime: Optional[str] = None
+    director: Optional[str] = None
+    cast: Optional[str] = None
     extracted_at: Optional[str] = None
+    extra: dict = field(default_factory=dict)

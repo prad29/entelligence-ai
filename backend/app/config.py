@@ -20,8 +20,9 @@ class Settings(BaseSettings):
     BEDROCK_MAX_CONCURRENCY: int = 20
     BATCH_AI_SAMPLE_LIMIT: int = 50
     VESPA_URL: str = "http://localhost:8080"
-    EMBEDDING_MODEL_ID: str = "amazon.titan-embed-text-v2:0"
+    EMBEDDING_MODEL_ID: str = "cohere.embed-multilingual-v3"
     EMBEDDING_DIMENSION: int = 1024
+    COHERE_EMBED_BATCH_SIZE: int = 96
     SEMANTIC_SEARCH_ENABLED: bool = True
 
     class Config:

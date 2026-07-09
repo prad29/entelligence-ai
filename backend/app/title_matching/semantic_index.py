@@ -1,12 +1,17 @@
 """
 Semantic retrieval via Vespa hybrid search (BM25 + ANN vector).
 
-Embedding model: AWS Bedrock Titan Text Embeddings v2
-Index store: Vespa container (persistent, HNSW, angular distance)
+Embedding model: AWS Bedrock Cohere Embed Multilingual v3
+  - 100+ languages in a single embedding space (handles French/German/etc.
+    scraped titles against English Movie Master rows)
+  - Asymmetric: search_document for index-time, search_query for query-time
+  - 96 texts per batch call (vs 1 for Titan), so 45k rows ≈ 469 batch calls
+
+Index store: Vespa container (persistent, HNSW, angular distance, 1024 dims)
 
 On startup, build_semantic_index() deploys the Vespa app package (if not
-already deployed), checks how many documents are indexed, feeds any missing
-rows, and returns a VespaSemanticIndex ready for query-time use.
+already deployed), checks which IDs are indexed, feeds any missing rows, and
+returns a VespaSemanticIndex ready for query-time use.
 
 If Vespa or Bedrock is unavailable the function returns None and the
 CandidateGenerator continues with fuzzy/alias matching only.
@@ -26,7 +31,7 @@ _VESPA_SCHEMA = "movie_master"
 _VESPA_APP_NAME = "movie-title-matching"
 _BEDROCK_MAX_RETRIES = 3
 _BEDROCK_BACKOFF_BASE = 0.5
-_EMBED_CONCURRENCY = 50  # threads; quota is 6,000 RPM = 100 req/s
+_EMBED_CONCURRENCY = 10   # concurrent batch calls; each batch = 96 texts
 _LOG_PROGRESS_EVERY = 500
 
 
@@ -62,24 +67,22 @@ def _get_bedrock_client(settings):
         return None
 
 
-def get_embedding(
-    text: str,
+def _embed_texts_cohere(
+    texts: list[str],
+    input_type: str,
     settings,
-    client=None,
-) -> Optional[list[float]]:
+    client,
+) -> list[Optional[list[float]]]:
     """
-    Embed a single text string via Bedrock Titan Text Embeddings v2.
-    Returns None on any failure so the caller can degrade gracefully.
-    """
-    if client is None:
-        client = _get_bedrock_client(settings)
-    if client is None:
-        return None
+    Call Cohere Embed Multilingual v3 for a batch of up to 96 texts.
 
+    input_type must be "search_document" (index time) or "search_query" (query time).
+    Returns a list of embeddings in the same order; None for any that fail.
+    """
     body = json.dumps({
-        "inputText": text[:8192],
-        "dimensions": settings.EMBEDDING_DIMENSION,
-        "normalize": True,
+        "texts": texts,
+        "input_type": input_type,
+        "embedding_types": ["float"],
     })
 
     for attempt in range(_BEDROCK_MAX_RETRIES):
@@ -91,16 +94,36 @@ def get_embedding(
                 body=body,
             )
             result = json.loads(response["body"].read())
-            return result["embedding"]
+            # Cohere response: {"embeddings": {"float": [[...], ...]}}
+            return result["embeddings"]["float"]
         except Exception as exc:
             exc_name = type(exc).__name__
             if "Throttling" in exc_name and attempt < _BEDROCK_MAX_RETRIES - 1:
                 time.sleep(_BEDROCK_BACKOFF_BASE * (2 ** attempt))
             else:
-                logger.warning("semantic_index: embedding call failed: %s", exc)
-                return None
+                logger.warning("semantic_index: Cohere batch embed failed: %s", exc)
+                return [None] * len(texts)
 
-    return None
+    return [None] * len(texts)
+
+
+def get_embedding(
+    text: str,
+    settings,
+    client=None,
+) -> Optional[list[float]]:
+    """
+    Embed a single query string via Cohere Embed Multilingual v3.
+    Uses input_type="search_query" for asymmetric retrieval.
+    Returns None on any failure so the caller can degrade gracefully.
+    """
+    if client is None:
+        client = _get_bedrock_client(settings)
+    if client is None:
+        return None
+
+    results = _embed_texts_cohere([text], "search_query", settings, client)
+    return results[0] if results else None
 
 
 def _embed_batch(
@@ -109,32 +132,40 @@ def _embed_batch(
     client,
 ) -> list[Optional[list[float]]]:
     """
-    Embed rows concurrently using a thread pool.
+    Embed all rows for index-time using Cohere Embed Multilingual v3.
 
-    Each thread gets its own boto3 client (boto3 clients are not thread-safe).
-    Concurrency is capped at _EMBED_CONCURRENCY to stay within the 6,000 RPM
-    on-demand quota (~100 req/s).
+    Splits rows into batches of COHERE_EMBED_BATCH_SIZE (96) and runs
+    _EMBED_CONCURRENCY batches concurrently. Each concurrent batch gets its
+    own boto3 client (clients are not thread-safe).
+
+    With 45k rows: 469 batch calls × ~0.3s each / 10 concurrent = ~14 seconds.
     """
     import concurrent.futures
     import threading
+
+    batch_size = getattr(settings, "COHERE_EMBED_BATCH_SIZE", 96)
+    batches = [rows[i:i + batch_size] for i in range(0, len(rows), batch_size)]
 
     results: list[Optional[list[float]]] = [None] * len(rows)
     completed = [0]
     lock = threading.Lock()
 
-    def _embed_one(idx: int, row: dict) -> None:
+    def _embed_batch_chunk(batch_idx: int, batch: list[dict]) -> None:
         thread_client = _get_bedrock_client(settings)
-        text = _compose_embed_text(row)
-        results[idx] = get_embedding(text, settings, client=thread_client)
+        texts = [_compose_embed_text(r) for r in batch]
+        embeddings = _embed_texts_cohere(texts, "search_document", settings, thread_client)
+        start = batch_idx * batch_size
+        for j, emb in enumerate(embeddings):
+            results[start + j] = emb
         with lock:
-            completed[0] += 1
-            if completed[0] % _LOG_PROGRESS_EVERY == 0:
+            completed[0] += len(batch)
+            if completed[0] // _LOG_PROGRESS_EVERY > (completed[0] - len(batch)) // _LOG_PROGRESS_EVERY:
                 logger.info(
                     "semantic_index: embedded %d/%d rows", completed[0], len(rows)
                 )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=_EMBED_CONCURRENCY) as pool:
-        futures = [pool.submit(_embed_one, i, row) for i, row in enumerate(rows)]
+        futures = [pool.submit(_embed_batch_chunk, i, b) for i, b in enumerate(batches)]
         concurrent.futures.wait(futures)
 
     return results

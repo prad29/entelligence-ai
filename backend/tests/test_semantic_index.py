@@ -24,8 +24,9 @@ def _make_settings(**overrides):
     """Settings-like object with semantic defaults."""
     defaults = {
         "BEDROCK_REGION": "us-east-1",
-        "EMBEDDING_MODEL_ID": "amazon.titan-embed-text-v2:0",
+        "EMBEDDING_MODEL_ID": "cohere.embed-multilingual-v3",
         "EMBEDDING_DIMENSION": 16,  # tiny for fast tests
+        "COHERE_EMBED_BATCH_SIZE": 96,
         "SEMANTIC_SEARCH_ENABLED": True,
         "VESPA_URL": "http://localhost:8080",
     }
@@ -47,19 +48,30 @@ def _fake_vec(dim: int = 16, seed: int = 0) -> list[float]:
 
 
 def _mock_bedrock_client(embeddings: list[Optional[list[float]]]):
-    """Fake boto3 client that returns embeddings in order."""
-    call_count = [0]
+    """
+    Fake boto3 client returning Cohere-style batch responses.
+
+    Each invoke_model call receives a batch of texts and returns the next N
+    embeddings from the provided list, where N = len(texts in the request).
+    """
+    cursor = [0]
     client = MagicMock()
     client.exceptions = MagicMock()
     client.exceptions.ThrottlingException = type("ThrottlingException", (Exception,), {})
 
     def _invoke(**kwargs):
-        idx = call_count[0]
-        call_count[0] += 1
-        emb = embeddings[idx] if idx < len(embeddings) else _fake_vec()
-        body = MagicMock()
-        body.read.return_value = json.dumps({"embedding": emb}).encode()
-        return {"body": body}
+        body_data = json.loads(kwargs.get("body", "{}"))
+        n = len(body_data.get("texts", ["placeholder"]))
+        batch = []
+        for _ in range(n):
+            idx = cursor[0]
+            cursor[0] += 1
+            batch.append(embeddings[idx] if idx < len(embeddings) else _fake_vec())
+        response_body = MagicMock()
+        response_body.read.return_value = json.dumps(
+            {"embeddings": {"float": batch}}
+        ).encode()
+        return {"body": response_body}
 
     client.invoke_model.side_effect = _invoke
     return client
@@ -156,7 +168,10 @@ class TestGetEmbedding:
             if call_count[0] <= 2:
                 raise ThrottleExc("rate exceeded")
             body = MagicMock()
-            body.read.return_value = json.dumps({"embedding": expected}).encode()
+            # Cohere batch response format
+            body.read.return_value = json.dumps(
+                {"embeddings": {"float": [expected]}}
+            ).encode()
             return {"body": body}
 
         client.invoke_model.side_effect = _invoke

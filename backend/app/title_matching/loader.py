@@ -25,13 +25,7 @@ def build_title_match_engine(session: Session) -> tuple[CandidateGenerator, dict
     aliases_raw = session.exec(select(MovieTitleAlias)).all()
     aliases = {a.normalized_alias.lower(): a.movie_master_id for a in aliases_raw}
 
-    semantic_index = None
-    if settings.SEMANTIC_SEARCH_ENABLED:
-        try:
-            from app.title_matching.semantic_index import build_semantic_index
-            semantic_index = build_semantic_index(master_rows, settings)
-        except Exception as exc:
-            logger.warning("semantic index build failed, continuing without it: %s", exc)
-
-    engine = CandidateGenerator(master_rows, semantic_index=semantic_index)
+    # Semantic index is built asynchronously via Celery.
+    # Engine starts with None and gets updated once the task completes.
+    engine = CandidateGenerator(master_rows, semantic_index=None)
     return engine, aliases

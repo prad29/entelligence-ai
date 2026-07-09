@@ -64,12 +64,12 @@ def _seed_default_movie_formats(session) -> None:
 @app.on_event("startup")
 async def startup() -> None:
     """
-    Initialize the database tables (if they don't exist yet) and load the
-    detection engine from approved DB rows.
+    Initialize DB tables, load detection engines, and kick off the
+    Vespa semantic index build as a background Celery task.
 
-    Engine is built from approved AmenityMapping rows and CircuitAlias rows.
-    Seed the DB first via the CLI:
-        python app/cli.py seed-from-xlsx path/to/Amenities_Priority.xlsx
+    The title-match engine is available immediately with fuzzy/alias
+    matching. Semantic search activates once the Celery task completes
+    (typically a few minutes on first run).
     """
     from app.database import create_db_and_tables, engine as db_engine
     from sqlmodel import Session
@@ -93,3 +93,18 @@ async def startup() -> None:
             app.state.title_match_engine = TitleMatchEngine(gen, aliases)
         else:
             app.state.title_match_engine = None
+
+    # Fire the semantic index build as a Celery task — non-blocking.
+    if settings.SEMANTIC_SEARCH_ENABLED:
+        try:
+            from app.tasks.semantic_tasks import build_semantic_index_task
+            build_semantic_index_task.delay()
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "startup: semantic index build queued as Celery task"
+            )
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "startup: could not queue semantic index task: %s", exc
+            )

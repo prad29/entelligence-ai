@@ -55,6 +55,30 @@ services:
       vespa:
         condition: service_healthy
 
+  celery-worker:
+    build: ./backend
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q celery
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      VESPA_URL: http://vespa:8080
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vespa:
+        condition: service_healthy
+
+  celery-flower:
+    build: ./backend
+    command: celery -A app.celery_app flower --port=5555
+    env_file: .env
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
   frontend:
     build: ./frontend
     environment:

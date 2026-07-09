@@ -19,7 +19,7 @@ class CandidateResult:
     release_date: Optional[str]
     cover_image: Optional[str]
     score: float                    # 0–1
-    source: str                     # "alias" | "franchise_map" | "fuzzy"
+    source: str                     # "alias" | "franchise_map" | "fuzzy" | "semantic"
     raw_fuzzy_score: Optional[float] = None
 
 

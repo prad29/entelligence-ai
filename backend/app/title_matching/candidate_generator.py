@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from rapidfuzz import process, fuzz
 
 from app.title_matching.types import NormalizedTitle, CandidateResult
+
+if TYPE_CHECKING:
+    from app.title_matching.semantic_index import VespaSemanticIndex
+
+logger = logging.getLogger(__name__)
 
 _JUNK_TITLES = frozenset(['3', '4', 'la', 'prince', 'phoenix', 'the order', 'night', 'king', 'nix'])
 
@@ -28,12 +34,59 @@ FRANCHISE_MAP: dict[tuple[str, int], int] = {
 
 
 class CandidateGenerator:
-    def __init__(self, master_rows: list[dict]) -> None:
-        # master_rows: list of dicts with keys: id, movie_title, release_date, cover_image
+    def __init__(
+        self,
+        master_rows: list[dict],
+        semantic_index: Optional["VespaSemanticIndex"] = None,
+    ) -> None:
         self._rows = master_rows
         self._titles = [r['movie_title'] for r in master_rows]
         self._id_to_row: dict[int, dict] = {r['id']: r for r in master_rows}
         self._junk = _JUNK_TITLES | {t.lower() for t in self._titles if len(t) <= 3}
+        self._semantic_index = semantic_index
+
+    def _semantic_search(
+        self,
+        query: str,
+        exclude_ids: set[int],
+        k: int,
+    ) -> list[CandidateResult]:
+        """Semantic hybrid search via Vespa. Returns [] if index unavailable."""
+        if self._semantic_index is None or k <= 0:
+            return []
+        try:
+            from app.config import settings
+            from app.title_matching.semantic_index import get_embedding
+
+            query_embedding = get_embedding(query, settings)
+            if query_embedding is None:
+                return []
+
+            hits = self._semantic_index.search(
+                query_embedding=query_embedding,
+                query_text=query,
+                k=k,
+                exclude_ids=exclude_ids,
+            )
+
+            results: list[CandidateResult] = []
+            for mid, score in hits:
+                row = self._id_to_row.get(mid)
+                if row is None or mid in exclude_ids:
+                    continue
+                results.append(CandidateResult(
+                    movie_master_id=mid,
+                    movie_title=row['movie_title'],
+                    release_date=row.get('release_date'),
+                    cover_image=row.get('cover_image'),
+                    score=score,
+                    source='semantic',
+                ))
+                exclude_ids.add(mid)
+            return results
+        except Exception as exc:
+            logger.debug("semantic_search failed: %s", exc)
+            return []
 
     def generate(
         self,
@@ -108,6 +161,15 @@ class CandidateGenerator:
             existing_ids.add(mid)
             if len(candidates) >= k:
                 break
+
+        # 3. Semantic hybrid search (fills remaining slots after fuzzy)
+        if len(candidates) < k and self._semantic_index is not None:
+            semantic_hits = self._semantic_search(
+                query=normalized.cleaned,
+                exclude_ids={c.movie_master_id for c in candidates},
+                k=k - len(candidates),
+            )
+            candidates.extend(semantic_hits)
 
         return candidates[:k]
 

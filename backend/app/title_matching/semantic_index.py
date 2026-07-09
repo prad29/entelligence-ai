@@ -180,20 +180,39 @@ def _deploy_vespa_app(vespa_url: str) -> bool:
         return False
 
 
-def _count_indexed_docs(vespa_url: str) -> int:
-    """Return the number of documents currently in the Vespa index."""
+def _get_indexed_ids(vespa_url: str) -> set[int]:
+    """
+    Return the set of movie_master_id values already in Vespa.
+    Pages through the document/v1 listing API until exhausted.
+    """
     try:
         import requests
-        resp = requests.get(
-            f"{vespa_url}/document/v1/movie_master/movie_master/docid?wantedDocumentCount=1",
-            timeout=10,
-        )
-        if resp.status_code == 200:
+        indexed: set[int] = set()
+        continuation = None
+        while True:
+            params = {"wantedDocumentCount": 500}
+            if continuation:
+                params["continuation"] = continuation
+            resp = requests.get(
+                f"{vespa_url}/document/v1/movie_master/movie_master/docid",
+                params=params,
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                break
             data = resp.json()
-            return data.get("documentCount", 0)
+            for doc in data.get("documents", []):
+                # doc id is "id:movie_master:movie_master::N"
+                raw = doc.get("id", "")
+                tail = raw.rsplit("::", 1)[-1]
+                if tail.isdigit():
+                    indexed.add(int(tail))
+            continuation = data.get("continuation")
+            if not continuation:
+                break
+        return indexed
     except Exception:
-        pass
-    return 0
+        return set()
 
 
 # ---------------------------------------------------------------------------
@@ -310,10 +329,14 @@ def build_semantic_index(
     """
     Build (or reuse) the Vespa semantic index.
 
+    Uses ID-based diffing so new rows added anywhere in the DB are picked up
+    without re-embedding rows that are already indexed.
+
     1. Deploy Vespa app package if not already deployed.
-    2. Count current indexed documents.
-    3. If count < len(master_rows), embed and feed the missing rows.
-    4. Return a VespaSemanticIndex ready for queries.
+    2. Fetch the set of already-indexed movie_master_ids from Vespa.
+    3. Compute the diff: rows in master_rows whose id is not yet in Vespa.
+    4. Embed and feed only the missing rows.
+    5. Return a VespaSemanticIndex ready for queries.
 
     Returns None if semantic search is disabled or infrastructure is unavailable.
     """
@@ -323,28 +346,27 @@ def build_semantic_index(
 
     vespa_url = settings.VESPA_URL
 
-    # Deploy schema if needed
     if not _deploy_vespa_app(vespa_url):
         logger.warning("semantic_index: Vespa deploy failed, skipping semantic index")
         return None
 
-    current_count = _count_indexed_docs(vespa_url)
+    indexed_ids = _get_indexed_ids(vespa_url)
+    rows_to_feed = [r for r in master_rows if r["id"] not in indexed_ids]
     logger.info(
-        "semantic_index: Vespa has %d/%d rows indexed",
-        current_count,
+        "semantic_index: %d/%d rows already indexed; %d to feed",
+        len(indexed_ids),
         len(master_rows),
+        len(rows_to_feed),
     )
 
-    if current_count < len(master_rows):
+    if rows_to_feed:
         bedrock_client = _get_bedrock_client(settings)
         if bedrock_client is None:
             logger.warning("semantic_index: no Bedrock client, cannot feed embeddings")
-            # Still return an index if some docs exist
-            if current_count > 0:
+            if indexed_ids:
                 return VespaSemanticIndex(vespa_url, settings)
             return None
 
-        rows_to_feed = master_rows[current_count:]
         logger.info("semantic_index: embedding %d rows...", len(rows_to_feed))
         embeddings = _embed_batch(rows_to_feed, settings, bedrock_client)
         fed = _feed_rows(vespa_url, rows_to_feed, embeddings)

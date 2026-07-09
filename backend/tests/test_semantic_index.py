@@ -279,9 +279,10 @@ class TestBuildSemanticIndex:
 
     def test_returns_index_when_already_fully_fed(self, master_rows):
         settings = _make_settings()
+        all_ids = {r["id"] for r in master_rows}
 
         with patch("app.title_matching.semantic_index._deploy_vespa_app", return_value=True), \
-             patch("app.title_matching.semantic_index._count_indexed_docs", return_value=len(master_rows)), \
+             patch("app.title_matching.semantic_index._get_indexed_ids", return_value=all_ids), \
              patch("app.title_matching.semantic_index.VespaSemanticIndex") as MockIndex:
             MockIndex.return_value = MagicMock()
 
@@ -289,7 +290,6 @@ class TestBuildSemanticIndex:
             result = build_semantic_index(master_rows, settings)
 
         assert result is not None
-        # No embedding should have been called since count == len(master_rows)
         MockIndex.assert_called_once()
 
     def test_feeds_missing_rows_when_partially_indexed(self, master_rows):
@@ -298,6 +298,8 @@ class TestBuildSemanticIndex:
         embeddings = [_fake_vec(dim, seed=i) for i in range(len(master_rows))]
         bedrock_client = _mock_bedrock_client(embeddings)
 
+        # Only the first row's id is already indexed
+        already_indexed = {master_rows[0]["id"]}
         fed_rows = []
 
         def _fake_feed(vespa_url, rows, embs):
@@ -305,21 +307,24 @@ class TestBuildSemanticIndex:
             return len(rows)
 
         with patch("app.title_matching.semantic_index._deploy_vespa_app", return_value=True), \
-             patch("app.title_matching.semantic_index._count_indexed_docs", return_value=1), \
+             patch("app.title_matching.semantic_index._get_indexed_ids", return_value=already_indexed), \
              patch("app.title_matching.semantic_index._get_bedrock_client", return_value=bedrock_client), \
              patch("app.title_matching.semantic_index._feed_rows", side_effect=_fake_feed), \
              patch("app.title_matching.semantic_index.VespaSemanticIndex"):
             from app.title_matching.semantic_index import build_semantic_index
             build_semantic_index(master_rows, settings)
 
-        # Should have fed the 2 missing rows (index had 1, total is 3)
+        # Should have fed the 2 missing rows (1 already indexed, 3 total)
         assert len(fed_rows) == 2
+        fed_ids = {r["id"] for r in fed_rows}
+        assert master_rows[0]["id"] not in fed_ids
 
     def test_returns_partial_index_when_no_bedrock_but_some_docs(self, master_rows):
         settings = _make_settings()
+        partial_ids = {master_rows[0]["id"], master_rows[1]["id"]}
 
         with patch("app.title_matching.semantic_index._deploy_vespa_app", return_value=True), \
-             patch("app.title_matching.semantic_index._count_indexed_docs", return_value=2), \
+             patch("app.title_matching.semantic_index._get_indexed_ids", return_value=partial_ids), \
              patch("app.title_matching.semantic_index._get_bedrock_client", return_value=None), \
              patch("app.title_matching.semantic_index.VespaSemanticIndex") as MockIndex:
             MockIndex.return_value = MagicMock()
@@ -327,14 +332,13 @@ class TestBuildSemanticIndex:
             from app.title_matching.semantic_index import build_semantic_index
             result = build_semantic_index(master_rows, settings)
 
-        # Returns index (partial) even without Bedrock since some docs exist
         assert result is not None
 
     def test_returns_none_when_no_bedrock_and_no_docs(self, master_rows):
         settings = _make_settings()
 
         with patch("app.title_matching.semantic_index._deploy_vespa_app", return_value=True), \
-             patch("app.title_matching.semantic_index._count_indexed_docs", return_value=0), \
+             patch("app.title_matching.semantic_index._get_indexed_ids", return_value=set()), \
              patch("app.title_matching.semantic_index._get_bedrock_client", return_value=None):
             from app.title_matching.semantic_index import build_semantic_index
             result = build_semantic_index(master_rows, settings)

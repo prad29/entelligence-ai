@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://amenity:amenity@localhost:5432/amenitydb"
     SECRET_KEY: str = "change-me"
     BEDROCK_REGION: str = "us-east-1"
-    BEDROCK_MODEL_ID: str = "mistral.mistral-large-2407-v1:0"
+    BEDROCK_MODEL_ID: str = "mistral.mistral-large-3-675b-instruct"
     BEDROCK_API_KEY: str = ""
     AI_TRIGGER_MODE: str = "on"
     AI_AUTOAPPLY_CONFIDENCE: Optional[float] = None

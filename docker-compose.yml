@@ -40,12 +40,13 @@ services:
 
   backend:
     build: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
       VESPA_URL: http://vespa:8080
+      CLAUDE_SANDBOX_URL: http://claude-sandbox:3100
     env_file: .env
     depends_on:
       db:
@@ -53,6 +54,8 @@ services:
       redis:
         condition: service_healthy
       vespa:
+        condition: service_healthy
+      claude-sandbox:
         condition: service_healthy
 
   celery-worker:
@@ -78,6 +81,27 @@ services:
       - "5555:5555"
     depends_on:
       - redis
+
+  claude-sandbox:
+    build: ./claude-sandbox
+    environment:
+      CLAUDE_SANDBOX_PORT: "3100"
+      CLAUDE_DEFAULT_TIMEOUT_MS: "90000"
+      DISABLE_AUTOUPDATER: "1"
+      CLAUDE_NO_AUTO_UPDATE: "1"
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3100/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
   frontend:
     build: ./frontend

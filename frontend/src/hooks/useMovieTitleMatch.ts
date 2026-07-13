@@ -6,6 +6,7 @@ export interface MovieTitleMatchPayload {
   theater?: string
   show_date?: string
   ticketing_url?: string
+  use_poster_vision?: boolean
 }
 
 export interface EliminatedCandidate {
@@ -37,6 +38,16 @@ export interface DirectorCheck {
   label?: string
 }
 
+export interface AgenticSourceEvidence {
+  vespa_score?: number | null
+  tmdb_confirmed?: boolean
+  imdb_id?: string | null
+  date_proximity_days?: number | null
+  ticketing_page_title?: string | null
+  poster_observation?: string | null
+  web_sources?: string[]
+}
+
 export interface MovieTitleMatchResult {
   suggested_movie_id: number
   suggested_movie_title: string
@@ -45,11 +56,17 @@ export interface MovieTitleMatchResult {
   decision: 'AUTO_ACCEPT' | 'REVIEW' | 'REVIEW_NON_MOVIE' | 'REVIEW_MULTI_FILM'
   reasoning: string
   evidence: {
+    // Mode A fields
     fuzzy_top?: Array<{ id: number; title: string; score: number }>
     date_window?: string
     eliminated?: EliminatedCandidate[]
     runtime_check?: RuntimeCheck
     director_check?: DirectorCheck
+    // Mode B (agentic) fields
+    agentic?: boolean
+    source_evidence?: AgenticSourceEvidence
+    normalized_input?: string
+    event_type?: string
   }
   cover_image?: string | null
   ticketing_poster_url?: string | null

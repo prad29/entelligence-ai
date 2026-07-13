@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { type MovieTitleMatchResult, type PageMetadata } from '@/hooks/useMovieTitleMatch'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Sparkles, Percent, ChevronDown, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Sparkles, Percent, ChevronDown, CheckCircle2, AlertTriangle, Eye, Globe } from 'lucide-react'
 import { formatPercent } from '@/lib/utils'
 
 function getDecisionVariant(decision: string) {
@@ -35,10 +35,6 @@ interface MovieTitleMatchCardProps {
 function MovieTitleMatchCard({ result }: MovieTitleMatchCardProps) {
   const [evidenceOpen, setEvidenceOpen] = useState(false)
   const decisionVariant = getDecisionVariant(result.decision)
-  const isNotSeeded = result.suggested_movie_id === 0
-
-  if (isNotSeeded) return null
-
   return (
     <Card className="overflow-hidden">
       <CardHeader className="bg-gradient-to-r from-zinc-50 to-zinc-100/50 dark:from-zinc-900 dark:to-zinc-800/30">
@@ -170,9 +166,64 @@ function MovieTitleMatchCard({ result }: MovieTitleMatchCardProps) {
         {result.fired_ai && (
           <div className="rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 flex gap-3">
             <Sparkles className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
-              AI reasoning was used to generate this match.
-            </p>
+            <div className="flex flex-col gap-1 min-w-0">
+              <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+                AI reasoning was used to generate this match.
+              </p>
+              {/* Agentic evidence chips */}
+              {result.evidence?.agentic && (
+                <div className="flex flex-wrap gap-1.5 mt-0.5">
+                  {result.evidence.source_evidence?.imdb_id && (
+                    <span className="rounded-full bg-amber-100 dark:bg-amber-900/40 border border-amber-200 dark:border-amber-800/50 px-2 py-0.5 text-[10px] font-mono text-amber-700 dark:text-amber-400">
+                      IMDb {result.evidence.source_evidence.imdb_id}
+                    </span>
+                  )}
+                  {result.evidence.source_evidence?.date_proximity_days === 0 && (
+                    <span className="rounded-full bg-green-100 dark:bg-green-900/40 border border-green-200 dark:border-green-800/50 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-400">
+                      exact date match
+                    </span>
+                  )}
+                  {result.evidence.source_evidence?.tmdb_confirmed && (
+                    <span className="rounded-full bg-blue-100 dark:bg-blue-900/40 border border-blue-200 dark:border-blue-800/50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-400">
+                      TMDB confirmed
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Poster observation (agentic vision) */}
+        {result.evidence?.agentic && result.evidence.source_evidence?.poster_observation && (
+          <div className="rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-4 py-3 flex gap-3">
+            <Eye className="h-4 w-4 text-zinc-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-0.5">Poster analysis</p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                {result.evidence.source_evidence.poster_observation}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Web sources (agentic) */}
+        {result.evidence?.agentic &&
+          result.evidence.source_evidence?.web_sources &&
+          result.evidence.source_evidence.web_sources.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            <Globe className="h-3.5 w-3.5 text-zinc-400 mt-0.5" />
+            {result.evidence.source_evidence.web_sources.map((url) => (
+              <a
+                key={url}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] text-violet-600 dark:text-violet-400 hover:underline truncate max-w-[240px]"
+              >
+                {url.replace(/^https?:\/\//, '')}
+              </a>
+            ))}
           </div>
         )}
 

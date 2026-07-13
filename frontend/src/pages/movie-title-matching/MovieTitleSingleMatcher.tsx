@@ -5,7 +5,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Input } from '@/components/ui/Input'
 import { MovieTitleMatchCard } from './MovieTitleMatchCard'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card'
-import { Clapperboard, RotateCcw, Search } from 'lucide-react'
+import { Clapperboard, Eye, RotateCcw, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const EXAMPLE_CHIPS = [
@@ -26,9 +26,8 @@ function MovieTitleSingleMatcher() {
   const [theater, setTheater] = useState('')
   const [showDate, setShowDate] = useState('')
   const [ticketingUrl, setTicketingUrl] = useState('')
+  const [posterVision, setPosterVision] = useState(false)
   const { result, loading, error, match, reset } = useMovieTitleMatch()
-
-  const isNotSeeded = result !== null && result.suggested_movie_id === 0
 
   const handleMatch = async () => {
     if (!title.trim()) return
@@ -37,6 +36,7 @@ function MovieTitleSingleMatcher() {
       ...(theater.trim() ? { theater: theater.trim() } : {}),
       ...(showDate ? { show_date: showDate } : {}),
       ...(ticketingUrl.trim() ? { ticketing_url: ticketingUrl.trim() } : {}),
+      ...(posterVision ? { use_poster_vision: true } : {}),
     })
   }
 
@@ -50,6 +50,7 @@ function MovieTitleSingleMatcher() {
     setTheater('')
     setShowDate('')
     setTicketingUrl('')
+    setPosterVision(false)
     reset()
   }
 
@@ -126,6 +127,35 @@ function MovieTitleSingleMatcher() {
             placeholder="https://..."
           />
 
+          {/* Poster vision toggle */}
+          <button
+            type="button"
+            onClick={() => setPosterVision(!posterVision)}
+            className={cn(
+              'flex items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-all duration-200 w-full text-left',
+              posterVision
+                ? 'border-violet-400 dark:border-violet-600 bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300'
+                : 'border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
+            )}
+          >
+            {/* Track */}
+            <div className={cn(
+              'relative h-5 w-9 rounded-full transition-colors duration-200 shrink-0',
+              posterVision ? 'bg-violet-500' : 'bg-zinc-300 dark:bg-zinc-600'
+            )}>
+              {/* Thumb */}
+              <span className={cn(
+                'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200',
+                posterVision ? 'translate-x-4' : 'translate-x-0'
+              )} />
+            </div>
+            <Eye className="h-3.5 w-3.5 shrink-0" />
+            <span className="font-medium">Poster Vision</span>
+            <span className="ml-auto text-xs opacity-60 shrink-0">
+              {posterVision ? 'AI inspects DB posters · slower' : 'Faster · no image analysis'}
+            </span>
+          </button>
+
           {/* Actions */}
           <div className="flex items-center gap-2 pt-1">
             <Button
@@ -153,18 +183,7 @@ function MovieTitleSingleMatcher() {
         </CardContent>
       </Card>
 
-      {/* Not seeded banner */}
-      {isNotSeeded && (
-        <div className="rounded-lg border border-amber-200 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
-          <p className="font-medium mb-1">Movie Master database not yet seeded.</p>
-          <p className="text-xs font-mono">
-            Run: python app/cli.py seed-movie-master /path/to/dump.csv
-          </p>
-        </div>
-      )}
-
-      {/* Result card (only shown when not a not-seeded case) */}
-      {result && !isNotSeeded && <MovieTitleMatchCard result={result} />}
+      {result && <MovieTitleMatchCard result={result} />}
     </div>
   )
 }

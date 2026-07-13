@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://amenity:amenity@localhost:5432/amenitydb"
     SECRET_KEY: str = "change-me"
     BEDROCK_REGION: str = "us-east-1"
-    BEDROCK_MODEL_ID: str = "mistral.mistral-large-2407-v1:0"
+    BEDROCK_MODEL_ID: str = "mistral.mistral-large-3-675b-instruct"
     BEDROCK_API_KEY: str = ""
     AI_TRIGGER_MODE: str = "on"
     AI_AUTOAPPLY_CONFIDENCE: Optional[float] = None
@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 1024
     COHERE_EMBED_BATCH_SIZE: int = 96
     SEMANTIC_SEARCH_ENABLED: bool = True
+
+    # Mode B — Agentic title matching
+    AGENTIC_TITLE_MATCH_ENABLED: bool = False
+    AGENTIC_CLAUDE_MODEL: str = "global.anthropic.claude-sonnet-5"
+    AGENTIC_TIMEOUT_SECONDS: int = 90
+    AGENTIC_MAX_CANDIDATES: int = 5
+    AGENTIC_TMDB_READ_TOKEN: str = ""
+    AGENTIC_USE_BEDROCK: bool = True
+    # Claude sandbox sidecar URL (set via CLAUDE_SANDBOX_URL env var)
+    CLAUDE_SANDBOX_URL: str = "http://claude-sandbox:3100"
 
     class Config:
         env_file = ".env"

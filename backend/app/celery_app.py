@@ -5,7 +5,7 @@ celery = Celery(
     "entelligence",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.semantic_tasks"],
+    include=["app.tasks.semantic_tasks", "app.tasks.agentic_match_task"],
 )
 
 celery.conf.update(

@@ -48,8 +48,8 @@ class BedrockClient:
                 + '\n\nReturn ONLY JSON: {"detected_keyword": null_or_str, "suggested_screen_format": str, "confidence": 0.0-1.0, "reasoning": str}'
             )
             body = {
+                "system": SYSTEM_PROMPT,
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 "max_tokens": 256,

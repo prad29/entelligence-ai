@@ -15,6 +15,17 @@ _PROMO_PATTERNS = [
     r'\(OV[^)]*\)\s*',
 ]
 
+# Format suffixes/prefixes that are noise for title matching (stripped from cleaned)
+# These are kept as edition_markers but removed from the text sent to fuzzy/semantic search.
+_FORMAT_STRIP_PATTERNS = [
+    r'^IMAX\s*[:\-]?\s*',       # leading "IMAX: " or "IMAX - "
+    r'\s+\d{2}mm\b',            # trailing " 70mm", " 35mm"
+    r'\bScreenX\b\s*',
+    r'\bD-BOX\b\s*',
+    r'\b4DX\b\s*',
+    r'\bDolby\s+(?:Cinema|Atmos)\b\s*',
+]
+
 _COUNTRY_MAP = {
     'germany': 'DE', 'france': 'FR', 'australia': 'AU', 'uk': 'UK',
     'usa': 'US', 'us': 'US', 'canada': 'CA',
@@ -62,8 +73,13 @@ def normalize_title(raw: str) -> NormalizedTitle:
     for pat in _PROMO_PATTERNS:
         text = re.sub(pat, '', text, flags=re.IGNORECASE).strip()
 
-    # Extract edition markers (before stripping)
+    # Extract edition markers before stripping format tokens
     edition_markers = [kw for kw in _EDITION_KEYWORDS if kw.lower() in text.lower()]
+
+    # Strip format noise (IMAX prefix, 70mm suffix, etc.) from the cleaned title
+    for pat in _FORMAT_STRIP_PATTERNS:
+        text = re.sub(pat, ' ', text, flags=re.IGNORECASE).strip()
+    text = text.strip(' .,:-')
 
     # Extract country code from trailing word
     country_code: Optional[str] = None

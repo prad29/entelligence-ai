@@ -61,6 +61,54 @@ def _seed_default_movie_formats(session) -> None:
     session.commit()
 
 
+async def _attach_semantic_index_when_ready(application) -> None:
+    """
+    Poll Redis every 15 s until the Celery semantic-index task signals readiness,
+    then instantiate VespaSemanticIndex and wire it into the running CandidateGenerator.
+    Runs as a background asyncio task so it never blocks the event loop.
+    """
+    import asyncio
+    import logging
+
+    _log = logging.getLogger(__name__)
+    _READY_KEY = "semantic_index:ready"
+    poll_interval = 15  # seconds
+
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.REDIS_URL)
+    except Exception as exc:
+        _log.warning("semantic_watcher: cannot connect to Redis: %s", exc)
+        return
+
+    # Check immediately in case the index was already built in a prior run.
+    _first = True
+    while True:
+        if not _first:
+            await asyncio.sleep(poll_interval)
+        _first = False
+        try:
+            if not r.get(_READY_KEY):
+                continue
+
+            engine = getattr(application.state, "title_match_engine", None)
+            if engine is None:
+                continue
+
+            # Already wired — nothing to do.
+            if engine._gen._semantic_index is not None:
+                return
+
+            from app.title_matching.semantic_index import VespaSemanticIndex
+            index = VespaSemanticIndex(settings.VESPA_URL, settings)
+            engine._gen._semantic_index = index
+            _log.info("semantic_watcher: VespaSemanticIndex attached to running engine")
+            return
+
+        except Exception as exc:
+            _log.debug("semantic_watcher: error during attach attempt: %s", exc)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     """
@@ -108,3 +156,7 @@ async def startup() -> None:
             _logging.getLogger(__name__).warning(
                 "startup: could not queue semantic index task: %s", exc
             )
+
+        # Poll Redis in the background and attach VespaSemanticIndex once ready.
+        import asyncio as _asyncio
+        _asyncio.ensure_future(_attach_semantic_index_when_ready(app))

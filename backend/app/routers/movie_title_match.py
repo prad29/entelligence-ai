@@ -16,6 +16,7 @@ class TitleMatchRequest(BaseModel):
     theater: Optional[str] = None
     show_date: Optional[str] = None       # YYYY-MM-DD
     ticketing_url: Optional[str] = None
+    use_poster_vision: bool = False       # Mode B only: enable Claude vision on DB posters
 
 
 @router.post("/single")
@@ -47,6 +48,7 @@ async def match_single_title(
         show_date=payload.show_date,
         theater=payload.theater,
         ticketing_url=payload.ticketing_url,
+        use_poster_vision=payload.use_poster_vision,
     )
     return result.__dict__
 
@@ -71,6 +73,37 @@ async def search_master(
             "release_date": r.release_date,
             "cover_image": r.cover_image,
             "imdb_id": r.imdb_id,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/master/search")
+async def agent_search_master(
+    q: str = Query(""),
+    limit: int = Query(10, le=50),
+    session: Session = Depends(get_session),
+):
+    """Internal keyword search endpoint used by the Mode B agentic subprocess.
+
+    Returns richer metadata (director, running_time) to help the agent disambiguate.
+    No auth — intended for localhost-only use by the claude subprocess.
+    """
+    from sqlmodel import select
+    from app.models import MovieMaster
+
+    stmt = select(MovieMaster).where(
+        MovieMaster.movie_title.ilike(f"%{q}%")
+    ).limit(limit)
+    rows = session.exec(stmt).all()
+    return [
+        {
+            "id": r.id,
+            "movie_title": r.movie_title,
+            "release_date": r.release_date,
+            "imdb_id": r.imdb_id,
+            "director": r.director,
+            "running_time": r.running_time,
         }
         for r in rows
     ]
@@ -122,6 +155,14 @@ async def seed_master(
             from app.title_matching.engine import TitleMatchEngine
             gen, aliases = build_title_match_engine(session)
             request.app.state.title_match_engine = TitleMatchEngine(gen, aliases)
+        except Exception:
+            pass
+
+    # Queue semantic index build whenever rows were inserted or updated
+    if result["inserted"] > 0 or result["updated"] > 0:
+        try:
+            from app.tasks.semantic_tasks import build_semantic_index_task
+            build_semantic_index_task.delay()
         except Exception:
             pass
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from app.config import settings
 from app.title_matching.normalizer import normalize_title
 from app.title_matching.candidate_generator import CandidateGenerator
 from app.title_matching.decision_engine import score_and_decide
@@ -23,7 +24,15 @@ class TitleMatchEngine:
         show_date: Optional[str] = None,
         theater: Optional[str] = None,
         ticketing_url: Optional[str] = None,
+        use_poster_vision: bool = False,
     ) -> TitleMatchResult:
+        if settings.AGENTIC_TITLE_MATCH_ENABLED:
+            from app.title_matching.agentic.runner import run_agentic_match
+            return run_agentic_match(
+                title, show_date, theater, ticketing_url,
+                use_poster_vision=use_poster_vision,
+            )
+
         normalized = normalize_title(title)
         candidates = self._gen.generate(normalized, self._aliases)
 

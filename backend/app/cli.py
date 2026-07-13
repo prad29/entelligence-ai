@@ -47,6 +47,14 @@ def seed_movie_master(
         total = _seed(session, path, reset=reset)
     typer.echo(f"Done: {total} rows seeded from {path}")
 
+    # Queue semantic index build after seeding
+    try:
+        from app.tasks.semantic_tasks import build_semantic_index_task
+        task = build_semantic_index_task.delay()
+        typer.echo(f"Vespa semantic index build queued (task: {task.id})")
+    except Exception as exc:
+        typer.echo(f"Warning: could not queue semantic index build: {exc}")
+
 
 if __name__ == "__main__":
     cli()

@@ -18,6 +18,7 @@ from app.title_matching.agentic import (
 )
 from app.title_matching.agentic.prompt_builder import build_prompt
 from app.title_matching.agentic.result_parser import parse_agent_output
+from app.title_matching.normalizer import normalize_title
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def run_agentic_match(
         use_poster_vision=use_poster_vision,
     )
 
-    tools = "WebFetch,WebSearch" if use_poster_vision else "WebSearch"
+    tools = "WebFetch,WebSearch" if (use_poster_vision or ticketing_url) else "WebSearch"
 
     logger.info(
         "agentic_match_start title=%r model=%s bedrock=%s db_hits=%d vespa_hits=%d poster_vision=%s",
@@ -187,7 +188,7 @@ def _fetch_db_candidates(title: str) -> list[dict]:
     """Best-effort keyword pre-fetch via direct DB query (avoids HTTP self-call deadlock).
     Claude does the real identification — this just gives it a head start."""
     try:
-        bare = title
+        bare = normalize_title(title).cleaned
         if ":" in bare:
             after = bare.split(":")[-1].strip()
             if after:
@@ -213,6 +214,13 @@ def _db_search(query: str) -> list[dict]:
                 .limit(20)
             )
             rows = session.exec(stmt).all()
+            # Exact (case-insensitive) title match first, then shortest title —
+            # avoids picking an edition variant (e.g. "...: An IMAX 3D Experience")
+            # over the plain canonical title when both match the ILIKE query.
+            rows = sorted(
+                rows,
+                key=lambda r: (r.movie_title.lower() != query.lower(), len(r.movie_title)),
+            )
             return [
                 {
                     "id": r.id,

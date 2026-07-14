@@ -100,6 +100,8 @@ def agentic_batch_row(
     from the single-match UI, which does pass a theater). A single row failing
     only marks that row failed; it never aborts the batch.
     """
+    from celery.exceptions import Retry
+
     from app.database import engine
     from app.title_matching import batch_io
     from app.title_matching.agentic import AgenticError
@@ -146,8 +148,45 @@ def agentic_batch_row(
             _store_row_result(job_id, row_index, row_result)
             outcome_col = "matched" if present == "Yes" else "no_match"
             _bump_counters(session, job_id, processed=1, **{outcome_col: 1})
+    except Retry:
+        # celery's self.retry() control-flow signal — MUST propagate so the row
+        # is rescheduled. Not a failure of this row.
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        # Any other failure (semaphore acquire TimeoutError, SoftTimeLimitExceeded,
+        # a DB/Redis error in the success path, or any unexpected exception) must
+        # NOT escape the task: an uncaught exception fails this chord header task,
+        # and a chord's callback only fires when ALL header tasks succeed — so a
+        # single escaping error would leave finalize_batch un-run and wedge the
+        # whole job at 'processing' forever. Instead we record the row as failed
+        # and return normally, guaranteeing the exit criterion that a single row
+        # failure never aborts the batch. (SoftTimeLimitExceeded/KeyboardInterrupt
+        # derive from BaseException, hence the broad base catch.)
+        logger.exception(
+            "agentic_batch_row failed (non-agentic) job=%s row=%s title=%r",
+            job_id, row_index, title,
+        )
+        try:
+            _record_failed_row(job_id, row_index, _failure_message(exc))
+        except Exception:  # noqa: BLE001 - last-resort: never re-raise from here
+            logger.exception(
+                "agentic_batch_row: could not even record failed row job=%s row=%s",
+                job_id, row_index,
+            )
     finally:
         sandbox_semaphore.release(holder)
+
+
+def _failure_message(exc: BaseException) -> str:
+    """Human-readable message for a non-agentic row failure."""
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    if isinstance(exc, SoftTimeLimitExceeded):
+        return "row timed out (soft time limit exceeded)"
+    if isinstance(exc, TimeoutError):
+        return f"timed out acquiring a sandbox slot: {exc}"
+    text = str(exc).strip()
+    return text or f"{type(exc).__name__}"
 
 
 def _store_row_result(job_id: str, row_index: int, row_result: dict) -> None:

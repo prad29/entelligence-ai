@@ -156,9 +156,10 @@ def test_agentic_error_retries_then_fails(patched_task, db_engine, fake_hash):
     def always_fail(*a, **k):
         raise AgenticError("sandbox exploded")
 
-    # First call: retries=0 < max_retries=2 -> self.retry raises Retry
-    class _Retry(Exception):
-        pass
+    # self.retry() raises celery's real Retry signal; the task must let it
+    # propagate (it is control-flow, not a row failure), so we assert on the
+    # genuine celery.exceptions.Retry rather than a stand-in class.
+    from celery.exceptions import Retry as CeleryRetry
 
     # The raw, undecorated function (takes `self` as the first positional arg)
     # so we can inject a fake task self with a controllable retries count.
@@ -170,8 +171,8 @@ def test_agentic_error_retries_then_fails(patched_task, db_engine, fake_hash):
         fake_self = MagicMock()
         fake_self.request.retries = 0
         fake_self.max_retries = 2
-        fake_self.retry.side_effect = _Retry()
-        with pytest.raises(_Retry):
+        fake_self.retry.side_effect = CeleryRetry()
+        with pytest.raises(CeleryRetry):
             raw_fn(fake_self, job_id, 0, "boom", None, None, False)
         assert fake_self.retry.called
 
@@ -190,6 +191,76 @@ def test_agentic_error_retries_then_fails(patched_task, db_engine, fake_hash):
     assert stored["present_in_db"] == "No"
     assert stored["reasoning"].startswith("error:")
     assert "sandbox exploded" in stored["reasoning"]
+
+
+# ---------------------------------------------------------------------------
+# (b2) a NON-agentic failure must not escape the task — it records a failed row
+#      and returns normally so the chord header still succeeds (single row
+#      failure never aborts the whole batch).
+# ---------------------------------------------------------------------------
+def test_non_agentic_failure_does_not_escape_task(patched_task, db_engine, fake_hash):
+    """A semaphore acquire TimeoutError / unexpected error must be swallowed into
+    the failed-row path so the chord callback still fires."""
+    job_id = _make_job(db_engine)
+
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch
+
+    # Semaphore acquire raises TimeoutError (slot never frees). This is NOT an
+    # AgenticError, so before the fix it escaped the task and wedged the chord.
+    def boom(*a, **k):
+        raise TimeoutError("no slot within timeout")
+
+    with patch.object(sem, "acquire", side_effect=boom), \
+         patch.object(sem, "release") as rel:
+        # Must return normally (no exception propagates out of the task).
+        patched_task.agentic_batch_row.run(job_id, 0, "whatever", None, None, False)
+        # release still called in finally (with None holder — a no-op).
+        rel.assert_called_once_with(None)
+
+    job = _get_job(db_engine, job_id)
+    assert job.processed == 1
+    assert job.failed == 1
+    assert job.matched == 0
+    assert job.no_match == 0
+    stored = json.loads(fake_hash["0"])
+    assert stored["present_in_db"] == "No"
+    assert stored["reasoning"].startswith("error:")
+
+
+def test_db_error_in_success_path_does_not_escape_task(patched_task, db_engine, fake_hash):
+    """An error while counting/storing on the success path is contained to a
+    failed row rather than aborting the batch."""
+    job_id = _make_job(db_engine)
+
+    def fake_run(title, show_date, theater, ticketing_url, use_poster_vision):
+        return _Result(42, 42, "The Matrix", 0.97)
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch
+
+    # First _bump_counters call (success path) blows up; the failed-row path uses
+    # its own _record_failed_row -> _bump_counters, which must still work.
+    calls = {"n": 0}
+    real_bump = patched_task._bump_counters
+
+    def flaky_bump(session, jid, **inc):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("redis/db hiccup on success path")
+        return real_bump(session, jid, **inc)
+
+    with patch.object(runner_mod, "run_agentic_match", side_effect=fake_run), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"), \
+         patch.object(patched_task, "_bump_counters", side_effect=flaky_bump):
+        patched_task.agentic_batch_row.run(job_id, 0, "The Matrix", None, None, False)
+
+    job = _get_job(db_engine, job_id)
+    # The failed-row path landed processed + failed.
+    assert job.processed == 1
+    assert job.failed == 1
 
 
 # ---------------------------------------------------------------------------

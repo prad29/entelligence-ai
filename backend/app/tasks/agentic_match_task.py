@@ -17,7 +17,13 @@ def agentic_title_match(
     ticketing_url: Optional[str] = None,
     row_id: Optional[str] = None,
 ) -> dict:
-    """Celery task that runs Mode B agentic match and stores the result."""
+    """Celery task that runs a single Mode B agentic match.
+
+    NOTE: this is a minimal stub kept import-clean. The real batch-aware
+    task (per-row/job bookkeeping, atomic counters, concurrency semaphore)
+    is implemented in a later construction step. This feature does not use
+    a review-queue model.
+    """
     from app.title_matching.agentic.runner import run_agentic_match
     from app.title_matching.agentic import AgenticError
 
@@ -27,29 +33,4 @@ def agentic_title_match(
         logger.error("agentic_match_failed row_id=%s title=%r error=%s", row_id, title, exc)
         raise self.retry(exc=exc)
 
-    if row_id:
-        _store_result(row_id, result)
-
     return vars(result)
-
-
-def _store_result(row_id: str, result) -> None:
-    """Persist the agentic match result to the review queue."""
-    try:
-        from app.database import SessionLocal
-        from app.models import MovieTitleMatchReviewItem
-
-        with SessionLocal() as session:
-            item = MovieTitleMatchReviewItem(
-                row_id=row_id,
-                suggested_movie_id=result.suggested_movie_id,
-                suggested_movie_title=result.suggested_movie_title,
-                confidence=result.confidence,
-                decision=result.decision,
-                reasoning=result.reasoning,
-                source="agentic",
-            )
-            session.add(item)
-            session.commit()
-    except Exception as exc:
-        logger.warning("agentic_result_store_failed row_id=%s error=%s", row_id, exc)

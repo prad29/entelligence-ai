@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     AGENTIC_USE_BEDROCK: bool = True
     # Claude sandbox sidecar URL (set via CLAUDE_SANDBOX_URL env var)
     CLAUDE_SANDBOX_URL: str = "http://claude-sandbox:3100"
+    AGENTIC_BATCH_MAX_CONCURRENCY: int = 2
 
     class Config:
         env_file = ".env"

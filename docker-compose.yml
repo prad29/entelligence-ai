@@ -73,6 +73,26 @@ services:
       vespa:
         condition: service_healthy
 
+  celery-agentic-worker:
+    build: ./backend
+    # Concurrency must stay equal to settings.AGENTIC_BATCH_MAX_CONCURRENCY
+    # (backend/app/config.py) — these two numbers are coupled and drifting
+    # them apart weakens the concurrency cap on in-flight sandbox calls.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q agentic
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      VESPA_URL: http://vespa:8080
+      REDIS_URL: redis://redis:6379/0
+      CLAUDE_SANDBOX_URL: http://claude-sandbox:3100
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      claude-sandbox:
+        condition: service_healthy
+
   celery-flower:
     build: ./backend
     command: celery -A app.celery_app flower --port=5555

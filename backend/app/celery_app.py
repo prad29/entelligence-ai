@@ -16,4 +16,10 @@ celery.conf.update(
     enable_utc=True,
     task_track_started=True,
     worker_prefetch_multiplier=1,
+    # Route the agentic batch tasks to a dedicated "agentic" queue run at
+    # worker concurrency 2 — the primary concurrency cap for sandbox calls.
+    task_routes={
+        "app.tasks.agentic_match_task.agentic_batch_row": {"queue": "agentic"},
+        "app.tasks.agentic_match_task.finalize_batch": {"queue": "agentic"},
+    },
 )

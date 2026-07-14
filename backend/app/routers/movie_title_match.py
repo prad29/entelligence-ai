@@ -1,14 +1,21 @@
 import csv
 import io
+import os
+import uuid
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from app.config import settings
 from app.database import get_session
 
 router = APIRouter(prefix="/api/v1/movie-title-match", tags=["movie-title-match"])
+
+_BATCH_UPLOAD_DIR = "/tmp/movie_title_batch_uploads"  # noqa: S108 - matches existing job convention
 
 
 class TitleMatchRequest(BaseModel):
@@ -51,6 +58,123 @@ async def match_single_title(
         use_poster_vision=payload.use_poster_vision,
     )
     return result.__dict__
+
+
+@router.post("/batch")
+async def upload_batch(
+    file: UploadFile = File(...),
+    use_poster_vision: str = Form("false"),
+    session: Session = Depends(get_session),
+):
+    """Upload a .csv/.xlsx of titles for Mode B agentic batch matching.
+
+    Requires settings.AGENTIC_TITLE_MATCH_ENABLED (batch matching is Mode B
+    only). Validates the file extension, the 3 required columns, and the
+    MAX_BATCH_ROWS cap before dispatching an async Celery chord via
+    dispatch_batch (see app.tasks.agentic_match_task) — never synchronous.
+    """
+    if not settings.AGENTIC_TITLE_MATCH_ENABLED:
+        raise HTTPException(
+            status_code=400,
+            detail="Batch title matching requires Mode B (agentic) to be enabled",
+        )
+
+    from app.models import MovieTitleBatchJob
+    from app.tasks.agentic_match_task import dispatch_batch
+    from app.title_matching import batch_io
+
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in (".csv", ".xlsx"):
+        raise HTTPException(status_code=400, detail="Only .csv and .xlsx files are supported")
+
+    contents = await file.read()
+
+    try:
+        _headers, rows = batch_io.parse_upload(contents, ext)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    row_count = len(rows)
+    if row_count > settings.MAX_BATCH_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File exceeds {settings.MAX_BATCH_ROWS} row limit",
+        )
+
+    use_poster_vision_bool = use_poster_vision.strip().lower() in ("true", "1", "yes")
+
+    os.makedirs(_BATCH_UPLOAD_DIR, exist_ok=True)
+    job_id = str(uuid.uuid4())
+    upload_path = os.path.join(_BATCH_UPLOAD_DIR, f"{job_id}{ext}")
+    with open(upload_path, "wb") as f_out:
+        f_out.write(contents)
+
+    job = MovieTitleBatchJob(
+        id=job_id,
+        status="queued",
+        total=row_count,
+        use_poster_vision=use_poster_vision_bool,
+        file_path=upload_path,
+    )
+    session.add(job)
+    session.commit()
+
+    dispatch_batch(job_id)
+
+    return {"job_id": job_id}
+
+
+@router.get("/batch/{job_id}")
+async def get_batch_job(job_id: str, session: Session = Depends(get_session)):
+    from app.models import MovieTitleBatchJob
+
+    job = session.get(MovieTitleBatchJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    progress = (job.processed / job.total) if job.total > 0 else 0
+
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "total": job.total,
+        "processed": job.processed,
+        "progress": progress,
+        "matched": job.matched,
+        "no_match": job.no_match,
+        "failed": job.failed,
+        "output_url": (
+            f"/api/v1/movie-title-match/batch/{job.id}/download"
+            if job.status == "completed" and job.output_path
+            else None
+        ),
+        "error": job.error,
+    }
+
+
+@router.get("/batch/{job_id}/download")
+async def download_batch_job(job_id: str, session: Session = Depends(get_session)) -> FileResponse:
+    from app.models import MovieTitleBatchJob
+
+    job = session.get(MovieTitleBatchJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job not completed")
+
+    if job.ttl and datetime.utcnow() > job.ttl:
+        raise HTTPException(status_code=410, detail="Download expired")
+
+    if not job.output_path or not os.path.exists(job.output_path):
+        raise HTTPException(status_code=404, detail="Output file not found")
+
+    return FileResponse(
+        job.output_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"movie_title_match_results_{job_id[:8]}.xlsx",
+    )
 
 
 @router.get("/master")

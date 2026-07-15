@@ -1,0 +1,33 @@
+version: 0.2
+
+env:
+  variables:
+    IMAGE_TAG: ""   # overridden at runtime with CODEBUILD_RESOLVED_SOURCE_VERSION
+
+phases:
+  pre_build:
+    commands:
+      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-8)
+      - echo "Image tag => $IMAGE_TAG"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_CLAUDE_SANDBOX
+
+  build:
+    commands:
+      - docker build
+          --platform linux/arm64
+          -f claude-sandbox/Dockerfile
+          -t $ECR_CLAUDE_SANDBOX:$IMAGE_TAG
+          -t $ECR_CLAUDE_SANDBOX:latest
+          ./claude-sandbox
+
+  post_build:
+    commands:
+      - docker push $ECR_CLAUDE_SANDBOX:$IMAGE_TAG
+      - docker push $ECR_CLAUDE_SANDBOX:latest
+      - echo "Build complete. Pushed $ECR_CLAUDE_SANDBOX:$IMAGE_TAG"
+
+artifacts:
+  files:
+    - docker-compose.prod.yml
+    - codedeploy/**/*
+    - appspec.yml

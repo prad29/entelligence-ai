@@ -115,9 +115,21 @@ function MovieTitleSingleMatcher() {
           <Input
             label="Show Date (optional)"
             id="show-date"
-            type="date"
+            type="text"
+            inputMode="numeric"
+            placeholder="YYYY-MM-DD"
             value={showDate}
-            onChange={(e) => setShowDate(e.target.value)}
+            onChange={(e) => setShowDate(e.target.value.trim())}
+            onPaste={(e) => {
+              const pasted = e.clipboardData.getData('text')
+              if (!pasted.includes('\n')) return
+              e.preventDefault()
+              const firstDate = pasted
+                .split('\n')
+                .map((line) => line.trim())
+                .find((line) => /^\d{4}-\d{2}-\d{2}$/.test(line))
+              setShowDate(firstDate ?? pasted.split('\n')[0].trim())
+            }}
           />
           <Input
             label="Ticketing URL (optional)"

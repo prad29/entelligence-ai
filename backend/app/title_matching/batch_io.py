@@ -14,6 +14,10 @@ import openpyxl
 
 REQUIRED_COLUMNS: tuple[str, str, str] = ("movie_title", "show_date", "ticketing_url")
 
+# "title" is accepted as an alias for "movie_title" — some upstream exports
+# (e.g. Tableau mapping lists) use "title" instead of the canonical column name.
+TITLE_COLUMN_ALIASES: tuple[str, ...] = ("movie_title", "title")
+
 
 def peek_headers(contents: bytes, ext: str) -> list[str]:
     """
@@ -54,7 +58,11 @@ def parse_upload(contents: bytes, ext: str) -> tuple[list[str], list[dict[str, A
         raise ValueError(f"Unsupported file extension: {ext!r}")
 
     lower_headers = {h.strip().lower() for h in headers}
-    missing = [col for col in REQUIRED_COLUMNS if col not in lower_headers]
+    missing = [
+        col for col in REQUIRED_COLUMNS
+        if col not in lower_headers
+        and not (col == "movie_title" and lower_headers & set(TITLE_COLUMN_ALIASES))
+    ]
     if missing:
         raise ValueError(
             f"Missing required column(s): {', '.join(missing)}"
@@ -72,6 +80,10 @@ def _parse_csv(contents: bytes) -> tuple[list[str], list[dict[str, Any]]]:
 
 
 def _parse_xlsx(contents: bytes) -> tuple[list[str], list[dict[str, Any]]]:
+    # openpyxl's max_row reflects the sheet's stored <dimension> metadata, which
+    # can be stale (larger than the actual populated range) after rows are
+    # deleted in some editors. Skip fully-blank rows rather than trusting
+    # max_row, to avoid manufacturing phantom empty-title rows.
     wb = openpyxl.load_workbook(io.BytesIO(contents), read_only=True, data_only=True)
     try:
         ws = wb.active
@@ -79,6 +91,8 @@ def _parse_xlsx(contents: bytes) -> tuple[list[str], list[dict[str, Any]]]:
         headers = [str(v).strip() if v is not None else "" for v in header_row]
         rows = []
         for excel_row in ws.iter_rows(min_row=2, values_only=True):
+            if all(v is None or str(v).strip() == "" for v in excel_row):
+                continue
             rows.append(
                 {headers[i]: (str(v).strip() if v is not None else "") for i, v in enumerate(excel_row) if i < len(headers)}
             )

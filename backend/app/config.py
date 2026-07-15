@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # Claude sandbox sidecar URL (set via CLAUDE_SANDBOX_URL env var)
     CLAUDE_SANDBOX_URL: str = "http://claude-sandbox:3100"
     AGENTIC_BATCH_MAX_CONCURRENCY: int = 2
+    # S3 bucket backing batch upload/output storage — required because backend,
+    # celery-worker, and celery-agentic-worker are separate containers with no
+    # shared filesystem; a local /tmp path written by one is invisible to another.
+    AGENTIC_BATCH_S3_BUCKET: str = ""
+    AGENTIC_BATCH_S3_REGION: str = "us-east-1"
 
     class Config:
         env_file = ".env"

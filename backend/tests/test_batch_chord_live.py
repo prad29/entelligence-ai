@@ -61,11 +61,31 @@ def _redis_reachable() -> bool:
         return False
 
 
+def _s3_reachable() -> bool:
+    """Real S3 check — batch_storage has no local fallback, so this test needs
+    AGENTIC_BATCH_S3_BUCKET configured and reachable, same as the Redis check."""
+    from app.config import settings
+
+    if not settings.AGENTIC_BATCH_S3_BUCKET:
+        return False
+    try:
+        import boto3
+
+        boto3.client("s3", region_name=settings.AGENTIC_BATCH_S3_REGION).head_bucket(
+            Bucket=settings.AGENTIC_BATCH_S3_BUCKET
+        )
+        return True
+    except Exception:
+        return False
+
+
 @pytest.fixture
 def live_env(monkeypatch):
     """Point settings + the celery app + tasks at the local broker and file DB."""
     if not _redis_reachable():
         pytest.skip("redis not reachable at localhost:6379 — real-broker test cannot run")
+    if not _s3_reachable():
+        pytest.skip("AGENTIC_BATCH_S3_BUCKET not configured/reachable — real-broker test cannot run")
 
     import redis
 
@@ -113,24 +133,29 @@ def live_env(monkeypatch):
 
 
 def _write_upload(rows: list[str]) -> str:
-    upload_dir = "/tmp/movie_title_batch_uploads"  # noqa: S108
-    os.makedirs(upload_dir, exist_ok=True)
-    path = os.path.join(upload_dir, f"chordlive_{uuid.uuid4().hex}.csv")
-    with open(path, "w", encoding="utf-8-sig") as fh:
-        fh.write("movie_title,show_date,ticketing_url\n")
-        for r in rows:
-            fh.write(r + "\n")
-    return path
+    """Write the source CSV to the real S3 bucket, return its object key."""
+    from app.title_matching import batch_storage
+
+    text = "movie_title,show_date,ticketing_url\n" + "\n".join(rows) + "\n"
+    key = batch_storage.upload_key(f"chordlive_{uuid.uuid4().hex}", ".csv")
+    batch_storage.put_bytes(key, text.encode("utf-8-sig"))
+    return key
 
 
 def _start_worker() -> subprocess.Popen:
     """Spawn a real celery worker consuming the ``agentic`` queue (solo pool)."""
+    from app.config import settings
+
     env = dict(os.environ)
     env["DATABASE_URL"] = _DB_URL
     env["REDIS_URL"] = _REDIS_URL
     env["BATCH_TEST_RETRY_TITLE"] = _RETRY_TITLE
     env["BATCH_TEST_RETRY_MOVIE_ID"] = str(_RETRY_MOVIE_ID)
     env["BATCH_TEST_MATCHED_MOVIE_ID"] = str(_MATCHED_MOVIE_ID)
+    # Explicit passthrough (not just os.environ) — pydantic's env_file is
+    # relative to cwd and won't resolve to the repo-root .env from _BACKEND_DIR.
+    env["AGENTIC_BATCH_S3_BUCKET"] = settings.AGENTIC_BATCH_S3_BUCKET
+    env["AGENTIC_BATCH_S3_REGION"] = settings.AGENTIC_BATCH_S3_REGION
     # Ensure the backend package is importable as `tests._batch_worker_bootstrap`.
     env["PYTHONPATH"] = _BACKEND_DIR + os.pathsep + env.get("PYTHONPATH", "")
 
@@ -258,10 +283,14 @@ def test_chord_retry_fires_callback_once_with_correct_output(live_env):
         assert final.failed == 0, f"failed={final.failed}"
 
         # ── output file reflects the retried row's success exactly once ────────
-        assert final.output_path and os.path.exists(final.output_path)
+        from app.title_matching import batch_storage
+
+        assert final.output_path and batch_storage.exists(final.output_path)
+        import io as _io
+
         import openpyxl
 
-        wb = openpyxl.load_workbook(final.output_path)
+        wb = openpyxl.load_workbook(_io.BytesIO(batch_storage.get_bytes(final.output_path)))
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         header = list(rows[0])
@@ -302,6 +331,10 @@ def test_chord_retry_fires_callback_once_with_correct_output(live_env):
         except subprocess.TimeoutExpired:
             worker.kill()
             worker.wait(timeout=10)
-        # Clean up the upload file if finalize didn't (it deletes on success).
-        if os.path.exists(upload_path):
-            os.remove(upload_path)
+        # Clean up the upload object if finalize didn't (it deletes on success).
+        from app.title_matching import batch_storage
+
+        try:
+            batch_storage.delete(upload_path)
+        except Exception:
+            pass

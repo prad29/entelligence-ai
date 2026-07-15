@@ -75,6 +75,18 @@ class TestParseUploadCSV:
         assert headers == ["Movie_Title", "Show_Date", "Ticketing_URL"]
         assert len(rows) == 1
 
+    def test_title_column_accepted_as_movie_title_alias(self):
+        contents = _csv_bytes(
+            "title,master_title,theater_name,show_date,ticketing_url",
+            "Oh Sukumari,Oh..! Sukumari,AMC Concord Mills 24,2026-07-21,https://example.com/oh",
+        )
+
+        headers, rows = parse_upload(contents, ".csv")
+
+        assert headers == ["title", "master_title", "theater_name", "show_date", "ticketing_url"]
+        assert len(rows) == 1
+        assert rows[0]["title"] == "Oh Sukumari"
+
 
 class TestParseUploadXLSX:
     def test_parses_xlsx_with_required_columns_present(self):
@@ -98,6 +110,25 @@ class TestParseUploadXLSX:
 
         with pytest.raises(ValueError, match="show_date"):
             parse_upload(contents, ".xlsx")
+
+    def test_trailing_blank_rows_from_stale_dimension_metadata_are_skipped(self):
+        # Simulates a workbook whose stored <dimension> range is larger than
+        # its actual populated rows (e.g. after rows were deleted in Excel) —
+        # openpyxl's max_row/iter_rows still walks the stale range and yields
+        # fully-blank rows that must not become phantom entries.
+        contents = _xlsx_bytes(
+            ["movie_title", "show_date", "ticketing_url"],
+            [
+                ["Dune", "2024-01-01", "https://example.com/dune"],
+                [None, None, None],
+                [None, None, None],
+            ],
+        )
+
+        headers, rows = parse_upload(contents, ".xlsx")
+
+        assert len(rows) == 1
+        assert rows[0]["movie_title"] == "Dune"
 
 
 class TestPeekHeaders:

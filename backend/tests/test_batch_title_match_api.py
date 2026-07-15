@@ -7,6 +7,8 @@ API tests for the batch title-matching endpoints:
 
 dispatch_batch is monkeypatched to a no-op stub so these tests never touch
 Celery, Redis, or the claude-sandbox subprocess — pure HTTP + DB behavior.
+batch_storage (S3) is monkeypatched to an in-memory dict so these tests never
+touch real S3 either.
 
 Uses an in-memory SQLite DB (mirrors tests/test_api_integration.py's pattern)
 so the suite runs without PostgreSQL/Docker.
@@ -15,7 +17,6 @@ so the suite runs without PostgreSQL/Docker.
 from __future__ import annotations
 
 import io
-import os
 from datetime import datetime, timedelta
 
 import pytest
@@ -80,6 +81,20 @@ def _stub_dispatch_batch(monkeypatch):
         "app.tasks.agentic_match_task.dispatch_batch", _fake_dispatch
     )
     return calls
+
+
+@pytest.fixture(autouse=True)
+def _stub_batch_storage(monkeypatch):
+    """Never touch real S3 — batch_storage backed by an in-memory dict."""
+    import app.title_matching.batch_storage as storage
+
+    store: dict[str, bytes] = {}
+
+    monkeypatch.setattr(storage, "put_bytes", lambda key, data: store.__setitem__(key, data))
+    monkeypatch.setattr(storage, "get_bytes", lambda key: store[key])
+    monkeypatch.setattr(storage, "delete", lambda key: store.pop(key, None))
+    monkeypatch.setattr(storage, "exists", lambda key: key in store)
+    return store
 
 
 def _csv_bytes(*lines: str) -> bytes:
@@ -198,13 +213,17 @@ def test_download_before_completion_returns_400():
     assert resp.status_code == 400
 
 
-def test_download_after_completion_returns_200_xlsx(tmp_path):
-    output_path = tmp_path / "job-done_output.xlsx"
+def test_download_after_completion_returns_200_xlsx(_stub_batch_storage):
+    import io as _io
+
     import openpyxl
 
     wb = openpyxl.Workbook()
     wb.active.append(["movie_title", "mapped_title"])
-    wb.save(output_path)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    output_key = "batch-outputs/job-done_output.xlsx"
+    _stub_batch_storage[output_key] = buf.getvalue()
 
     with Session(_sqlite_engine) as session:
         job = MovieTitleBatchJob(
@@ -213,7 +232,7 @@ def test_download_after_completion_returns_200_xlsx(tmp_path):
             total=1,
             processed=1,
             matched=1,
-            output_path=str(output_path),
+            output_path=output_key,
             ttl=datetime.utcnow() + timedelta(hours=1),
         )
         session.add(job)
@@ -232,13 +251,17 @@ def test_download_after_completion_returns_200_xlsx(tmp_path):
     )
 
 
-def test_download_expired_job_returns_410(tmp_path):
-    output_path = tmp_path / "job-expired_output.xlsx"
+def test_download_expired_job_returns_410(_stub_batch_storage):
+    import io as _io
+
     import openpyxl
 
     wb = openpyxl.Workbook()
     wb.active.append(["movie_title"])
-    wb.save(output_path)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    output_key = "batch-outputs/job-expired_output.xlsx"
+    _stub_batch_storage[output_key] = buf.getvalue()
 
     with Session(_sqlite_engine) as session:
         job = MovieTitleBatchJob(
@@ -246,7 +269,7 @@ def test_download_expired_job_returns_410(tmp_path):
             status="completed",
             total=1,
             processed=1,
-            output_path=str(output_path),
+            output_path=output_key,
             ttl=datetime.utcnow() - timedelta(hours=1),
         )
         session.add(job)

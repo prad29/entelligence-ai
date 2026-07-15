@@ -35,7 +35,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 AGENTIC_QUEUE = "agentic"
-OUTPUT_DIR = "/tmp/movie_title_batch_outputs"  # noqa: S108 - matches existing job convention
 
 
 def _results_key(job_id: str) -> str:
@@ -222,7 +221,7 @@ def finalize_batch(_row_results, job_id: str) -> None:
 
     from app.database import engine
     from app.models import MovieTitleBatchJob
-    from app.title_matching import batch_io
+    from app.title_matching import batch_io, batch_storage
 
     with Session(engine) as session:
         job = session.get(MovieTitleBatchJob, job_id)
@@ -234,12 +233,11 @@ def finalize_batch(_row_results, job_id: str) -> None:
             return
 
         total = job.total or 0
-        file_path = job.file_path
+        upload_key = job.file_path
 
     # Recover original headers + rows from the source upload.
-    with open(file_path, "rb") as fh:
-        contents = fh.read()
-    ext = os.path.splitext(file_path)[1]
+    contents = batch_storage.get_bytes(upload_key)
+    ext = os.path.splitext(upload_key)[1]
     original_headers, rows = batch_io.parse_upload(contents, ext)
 
     # Assemble every row result by index, filling any gap (a task that crashed
@@ -261,27 +259,24 @@ def finalize_batch(_row_results, job_id: str) -> None:
 
     xlsx_bytes = batch_io.build_output_xlsx(original_headers, rows, results)
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.xlsx")
-    with open(output_path, "wb") as fh:
-        fh.write(xlsx_bytes)
+    output_key = batch_storage.output_key(job_id)
+    batch_storage.put_bytes(output_key, xlsx_bytes)
 
     # Mark completed BEFORE any cleanup so a crash after this leaves a retryable
     # (but already-completed -> no-op) job rather than a wedged one.
     with Session(engine) as session:
         job = session.get(MovieTitleBatchJob, job_id)
         job.status = "completed"
-        job.output_path = output_path
+        job.output_path = output_key
         job.ttl = datetime.utcnow() + timedelta(hours=settings.JOB_TTL_HOURS)
         session.add(job)
         session.commit()
 
     # Cleanup only after the output is durably written and the job committed.
     try:
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
-    except OSError as exc:
-        logger.warning("finalize_batch: could not remove upload %s: %s", file_path, exc)
+        batch_storage.delete(upload_key)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("finalize_batch: could not remove upload %s: %s", upload_key, exc)
     try:
         r.delete(_results_key(job_id))
     except Exception as exc:  # noqa: BLE001
@@ -298,19 +293,18 @@ def dispatch_batch(job_id: str) -> None:
 
     from app.database import engine
     from app.models import MovieTitleBatchJob
-    from app.title_matching import batch_io
+    from app.title_matching import batch_io, batch_storage
 
     try:
         with Session(engine) as session:
             job = session.get(MovieTitleBatchJob, job_id)
             if job is None:
                 raise ValueError(f"dispatch_batch: job {job_id} not found")
-            file_path = job.file_path
+            upload_key = job.file_path
             use_poster_vision = job.use_poster_vision
 
-        with open(file_path, "rb") as fh:
-            contents = fh.read()
-        ext = os.path.splitext(file_path)[1]
+        contents = batch_storage.get_bytes(upload_key)
+        ext = os.path.splitext(upload_key)[1]
         _headers, rows = batch_io.parse_upload(contents, ext)
 
         with Session(engine) as session:
@@ -322,7 +316,9 @@ def dispatch_batch(job_id: str) -> None:
             session.commit()
 
         header_map = {h.strip().lower(): h for h in _headers}
-        title_key = header_map["movie_title"]
+        title_key = next(
+            header_map[alias] for alias in batch_io.TITLE_COLUMN_ALIASES if alias in header_map
+        )
         date_key = header_map.get("show_date")
         url_key = header_map.get("ticketing_url")
 

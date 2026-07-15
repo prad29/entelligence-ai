@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -14,8 +14,6 @@ from app.config import settings
 from app.database import get_session
 
 router = APIRouter(prefix="/api/v1/movie-title-match", tags=["movie-title-match"])
-
-_BATCH_UPLOAD_DIR = "/tmp/movie_title_batch_uploads"  # noqa: S108 - matches existing job convention
 
 
 class TitleMatchRequest(BaseModel):
@@ -81,7 +79,7 @@ async def upload_batch(
 
     from app.models import MovieTitleBatchJob
     from app.tasks.agentic_match_task import dispatch_batch
-    from app.title_matching import batch_io
+    from app.title_matching import batch_io, batch_storage
 
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
@@ -104,18 +102,16 @@ async def upload_batch(
 
     use_poster_vision_bool = use_poster_vision.strip().lower() in ("true", "1", "yes")
 
-    os.makedirs(_BATCH_UPLOAD_DIR, exist_ok=True)
     job_id = str(uuid.uuid4())
-    upload_path = os.path.join(_BATCH_UPLOAD_DIR, f"{job_id}{ext}")
-    with open(upload_path, "wb") as f_out:
-        f_out.write(contents)
+    upload_key = batch_storage.upload_key(job_id, ext)
+    batch_storage.put_bytes(upload_key, contents)
 
     job = MovieTitleBatchJob(
         id=job_id,
         status="queued",
         total=row_count,
         use_poster_vision=use_poster_vision_bool,
-        file_path=upload_path,
+        file_path=upload_key,
     )
     session.add(job)
     session.commit()
@@ -154,8 +150,9 @@ async def get_batch_job(job_id: str, session: Session = Depends(get_session)):
 
 
 @router.get("/batch/{job_id}/download")
-async def download_batch_job(job_id: str, session: Session = Depends(get_session)) -> FileResponse:
+async def download_batch_job(job_id: str, session: Session = Depends(get_session)) -> Response:
     from app.models import MovieTitleBatchJob
+    from app.title_matching import batch_storage
 
     job = session.get(MovieTitleBatchJob, job_id)
     if job is None:
@@ -167,13 +164,17 @@ async def download_batch_job(job_id: str, session: Session = Depends(get_session
     if job.ttl and datetime.utcnow() > job.ttl:
         raise HTTPException(status_code=410, detail="Download expired")
 
-    if not job.output_path or not os.path.exists(job.output_path):
+    if not job.output_path or not batch_storage.exists(job.output_path):
         raise HTTPException(status_code=404, detail="Output file not found")
 
-    return FileResponse(
-        job.output_path,
+    contents = batch_storage.get_bytes(job.output_path)
+
+    return Response(
+        content=contents,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"movie_title_match_results_{job_id[:8]}.xlsx",
+        headers={
+            "Content-Disposition": f'attachment; filename="movie_title_match_results_{job_id[:8]}.xlsx"'
+        },
     )
 
 

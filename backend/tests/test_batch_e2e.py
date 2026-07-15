@@ -24,7 +24,6 @@ completes — which is exactly what we assert.
 from __future__ import annotations
 
 import io
-import os
 
 import openpyxl
 import pytest
@@ -137,6 +136,15 @@ def _clean_state(monkeypatch):
 
     monkeypatch.setattr(sem, "acquire", lambda *a, **k: "eager-holder")
     monkeypatch.setattr(sem, "release", lambda *a, **k: None)
+
+    # Never touch real S3 — batch_storage backed by an in-memory dict.
+    import app.title_matching.batch_storage as storage_mod
+
+    s3_store: dict[str, bytes] = {}
+    monkeypatch.setattr(storage_mod, "put_bytes", lambda key, data: s3_store.__setitem__(key, data))
+    monkeypatch.setattr(storage_mod, "get_bytes", lambda key: s3_store[key])
+    monkeypatch.setattr(storage_mod, "delete", lambda key: s3_store.pop(key, None))
+    monkeypatch.setattr(storage_mod, "exists", lambda key: key in s3_store)
 
     # Use a real (local) Redis for the per-row results hash; fall back to an
     # in-memory dict if it is unreachable so the test still runs anywhere.
@@ -260,7 +268,3 @@ def test_eager_batch_end_to_end_output_and_counters():
     assert failed_row[4] == 0                      # confidence_score == 0
     assert str(failed_row[5]).startswith("error")  # reasoning starts with "error"
     assert failed_row[6] == "No"                   # present_in_db
-
-    # Clean up the output file this test produced.
-    if job.output_path and os.path.exists(job.output_path):
-        os.remove(job.output_path)

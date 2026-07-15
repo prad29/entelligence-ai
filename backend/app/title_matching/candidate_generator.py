@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import TYPE_CHECKING, Optional
 
 from rapidfuzz import process, fuzz
 
+from app.title_matching.normalizer import has_conflicting_ordinal
 from app.title_matching.types import NormalizedTitle, CandidateResult
 
 if TYPE_CHECKING:
@@ -153,7 +153,7 @@ class CandidateGenerator:
                 if score < 90:    # only skip on low score; high score (≥90) overrides coverage
                     continue
             # Ordinal hard constraint
-            if normalized.ordinal and _has_conflicting_ordinal(title, normalized.ordinal):
+            if normalized.ordinal and has_conflicting_ordinal(title, normalized.ordinal):
                 continue
             candidates.append(CandidateResult(
                 movie_master_id=mid,
@@ -178,16 +178,3 @@ class CandidateGenerator:
             candidates.extend(semantic_hits)
 
         return candidates[:k]
-
-
-def _has_conflicting_ordinal(title: str, query_ordinal: int) -> bool:
-    nums = re.findall(r'\b(\d+)\b', title)
-    roman_map = {'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9}
-    romans = re.findall(r'\b(I{1,3}|IV|VI{0,3}|IX)\b', title, re.IGNORECASE)
-    found = (
-        [int(n) for n in nums if 1 <= int(n) <= 10]
-        + [roman_map[r.lower()] for r in romans if r.lower() in roman_map]
-    )
-    if not found:
-        return False
-    return all(f != query_ordinal for f in found)

@@ -1,0 +1,11 @@
+{
+  "name": "movieweb-mcp-server",
+  "version": "1.0.0",
+  "description": "Stdio MCP server exposing web_search/web_fetch via Serper, for the claude-sandbox Bedrock title-matching agent",
+  "main": "server.js",
+  "type": "commonjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  }
+}

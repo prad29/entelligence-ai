@@ -113,6 +113,10 @@ services:
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
       AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+      # Backs the movieweb MCP server's web_search/web_fetch tools — the
+      # only way to get web search inside this container, since Bedrock has
+      # no built-in WebSearch tool.
+      SERPER_API_KEY: "${SERPER_API_KEY:-}"
     ports:
       - "3100:3100"
     restart: unless-stopped

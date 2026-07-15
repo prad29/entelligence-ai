@@ -30,6 +30,10 @@ schema movie_master {
 
     }
 
+    fieldset default {
+        fields: title
+    }
+
     rank-profile hybrid inherits default {
         inputs {
             query(q_embedding) tensor<float>(x[1024])

@@ -18,7 +18,7 @@ from app.title_matching.agentic import (
 )
 from app.title_matching.agentic.prompt_builder import build_prompt
 from app.title_matching.agentic.result_parser import parse_agent_output
-from app.title_matching.normalizer import normalize_title
+from app.title_matching.normalizer import has_conflicting_ordinal, normalize_title
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,13 @@ def run_agentic_match(
         use_poster_vision=use_poster_vision,
     )
 
-    tools = "WebFetch,WebSearch" if (use_poster_vision or ticketing_url) else "WebSearch"
+    # Built-in WebSearch is unavailable under Bedrock (CLAUDE_CODE_USE_BEDROCK=1
+    # drops it from the tool list entirely, regardless of --tools/--allowedTools).
+    # web_search/web_fetch are provided instead by the movieweb MCP server that
+    # claude-sandbox always connects (see server.js) — no tool name needed here
+    # for those; only built-in WebFetch is requested, when a ticketing page or
+    # poster image needs to be fetched directly.
+    tools = "WebFetch" if (use_poster_vision or ticketing_url) else ""
 
     logger.info(
         "agentic_match_start title=%r model=%s bedrock=%s db_hits=%d vespa_hits=%d poster_vision=%s",
@@ -91,6 +97,23 @@ def run_agentic_match(
         # Strip parentheticals from Claude's identified title (e.g. "The Odyssey (L'Odyssée)" → "The Odyssey")
         post_query = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", result.suggested_movie_title).strip(" -:")
         post_hits = _db_search(post_query or result.suggested_movie_title)
+
+        # An ordinal is a hard constraint the agent may have already used to
+        # reject a DB row (e.g. discarding a "Part 2" candidate for a "Part 5"
+        # input). The trigram fallback in _db_search is permissive on spelling
+        # but knows nothing about ordinals, so it can resurface exactly the
+        # row the agent just rejected — filter those back out before trusting
+        # post_hits[0].
+        query_ordinal = (
+            normalize_title(title).ordinal
+            or normalize_title(result.suggested_movie_title).ordinal
+        )
+        if query_ordinal:
+            post_hits = [
+                h for h in post_hits
+                if not has_conflicting_ordinal(h["movie_title"], query_ordinal)
+            ]
+
         if post_hits:
             db_candidates = post_hits  # refresh for cover_image lookup below
             best = post_hits[0]
@@ -201,7 +224,15 @@ def _fetch_db_candidates(title: str) -> list[dict]:
 
 
 def _db_search(query: str) -> list[dict]:
-    """ILIKE search against Movie Master via direct DB query."""
+    """Search Movie Master via direct DB query.
+
+    Tries an ILIKE substring match first (fast, precise for exact/near-exact
+    queries). Falls back to a pg_trgm similarity search (with unaccent) when
+    ILIKE finds nothing — ILIKE containment is defeated by punctuation,
+    accents, or word-order noise (e.g. "Oh Sukumari" vs the DB's "Oh..!
+    Sukumari", or "DCI 2026 BIG LOUD AND LIVE" vs "DCI 2026: Big, Loud &
+    Live"), which trigram similarity tolerates.
+    """
     try:
         from sqlmodel import Session, select
         from app.models import MovieMaster
@@ -214,13 +245,18 @@ def _db_search(query: str) -> list[dict]:
                 .limit(20)
             )
             rows = session.exec(stmt).all()
-            # Exact (case-insensitive) title match first, then shortest title —
-            # avoids picking an edition variant (e.g. "...: An IMAX 3D Experience")
-            # over the plain canonical title when both match the ILIKE query.
-            rows = sorted(
-                rows,
-                key=lambda r: (r.movie_title.lower() != query.lower(), len(r.movie_title)),
-            )
+
+            if rows:
+                # Exact (case-insensitive) title match first, then shortest title —
+                # avoids picking an edition variant (e.g. "...: An IMAX 3D Experience")
+                # over the plain canonical title when both match the ILIKE query.
+                rows = sorted(
+                    rows,
+                    key=lambda r: (r.movie_title.lower() != query.lower(), len(r.movie_title)),
+                )
+            else:
+                rows = _trigram_search(session, MovieMaster, query)
+
             return [
                 {
                     "id": r.id,
@@ -232,6 +268,33 @@ def _db_search(query: str) -> list[dict]:
             ]
     except Exception as exc:
         logger.warning("db_search_failed query=%r error=%s", query, exc)
+        return []
+
+
+def _trigram_search(session, movie_master_model, query: str) -> list:
+    """pg_trgm + unaccent similarity fallback, ranked by similarity descending.
+
+    Requires the pg_trgm/unaccent extensions and the trigram index added by
+    migration f6a1b2c3d4e5. Returns [] (never raises) if unavailable so a
+    missing migration degrades to "no fallback candidates" rather than
+    failing the whole pre-fetch.
+    """
+    from sqlmodel import select
+    from sqlalchemy import func
+
+    try:
+        unaccented_title = func.unaccent(movie_master_model.movie_title)
+        unaccented_query = func.unaccent(query)
+        similarity = func.similarity(unaccented_title, unaccented_query)
+        stmt = (
+            select(movie_master_model)
+            .where(unaccented_title.op("%")(unaccented_query))
+            .order_by(similarity.desc())
+            .limit(20)
+        )
+        return list(session.exec(stmt).all())
+    except Exception as exc:
+        logger.debug("trigram_search_failed query=%r error=%s", query, exc)
         return []
 
 
@@ -254,8 +317,8 @@ def _fetch_vespa_candidates(title: str) -> list[dict]:
             hits = data.get("root", {}).get("children", [])
             return [
                 {
-                    "id": h.get("fields", {}).get("id"),
-                    "movie_title": h.get("fields", {}).get("movie_title"),
+                    "id": h.get("fields", {}).get("movie_master_id"),
+                    "movie_title": h.get("fields", {}).get("title"),
                     "release_date": h.get("fields", {}).get("release_date"),
                     "relevance": h.get("relevance"),
                 }

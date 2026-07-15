@@ -14,7 +14,7 @@ RUN mkdir -p /home/claude/.claude && \
     cat > /home/claude/.claude/settings.json <<'EOF'
 {
   "permissions": {
-    "allow": ["WebFetch(*)", "WebSearch(*)"],
+    "allow": ["WebFetch(*)", "WebSearch(*)", "mcp__movieweb__web_search", "mcp__movieweb__web_fetch"],
     "deny": []
   }
 }
@@ -25,6 +25,14 @@ WORKDIR /app
 COPY package.json .
 RUN npm install
 COPY server.js .
+
+# movieweb MCP server (web_search/web_fetch via Serper — Bedrock has no
+# built-in WebSearch tool, so this is baked in as a custom MCP tool instead).
+COPY mcp-servers/movieweb/package.json mcp-servers/movieweb/package.json
+RUN cd mcp-servers/movieweb && npm install --omit=dev
+COPY mcp-servers/movieweb/server.js mcp-servers/movieweb/server.js
+COPY mcp-config.json mcp-config.json
+
 RUN chown -R claude:claude /app
 
 # Switch to non-root for runtime

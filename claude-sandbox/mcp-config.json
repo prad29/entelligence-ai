@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "movieweb": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/app/mcp-servers/movieweb/server.js"],
+      "env": { "SERPER_API_KEY": "${SERPER_API_KEY}" },
+      "alwaysLoad": true,
+      "timeout": 30000
+    }
+  }
+}

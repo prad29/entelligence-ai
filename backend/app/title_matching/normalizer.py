@@ -119,6 +119,22 @@ def normalize_title(raw: str) -> NormalizedTitle:
     )
 
 
+def has_conflicting_ordinal(title: str, query_ordinal: int) -> bool:
+    """True if `title` names a specific installment number that differs from
+    query_ordinal (e.g. title="...Part 2" conflicts with query_ordinal=5).
+    False if `title` contains no ordinal at all (nothing to conflict with)."""
+    nums = re.findall(r'\b(\d+)\b', title)
+    roman_map = {'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9}
+    romans = re.findall(r'\b(I{1,3}|IV|VI{0,3}|IX)\b', title, re.IGNORECASE)
+    found = (
+        [int(n) for n in nums if 1 <= int(n) <= 10]
+        + [roman_map[r.lower()] for r in romans if r.lower() in roman_map]
+    )
+    if not found:
+        return False
+    return all(f != query_ordinal for f in found)
+
+
 def _classify_event(text: str) -> str:
     t = text.lower()
     if any(kw in t for kw in (

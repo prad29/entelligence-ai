@@ -47,15 +47,31 @@ function runClaude({ prompt, model, tools, timeoutMs }) {
       '--verbose',
       '--no-session-persistence',
       '--dangerously-skip-permissions',
+      // Static MCP config baked into the image — connects the movieweb
+      // (Serper-backed web_search/web_fetch) server with alwaysLoad:true so
+      // it's connected before the first prompt, no interactive approval
+      // needed (--strict-mcp-config bypasses the .mcp.json approval gate
+      // entirely, which otherwise leaves a server stuck "pending" forever
+      // in a one-shot --print session).
+      '--mcp-config', '/app/mcp-config.json',
+      '--strict-mcp-config',
     ]
 
     if (model) {
       args.push('--model', model)
     }
 
-    if (tools) {
+    // --tools only restricts/enables built-in tools and does not affect MCP
+    // tools, so the movieweb tools are always appended via --allowedTools
+    // regardless of what the caller requested for built-ins. `tools` may be
+    // "" (disable all built-ins, per the CLI's own semantics) — that's a
+    // real, distinct value from "not specified", so check for undefined/null
+    // rather than truthiness.
+    const MOVIEWEB_TOOLS = 'mcp__movieweb__web_search,mcp__movieweb__web_fetch'
+    if (tools !== undefined && tools !== null) {
       args.push('--tools', tools)
     }
+    args.push('--allowedTools', MOVIEWEB_TOOLS)
 
     // Seed ephemeral home with baked-in settings so permissions apply cleanly
     try {

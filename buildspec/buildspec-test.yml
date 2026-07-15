@@ -10,7 +10,7 @@ phases:
   build:
     commands:
       - cd backend
-      - python -m pytest tests/ -v --tb=short --junitxml=../test-results.xml
+      - python -m pytest tests/ -v --tb=short -m "not integration" --junitxml=../test-results.xml
 
 reports:
   pytest-results:

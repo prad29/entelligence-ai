@@ -84,4 +84,13 @@ services:
       - backend
 
 volumes:
+  # Bind-mounted to a dedicated 50GB EBS volume at /data/vespa (mounted via
+  # /etc/fstab, UUID=83459e03-11db-4318-bf93-a60977287958), not the ephemeral
+  # root volume — so the semantic index survives instance replacement instead
+  # of requiring a ~10 hour re-embed (see docs/semantic-retrieval-deployment.md).
   vespa_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /data/vespa
+      o: bind

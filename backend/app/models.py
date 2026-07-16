@@ -44,6 +44,25 @@ class MovieFormatJob(SQLModel, table=True):
     stats: Optional[str] = None
 
 
+class MovieTitleBatchJob(SQLModel, table=True):
+    """Batch job for the Mode B agentic title matching pipeline."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    status: str = Field(default="queued")  # queued|processing|completed|failed
+    total: int = Field(default=0)
+    processed: int = Field(default=0)
+    matched: int = Field(default=0)
+    no_match: int = Field(default=0)
+    failed: int = Field(default=0)
+    error: Optional[str] = None  # top-level job failure message (not per-row)
+    use_poster_vision: bool = Field(default=False)
+    file_path: Optional[str] = None
+    output_path: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    ttl: Optional[datetime] = None
+    stats: Optional[str] = None  # JSON string
+
+
 class AmenityMapping(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     amenity_keyword: str = Field(index=True)
@@ -103,3 +122,28 @@ class AuditLog(SQLModel, table=True):
     after_json: Optional[str] = None
     actor: Optional[str] = None
     ts: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MovieMaster(SQLModel, table=True):
+    id: int = Field(primary_key=True)
+    movie_title: str = Field(index=True)
+    release_date: Optional[str] = None
+    imdb_id: Optional[str] = None
+    cover_image: Optional[str] = None
+    director: Optional[str] = None
+    cast_list: Optional[str] = None
+    running_time: Optional[int] = None
+    parent_id: Optional[int] = None
+    search_tags: Optional[str] = None
+    title_tag: Optional[str] = None
+    short_name: Optional[str] = None
+    cover_image_phash: Optional[str] = None
+
+
+class MovieTitleAlias(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    normalized_alias: str = Field(index=True)
+    country_code: Optional[str] = None
+    movie_master_id: int = Field(foreign_key="moviemaster.id")
+    source: str = Field(default="human")
+    created_at: datetime = Field(default_factory=datetime.utcnow)

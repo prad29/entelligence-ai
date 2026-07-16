@@ -6,6 +6,7 @@ from app.logging_config import configure_logging
 from app.routers import detect, amenities, circuits, review, jobs
 from app.routers import settings as settings_router
 from app.routers import movie_detect, movie_formats, movie_review, movie_jobs
+from app.routers import movie_title_match
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -33,6 +34,7 @@ app.include_router(movie_detect.router)
 app.include_router(movie_formats.router)
 app.include_router(movie_review.router)
 app.include_router(movie_jobs.router)
+app.include_router(movie_title_match.router)
 
 
 _DEFAULT_MOVIE_FORMAT_SEEDS = [
@@ -59,15 +61,63 @@ def _seed_default_movie_formats(session) -> None:
     session.commit()
 
 
+async def _attach_semantic_index_when_ready(application) -> None:
+    """
+    Poll Redis every 15 s until the Celery semantic-index task signals readiness,
+    then instantiate VespaSemanticIndex and wire it into the running CandidateGenerator.
+    Runs as a background asyncio task so it never blocks the event loop.
+    """
+    import asyncio
+    import logging
+
+    _log = logging.getLogger(__name__)
+    _READY_KEY = "semantic_index:ready"
+    poll_interval = 15  # seconds
+
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.REDIS_URL)
+    except Exception as exc:
+        _log.warning("semantic_watcher: cannot connect to Redis: %s", exc)
+        return
+
+    # Check immediately in case the index was already built in a prior run.
+    _first = True
+    while True:
+        if not _first:
+            await asyncio.sleep(poll_interval)
+        _first = False
+        try:
+            if not r.get(_READY_KEY):
+                continue
+
+            engine = getattr(application.state, "title_match_engine", None)
+            if engine is None:
+                continue
+
+            # Already wired — nothing to do.
+            if engine._gen._semantic_index is not None:
+                return
+
+            from app.title_matching.semantic_index import VespaSemanticIndex
+            index = VespaSemanticIndex(settings.VESPA_URL, settings)
+            engine._gen._semantic_index = index
+            _log.info("semantic_watcher: VespaSemanticIndex attached to running engine")
+            return
+
+        except Exception as exc:
+            _log.debug("semantic_watcher: error during attach attempt: %s", exc)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     """
-    Initialize the database tables (if they don't exist yet) and load the
-    detection engine from approved DB rows.
+    Initialize DB tables, load detection engines, and kick off the
+    Vespa semantic index build as a background Celery task.
 
-    Engine is built from approved AmenityMapping rows and CircuitAlias rows.
-    Seed the DB first via the CLI:
-        python app/cli.py seed-from-xlsx path/to/Amenities_Priority.xlsx
+    The title-match engine is available immediately with fuzzy/alias
+    matching. Semantic search activates once the Celery task completes
+    (typically a few minutes on first run).
     """
     from app.database import create_db_and_tables, engine as db_engine
     from sqlmodel import Session
@@ -80,3 +130,33 @@ async def startup() -> None:
         app.state.engine = build_engine_from_db(session)
         _seed_default_movie_formats(session)
         app.state.movie_engine = build_movie_format_engine_from_db(session)
+
+        from app.title_matching.loader import build_title_match_engine
+        from app.models import MovieMaster
+        from sqlmodel import select as _select
+        movie_count = session.exec(_select(MovieMaster).limit(1)).first()
+        if movie_count:
+            gen, aliases = build_title_match_engine(session)
+            from app.title_matching.engine import TitleMatchEngine
+            app.state.title_match_engine = TitleMatchEngine(gen, aliases)
+        else:
+            app.state.title_match_engine = None
+
+    # Fire the semantic index build as a Celery task — non-blocking.
+    if settings.SEMANTIC_SEARCH_ENABLED:
+        try:
+            from app.tasks.semantic_tasks import build_semantic_index_task
+            build_semantic_index_task.delay()
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "startup: semantic index build queued as Celery task"
+            )
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "startup: could not queue semantic index task: %s", exc
+            )
+
+        # Poll Redis in the background and attach VespaSemanticIndex once ready.
+        import asyncio as _asyncio
+        _asyncio.ensure_future(_attach_semantic_index_when_ready(app))

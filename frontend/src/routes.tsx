@@ -6,6 +6,8 @@ import { SettingsPage } from '@/pages/settings/SettingsPage'
 import { MovieDetectionPage } from '@/pages/movie-detection/MovieDetectionPage'
 import { MovieFormatsPage } from '@/pages/movie-formats/MovieFormatsPage'
 import { MovieReviewQueuePage } from '@/pages/movie-review/MovieReviewQueuePage'
+import { MovieTitleMatchingPage } from '@/pages/movie-title-matching/MovieTitleMatchingPage'
+import { MovieMasterSeedPage } from '@/pages/movie-title-seed/MovieMasterSeedPage'
 
 function AppRoutes() {
   return (
@@ -17,6 +19,8 @@ function AppRoutes() {
       <Route path="/movie-detection" element={<MovieDetectionPage />} />
       <Route path="/movie-formats" element={<MovieFormatsPage />} />
       <Route path="/movie-review" element={<MovieReviewQueuePage />} />
+      <Route path="/movie-title-matching" element={<MovieTitleMatchingPage />} />
+      <Route path="/movie-title-seed" element={<MovieMasterSeedPage />} />
       <Route path="*" element={<Navigate to="/detection" replace />} />
     </Routes>
   )

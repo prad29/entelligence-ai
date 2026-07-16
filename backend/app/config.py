@@ -19,6 +19,27 @@ class Settings(BaseSettings):
     BEDROCK_CACHE_TTL_DAYS: int = 30
     BEDROCK_MAX_CONCURRENCY: int = 20
     BATCH_AI_SAMPLE_LIMIT: int = 50
+    VESPA_URL: str = "http://localhost:8080"
+    EMBEDDING_MODEL_ID: str = "cohere.embed-multilingual-v3"
+    EMBEDDING_DIMENSION: int = 1024
+    COHERE_EMBED_BATCH_SIZE: int = 96
+    SEMANTIC_SEARCH_ENABLED: bool = True
+
+    # Mode B — Agentic title matching
+    AGENTIC_TITLE_MATCH_ENABLED: bool = False
+    AGENTIC_CLAUDE_MODEL: str = "global.anthropic.claude-sonnet-5"
+    AGENTIC_TIMEOUT_SECONDS: int = 90
+    AGENTIC_MAX_CANDIDATES: int = 5
+    AGENTIC_TMDB_READ_TOKEN: str = ""
+    AGENTIC_USE_BEDROCK: bool = True
+    # Claude sandbox sidecar URL (set via CLAUDE_SANDBOX_URL env var)
+    CLAUDE_SANDBOX_URL: str = "http://claude-sandbox:3100"
+    AGENTIC_BATCH_MAX_CONCURRENCY: int = 2
+    # S3 bucket backing batch upload/output storage — required because backend,
+    # celery-worker, and celery-agentic-worker are separate containers with no
+    # shared filesystem; a local /tmp path written by one is invisible to another.
+    AGENTIC_BATCH_S3_BUCKET: str = ""
+    AGENTIC_BATCH_S3_REGION: str = "us-east-1"
 
     class Config:
         env_file = ".env"

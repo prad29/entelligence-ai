@@ -1,0 +1,7 @@
+{
+  "name": "claude-sandbox",
+  "version": "1.0.0",
+  "description": "Thin HTTP wrapper around the Claude Code CLI for use as a Docker sidecar",
+  "main": "server.js",
+  "dependencies": {}
+}

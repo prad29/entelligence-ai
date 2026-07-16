@@ -1,5 +1,19 @@
 version: "3.9"
 services:
+  vespa:
+    image: vespaengine/vespa:8
+    ports:
+      - "8080:8080"   # query/feed API
+      - "19071:19071" # config server
+    volumes:
+      - vespa_data:/opt/vespa/var
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:19071/state/v1/health | grep -q 'up'"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
   redis:
     image: redis:7-alpine
     ports:
@@ -26,17 +40,92 @@ services:
 
   backend:
     build: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      VESPA_URL: http://vespa:8080
+      CLAUDE_SANDBOX_URL: http://claude-sandbox:3100
     env_file: .env
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vespa:
+        condition: service_healthy
+      claude-sandbox:
+        condition: service_healthy
+
+  celery-worker:
+    build: ./backend
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q celery
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      VESPA_URL: http://vespa:8080
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vespa:
+        condition: service_healthy
+
+  celery-agentic-worker:
+    build: ./backend
+    # Concurrency must stay equal to settings.AGENTIC_BATCH_MAX_CONCURRENCY
+    # (backend/app/config.py) — these two numbers are coupled and drifting
+    # them apart weakens the concurrency cap on in-flight sandbox calls.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q agentic
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      VESPA_URL: http://vespa:8080
+      REDIS_URL: redis://redis:6379/0
+      CLAUDE_SANDBOX_URL: http://claude-sandbox:3100
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      claude-sandbox:
+        condition: service_healthy
+
+  celery-flower:
+    build: ./backend
+    command: celery -A app.celery_app flower --port=5555
+    env_file: .env
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
+  claude-sandbox:
+    build: ./claude-sandbox
+    environment:
+      CLAUDE_SANDBOX_PORT: "3100"
+      CLAUDE_DEFAULT_TIMEOUT_MS: "90000"
+      DISABLE_AUTOUPDATER: "1"
+      CLAUDE_NO_AUTO_UPDATE: "1"
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+      # Backs the movieweb MCP server's web_search/web_fetch tools — the
+      # only way to get web search inside this container, since Bedrock has
+      # no built-in WebSearch tool.
+      SERPER_API_KEY: "${SERPER_API_KEY:-}"
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3100/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
   frontend:
     build: ./frontend
@@ -48,3 +137,6 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+
+volumes:
+  vespa_data:

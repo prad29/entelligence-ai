@@ -1,4 +1,5 @@
 import csv
+import io
 from typing import Optional
 
 import typer
@@ -36,9 +37,73 @@ def _to_int(value: Optional[str]) -> Optional[int]:
         return None
 
 
-def seed_movie_master(session: Session, path: str, reset: bool = False) -> int:
+def _upsert_rows(session: Session, rows: list[dict]) -> dict:
     from app.models import MovieMaster
 
+    inserted = 0
+    updated = 0
+    skipped = 0
+
+    for i, row in enumerate(rows, start=1):
+        raw_id = _pick(row, _ID_ALIASES)
+        raw_title = _pick(row, _TITLE_ALIASES)
+
+        if not raw_id or not str(raw_id).strip() or not raw_title or not str(raw_title).strip():
+            skipped += 1
+            continue
+
+        row_id = _to_int(raw_id)
+        if row_id is None:
+            skipped += 1
+            continue
+
+        existing = session.get(MovieMaster, row_id)
+        if existing is not None:
+            existing.movie_title = str(raw_title).strip()
+            existing.release_date = _pick(row, _RELEASE_DATE_ALIASES)
+            existing.imdb_id = _pick(row, _IMDB_ALIASES)
+            existing.cover_image = _pick(row, _COVER_ALIASES)
+            existing.director = _pick(row, _DIRECTOR_ALIASES)
+            existing.cast_list = _pick(row, _CAST_ALIASES)
+            existing.running_time = _to_int(_pick(row, _RUNTIME_ALIASES))
+            existing.parent_id = _to_int(_pick(row, _PARENT_ALIASES))
+            existing.search_tags = _pick(row, _TAGS_ALIASES)
+            existing.title_tag = _pick(row, _TITLE_TAG_ALIASES)
+            existing.short_name = _pick(row, _SHORT_NAME_ALIASES)
+            session.add(existing)
+            updated += 1
+        else:
+            record = MovieMaster(
+                id=row_id,
+                movie_title=str(raw_title).strip(),
+                release_date=_pick(row, _RELEASE_DATE_ALIASES),
+                imdb_id=_pick(row, _IMDB_ALIASES),
+                cover_image=_pick(row, _COVER_ALIASES),
+                director=_pick(row, _DIRECTOR_ALIASES),
+                cast_list=_pick(row, _CAST_ALIASES),
+                running_time=_to_int(_pick(row, _RUNTIME_ALIASES)),
+                parent_id=_to_int(_pick(row, _PARENT_ALIASES)),
+                search_tags=_pick(row, _TAGS_ALIASES),
+                title_tag=_pick(row, _TITLE_TAG_ALIASES),
+                short_name=_pick(row, _SHORT_NAME_ALIASES),
+            )
+            session.add(record)
+            inserted += 1
+
+        if (inserted + updated) % 5000 == 0:
+            session.commit()
+
+    session.commit()
+    return {"inserted": inserted, "updated": updated, "skipped": skipped}
+
+
+def seed_from_rows(session: Session, rows: list[dict]) -> dict:
+    """Seed from a list of dicts (used by the API upload endpoint)."""
+    return _upsert_rows(session, rows)
+
+
+def seed_movie_master(session: Session, path: str, reset: bool = False) -> int:
+    """Seed from a CSV file path (used by the CLI)."""
     if reset:
         from sqlalchemy import inspect as sa_inspect
         inspector = sa_inspect(session.get_bind())
@@ -48,60 +113,11 @@ def seed_movie_master(session: Session, path: str, reset: bool = False) -> int:
             session.exec(sa_text("DELETE FROM moviemaster"))
         session.commit()
 
-    count = 0
     with open(path, encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
-        for i, row in enumerate(reader, start=1):
-            raw_id = _pick(row, _ID_ALIASES)
-            raw_title = _pick(row, _TITLE_ALIASES)
+        rows = list(reader)
 
-            if not raw_id or not str(raw_id).strip():
-                typer.echo(f"  Skipping row {i}: missing id or movie_title", err=True)
-                continue
-            if not raw_title or not str(raw_title).strip():
-                typer.echo(f"  Skipping row {i}: missing id or movie_title", err=True)
-                continue
-
-            row_id = _to_int(raw_id)
-            if row_id is None:
-                typer.echo(f"  Skipping row {i}: missing id or movie_title", err=True)
-                continue
-
-            existing = session.get(MovieMaster, row_id)
-            if existing is not None:
-                existing.movie_title = str(raw_title).strip()
-                existing.release_date = _pick(row, _RELEASE_DATE_ALIASES)
-                existing.imdb_id = _pick(row, _IMDB_ALIASES)
-                existing.cover_image = _pick(row, _COVER_ALIASES)
-                existing.director = _pick(row, _DIRECTOR_ALIASES)
-                existing.cast_list = _pick(row, _CAST_ALIASES)
-                existing.running_time = _to_int(_pick(row, _RUNTIME_ALIASES))
-                existing.parent_id = _to_int(_pick(row, _PARENT_ALIASES))
-                existing.search_tags = _pick(row, _TAGS_ALIASES)
-                existing.title_tag = _pick(row, _TITLE_TAG_ALIASES)
-                existing.short_name = _pick(row, _SHORT_NAME_ALIASES)
-                session.add(existing)
-            else:
-                record = MovieMaster(
-                    id=row_id,
-                    movie_title=str(raw_title).strip(),
-                    release_date=_pick(row, _RELEASE_DATE_ALIASES),
-                    imdb_id=_pick(row, _IMDB_ALIASES),
-                    cover_image=_pick(row, _COVER_ALIASES),
-                    director=_pick(row, _DIRECTOR_ALIASES),
-                    cast_list=_pick(row, _CAST_ALIASES),
-                    running_time=_to_int(_pick(row, _RUNTIME_ALIASES)),
-                    parent_id=_to_int(_pick(row, _PARENT_ALIASES)),
-                    search_tags=_pick(row, _TAGS_ALIASES),
-                    title_tag=_pick(row, _TITLE_TAG_ALIASES),
-                    short_name=_pick(row, _SHORT_NAME_ALIASES),
-                )
-                session.add(record)
-
-            count += 1
-            if count % 5000 == 0:
-                session.commit()
-                typer.echo(f"  {count} rows processed...")
-
-    session.commit()
-    return count
+    result = _upsert_rows(session, rows)
+    total = result["inserted"] + result["updated"]
+    typer.echo(f"  inserted={result['inserted']} updated={result['updated']} skipped={result['skipped']}")
+    return total

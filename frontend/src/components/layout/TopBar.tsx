@@ -13,6 +13,8 @@ const pageTitles: Record<string, string> = {
   '/movie-detection': 'AI Movie Format Detection',
   '/movie-formats': 'Master Movie Format List',
   '/movie-review': 'Movie Format Review Queue',
+  '/movie-title-matching': 'Movie Title Matching',
+  '/movie-title-seed': 'Seed Movie Master',
   '/settings': 'Settings',
 }
 

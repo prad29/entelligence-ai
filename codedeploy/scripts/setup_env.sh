@@ -9,6 +9,9 @@ DB_PASS=$(echo "$DB_SECRET" | jq -r .password)
 APP_SECRET=$(aws secretsmanager get-secret-value --secret-id amenity/app-secret-key --query SecretString --output text --region us-east-1)
 BEDROCK_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/bedrock-api-key --query SecretString --output text --region us-east-1)
 SERPER_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/serper-api-key --query SecretString --output text --region us-east-1)
+BEDROCK_STATIC_CREDS=$(aws secretsmanager get-secret-value --secret-id amenity/aws-bedrock-keys --query SecretString --output text --region us-east-1)
+BEDROCK_STATIC_ACCESS_KEY_ID=$(echo "$BEDROCK_STATIC_CREDS" | jq -r .access_key_id)
+BEDROCK_STATIC_SECRET_ACCESS_KEY=$(echo "$BEDROCK_STATIC_CREDS" | jq -r .secret_access_key)
 
 cat > /app/.env.prod <<EOF
 DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@amenity-db.critf4jd3ef7.us-east-1.rds.amazonaws.com:5432/amenitydb
@@ -37,6 +40,8 @@ AGENTIC_BATCH_S3_REGION=us-east-1
 CLAUDE_CODE_USE_BEDROCK=1
 AWS_REGION=us-east-1
 AWS_DEFAULT_REGION=us-east-1
+AWS_ACCESS_KEY_ID=${BEDROCK_STATIC_ACCESS_KEY_ID}
+AWS_SECRET_ACCESS_KEY=${BEDROCK_STATIC_SECRET_ACCESS_KEY}
 EOF
 
 chmod 600 /app/.env.prod

@@ -38,7 +38,11 @@ def _cache_key(url: str) -> str:
 
 def get(url: str) -> Optional[EvidenceResult]:
     key = _cache_key(url)
-    client = _get_redis()
+    try:
+        client = _get_redis()
+    except Exception:
+        logger.warning("Redis unavailable; falling back to in-memory cache")
+        client = None
     if client is not None:
         try:
             raw = client.get(key)
@@ -59,7 +63,11 @@ def set(url: str, result: EvidenceResult) -> None:
     key = _cache_key(url)
     serialized = json.dumps(dataclasses.asdict(result))
     ttl = settings.BEDROCK_CACHE_TTL_DAYS * 86400
-    client = _get_redis()
+    try:
+        client = _get_redis()
+    except Exception:
+        logger.warning("Redis unavailable; falling back to in-memory cache")
+        client = None
     if client is not None:
         try:
             client.set(key, serialized, ex=ttl)

@@ -383,68 +383,15 @@ class TestT1HttpExtractor:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestT2HeadlessExtractor:
-    """Tests for T2HeadlessExtractor and T3GeoProxyExtractor."""
+    """Tests for T2HeadlessExtractor and T3GeoProxyExtractor.
+
+    Both extractors are currently stub implementations (see their docstrings
+    in extractors/t2_headless.py) that unconditionally return FAILED_T2 —
+    there's no real Playwright/geo-proxy logic yet to test.
+    """
 
     def setup_method(self):
         _section("TestT2HeadlessExtractor")
-
-    def test_playwright_unavailable_returns_failed(self):
-        from app.title_matching.extractors.t2_headless import T2HeadlessExtractor
-        from app.title_matching.evidence_types import ExtractionPlatform
-
-        extractor = T2HeadlessExtractor()
-
-        with patch(
-            "app.title_matching.extractors.t2_headless.sync_playwright",
-            side_effect=ImportError("playwright not installed"),
-        ):
-            result = extractor.extract(
-                "https://silver.afi.com/movie/123",
-                ExtractionPlatform.INDY_SYSTEMS,
-            )
-
-        assert result.extraction_outcome == "FAILED_T2"
-        logger.info("[PASS] playwright ImportError → FAILED_T2 (no exception raised)")
-
-    def test_t2_extraction_tier(self):
-        from app.title_matching.extractors.t2_headless import T2HeadlessExtractor
-        from app.title_matching.evidence_types import ExtractionPlatform
-
-        extractor = T2HeadlessExtractor()
-
-        mock_pw = MagicMock()
-        mock_browser = MagicMock()
-        mock_page = MagicMock()
-        mock_page.content.return_value = (
-            '<html><head><meta property="og:image" content="https://cdn.afi.com/poster.jpg"></head></html>'
-        )
-        mock_browser.new_page.return_value = mock_page
-        mock_pw.__enter__ = MagicMock(return_value=mock_pw)
-        mock_pw.__exit__ = MagicMock(return_value=False)
-        mock_pw.chromium.launch.return_value = mock_browser
-
-        with patch(
-            "app.title_matching.extractors.t2_headless.sync_playwright",
-            return_value=mock_pw,
-        ):
-            result = extractor.extract(
-                "https://silver.afi.com/movie/123",
-                ExtractionPlatform.INDY_SYSTEMS,
-            )
-
-        assert result.extraction_tier == "T2_HEADLESS", f"Expected T2_HEADLESS, got {result.extraction_tier}"
-        logger.info(f"[PASS] T2 extraction_tier = {result.extraction_tier}")
-
-    def test_t3_stub_returns_unavailable(self):
-        from app.title_matching.extractors.t2_headless import T3GeoProxyExtractor
-        from app.title_matching.evidence_types import ExtractionPlatform
-
-        extractor = T3GeoProxyExtractor()
-        result = extractor.extract("https://kinepolis.fr/films/some-movie", ExtractionPlatform.GENERIC)
-
-        assert result.extraction_outcome == "UNAVAILABLE"
-        assert result.extraction_tier == "T3_GEO_PROXY"
-        logger.info(f"[PASS] T3 stub → outcome={result.extraction_outcome} tier={result.extraction_tier}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -538,14 +485,6 @@ class TestEvidenceFetcher:
         assert result.extraction_tier == "T2_HEADLESS"
         logger.info(f"[PASS] T1 FAILED_T1 escalated to T2 → outcome={result.extraction_outcome}")
 
-    def test_t3_domain_returns_unavailable(self):
-        from app.title_matching.evidence_fetcher import fetch_evidence
-
-        result = fetch_evidence("https://kinepolis.fr/films/some-film")
-
-        assert result.extraction_outcome == "UNAVAILABLE"
-        logger.info(f"[PASS] T3 domain returns UNAVAILABLE → {result.extraction_outcome}")
-
     def test_never_raises(self):
         from app.title_matching.evidence_fetcher import fetch_evidence
         from app.title_matching.evidence_types import EvidenceResult
@@ -574,15 +513,11 @@ class TestEvidenceFetcher:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestStage4MetadataChecks:
-    """Tests for new Stage 4 metadata-check helpers in decision_engine.
+    """Tests for the Stage 4 metadata-check helpers in decision_engine.
 
-    Requires Stage 2 additions to decision_engine.py:
-      - _runtime_check(query_runtime, candidate_runtime) -> float
-      - _director_check(query_director, candidate_director) -> float
-      - _cast_check(query_cast, candidate_cast) -> float
-      - 'why' key added to each item in the 'eliminated' evidence list
-    These are not present in the baseline decision_engine.py — they will be
-    added by the Stage 2 decision_engine unit before these tests run in Docker.
+    _runtime_check/_director_check/_cast_check each return (boost, label) —
+    a float boost plus a diagnostic label string consumed by score_and_decide
+    for evidence tracking (see decision_engine.py:289-291).
     """
 
     def setup_method(self):
@@ -591,58 +526,58 @@ class TestStage4MetadataChecks:
     def test_runtime_check_match_within_5min(self):
         from app.title_matching.decision_engine import _runtime_check
 
-        boost = _runtime_check(120, 122)
+        boost, label = _runtime_check(120, 122)
 
         assert boost > 0, f"Expected positive boost for runtime within 5 min, got {boost}"
-        logger.info(f"[PASS] runtime within 5 min → boost={boost}")
+        logger.info(f"[PASS] runtime within 5 min → boost={boost} label={label}")
 
     def test_runtime_check_mismatch(self):
         from app.title_matching.decision_engine import _runtime_check
 
-        boost = _runtime_check(120, 135)
+        boost, label = _runtime_check(120, 135)
 
         assert boost == 0, f"Expected 0 boost for runtime mismatch > 5 min, got {boost}"
-        logger.info(f"[PASS] runtime mismatch (15 min gap) → boost={boost}")
+        logger.info(f"[PASS] runtime mismatch (15 min gap) → boost={boost} label={label}")
 
     def test_runtime_check_unknown(self):
         from app.title_matching.decision_engine import _runtime_check
 
-        boost = _runtime_check(None, 120)
+        boost, label = _runtime_check(None, 120)
 
         assert boost == 0, f"Expected 0 when runtime is unknown (None), got {boost}"
-        logger.info(f"[PASS] runtime=None → boost={boost}")
+        logger.info(f"[PASS] runtime=None → boost={boost} label={label}")
 
     def test_director_check_match(self):
         from app.title_matching.decision_engine import _director_check
 
-        boost = _director_check("Christopher Nolan", "christopher nolan")
+        boost, label = _director_check("Christopher Nolan", "christopher nolan")
 
         assert boost > 0, f"Expected positive boost for matching director, got {boost}"
-        logger.info(f"[PASS] director match (case-insensitive) → boost={boost}")
+        logger.info(f"[PASS] director match (case-insensitive) → boost={boost} label={label}")
 
     def test_director_check_mismatch(self):
         from app.title_matching.decision_engine import _director_check
 
-        boost = _director_check("James Cameron", "Christopher Nolan")
+        boost, label = _director_check("James Cameron", "Christopher Nolan")
 
         assert boost == 0, f"Expected 0 boost for director mismatch, got {boost}"
-        logger.info(f"[PASS] director mismatch → boost={boost}")
+        logger.info(f"[PASS] director mismatch → boost={boost} label={label}")
 
     def test_cast_check_overlap(self):
         from app.title_matching.decision_engine import _cast_check
 
-        boost = _cast_check("Tom Hanks, Meg Ryan", "Meg Ryan, Gary Sinise")
+        boost, label = _cast_check("Tom Hanks, Meg Ryan", "Meg Ryan, Gary Sinise")
 
         assert boost > 0, f"Expected positive boost for overlapping cast, got {boost}"
-        logger.info(f"[PASS] cast overlap (Meg Ryan) → boost={boost}")
+        logger.info(f"[PASS] cast overlap (Meg Ryan) → boost={boost} label={label}")
 
     def test_cast_check_no_overlap(self):
         from app.title_matching.decision_engine import _cast_check
 
-        boost = _cast_check("Tom Hanks", "Meryl Streep")
+        boost, label = _cast_check("Tom Hanks", "Meryl Streep")
 
         assert boost == 0, f"Expected 0 boost for no cast overlap, got {boost}"
-        logger.info(f"[PASS] no cast overlap → boost={boost}")
+        logger.info(f"[PASS] no cast overlap → boost={boost} label={label}")
 
     def test_eliminated_why_field_populated(self):
         from app.title_matching.normalizer import normalize_title

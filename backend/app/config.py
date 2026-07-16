@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     # Mode B — Agentic title matching
     AGENTIC_TITLE_MATCH_ENABLED: bool = False
-    AGENTIC_CLAUDE_MODEL: str = "global.anthropic.claude-sonnet-5"
+    AGENTIC_CLAUDE_MODEL: str = "us.anthropic.claude-sonnet-5"
     AGENTIC_TIMEOUT_SECONDS: int = 90
     AGENTIC_MAX_CANDIDATES: int = 5
     AGENTIC_TMDB_READ_TOKEN: str = ""

@@ -87,11 +87,11 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
       {/* Logo */}
       <div className="px-5 py-4 border-b border-zinc-800 dark:border-zinc-800">
         <img src="/logo.png" alt="EntTelligence" className="h-8 w-auto" />
-        <p className="mt-1.5 text-[11px] font-medium tracking-widest text-zinc-400 leading-tight">
-          E.R.I.C.A
+        <p className="mt-1.5 text-[11px] font-medium tracking-widest text-white leading-tight">
+          ERICA
         </p>
-        <p className="mt-0.5 text-[9px] text-zinc-600 leading-tight">
-          Enttelligence Research & Insights Cinematic Assistant
+        <p className="mt-0.5 text-[9px] font-bold text-white leading-tight">
+          Enttelligence Research and Insights Cinematic Agent
         </p>
       </div>
 

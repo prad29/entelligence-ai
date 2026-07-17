@@ -1,5 +1,6 @@
-import { useState, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import api from '@/lib/api'
+import { saveActiveJob, loadActiveJob, clearActiveJob } from '@/lib/persistedJob'
 
 export interface MovieBatchJob {
   job_id: string
@@ -15,10 +16,13 @@ export interface MovieBatchJob {
   error?: string
 }
 
+const STORAGE_NAMESPACE = 'movie-format-detect'
+
 export function useMovieBatchJob() {
   const [job, setJob] = useState<MovieBatchJob | null>(null)
   const [uploading, setUploading] = useState(false)
   const [isActive, setIsActive] = useState(false)
+  const [resuming, setResuming] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -28,6 +32,68 @@ export function useMovieBatchJob() {
       pollRef.current = null
     }
   }
+
+  const startPolling = (jobId: string) => {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const poll = await api.get<MovieBatchJob>(`/api/v1/movie-jobs/${jobId}`)
+        setJob(poll.data)
+        if (poll.data.status === 'completed' || poll.data.status === 'failed') {
+          stopPolling()
+          setIsActive(false)
+          clearActiveJob(STORAGE_NAMESPACE)
+        }
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Polling failed')
+        stopPolling()
+        setIsActive(false)
+        clearActiveJob(STORAGE_NAMESPACE)
+      }
+    }, 2000)
+  }
+
+  useEffect(() => {
+    const persistedJobId = loadActiveJob(STORAGE_NAMESPACE)
+    if (!persistedJobId) {
+      setResuming(false)
+      return
+    }
+
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        const res = await api.get<MovieBatchJob>(`/api/v1/movie-jobs/${persistedJobId}`)
+        if (cancelled) return
+
+        setJob(res.data)
+        if (res.data.status === 'completed' || res.data.status === 'failed') {
+          clearActiveJob(STORAGE_NAMESPACE)
+        } else {
+          setIsActive(true)
+          startPolling(persistedJobId)
+        }
+      } catch {
+        if (!cancelled) {
+          clearActiveJob(STORAGE_NAMESPACE)
+        }
+      } finally {
+        if (!cancelled) setResuming(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      stopPolling()
+    }
+  }, [])
 
   const uploadBatch = async (file: File, includeDiagnostics: boolean, batchAiMode?: string, auditMode?: boolean) => {
     setUploading(true)
@@ -51,21 +117,8 @@ export function useMovieBatchJob() {
       })
 
       const { job_id } = res.data
-
-      pollRef.current = setInterval(async () => {
-        try {
-          const poll = await api.get<MovieBatchJob>(`/api/v1/movie-jobs/${job_id}`)
-          setJob(poll.data)
-          if (poll.data.status === 'completed' || poll.data.status === 'failed') {
-            stopPolling()
-            setIsActive(false)
-          }
-        } catch (e: unknown) {
-          setError(e instanceof Error ? e.message : 'Polling failed')
-          stopPolling()
-          setIsActive(false)
-        }
-      }, 2000)
+      saveActiveJob(STORAGE_NAMESPACE, job_id)
+      startPolling(job_id)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Upload failed')
       setIsActive(false)
@@ -76,10 +129,11 @@ export function useMovieBatchJob() {
 
   const reset = () => {
     stopPolling()
+    clearActiveJob(STORAGE_NAMESPACE)
     setJob(null)
     setError(null)
     setIsActive(false)
   }
 
-  return { job, uploading, isActive, error, uploadBatch, reset }
+  return { job, uploading, isActive, resuming, error, uploadBatch, reset }
 }

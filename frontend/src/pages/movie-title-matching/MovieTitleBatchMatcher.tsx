@@ -12,7 +12,7 @@ function MovieTitleBatchMatcher() {
   const [file, setFile] = useState<File | null>(null)
   const [posterVision, setPosterVision] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const { job, uploading, isActive, error, uploadBatch, reset } = useMovieTitleBatchJob()
+  const { job, uploading, isActive, resuming, error, uploadBatch, reset } = useMovieTitleBatchJob()
 
   const isCompleted = job?.status === 'completed'
   const isFailed = job?.status === 'failed'
@@ -57,8 +57,16 @@ function MovieTitleBatchMatcher() {
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {/* Resuming a persisted job after remount */}
+          {resuming && (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-zinc-500 dark:text-zinc-400">
+              <div className="h-4 w-4 rounded-full border-2 border-violet-600 border-t-transparent animate-spin" />
+              Checking for an in-progress batch…
+            </div>
+          )}
+
           {/* File input */}
-          {!job && (
+          {!job && !resuming && (
             <div className="flex flex-col gap-2">
               <label
                 htmlFor="batch-file"
@@ -119,7 +127,7 @@ function MovieTitleBatchMatcher() {
           )}
 
           {/* Poster vision toggle (visually identical to Single Match) */}
-          {!job && (
+          {!job && !resuming && (
             <button
               type="button"
               onClick={() => setPosterVision(!posterVision)}
@@ -150,7 +158,7 @@ function MovieTitleBatchMatcher() {
           )}
 
           {/* Upload button */}
-          {!job && (
+          {!job && !resuming && (
             <Button
               onClick={() => void handleUpload()}
               loading={uploading}

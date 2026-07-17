@@ -11,7 +11,7 @@ function BatchUploader() {
   const [file, setFile] = useState<File | null>(null)
   const [includeDiagnostics, setIncludeDiagnostics] = useState(false)
   const [auditMode, setAuditMode] = useState(false)
-  const { job, uploading, isActive, error, uploadBatch, reset } = useBatchJob()
+  const { job, uploading, isActive, resuming, error, uploadBatch, reset } = useBatchJob()
 
   const onDrop = useCallback((accepted: File[]) => {
     if (accepted[0]) setFile(accepted[0])
@@ -52,8 +52,16 @@ function BatchUploader() {
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {/* Resuming a persisted job after remount */}
+          {resuming && (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-zinc-500 dark:text-zinc-400">
+              <div className="h-4 w-4 rounded-full border-2 border-violet-600 border-t-transparent animate-spin" />
+              Checking for an in-progress batch…
+            </div>
+          )}
+
           {/* Drop zone */}
-          {!job && (
+          {!job && !resuming && (
             <div
               {...getRootProps()}
               className={cn(
@@ -100,7 +108,7 @@ function BatchUploader() {
           )}
 
           {/* Diagnostics toggle */}
-          {!job && (
+          {!job && !resuming && (
             <label className="flex items-center gap-3 cursor-pointer group">
               <div className="relative">
                 <input
@@ -126,7 +134,7 @@ function BatchUploader() {
           )}
 
           {/* Audit mode toggle */}
-          {!job && (
+          {!job && !resuming && (
             <div className="flex flex-col gap-1.5">
               <label className="flex items-center gap-3 cursor-pointer group">
                 <div className="relative">
@@ -160,7 +168,7 @@ function BatchUploader() {
           )}
 
           {/* Upload button */}
-          {!job && (
+          {!job && !resuming && (
             <Button
               onClick={() => void handleUpload()}
               loading={uploading}

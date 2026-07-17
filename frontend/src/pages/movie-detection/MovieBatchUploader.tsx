@@ -12,7 +12,7 @@ function MovieBatchUploader() {
   const [includeDiagnostics, setIncludeDiagnostics] = useState(false)
   const [batchAiMode, setBatchAiMode] = useState<'skip' | 'sample' | 'full'>('skip')
   const [auditMode, setAuditMode] = useState(false)
-  const { job, uploading, isActive, error, uploadBatch, reset } = useMovieBatchJob()
+  const { job, uploading, isActive, resuming, error, uploadBatch, reset } = useMovieBatchJob()
 
   const onDrop = useCallback((accepted: File[]) => {
     if (accepted[0]) setFile(accepted[0])
@@ -55,8 +55,16 @@ function MovieBatchUploader() {
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {/* Resuming a persisted job after remount */}
+          {resuming && (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-zinc-500 dark:text-zinc-400">
+              <div className="h-4 w-4 rounded-full border-2 border-violet-600 border-t-transparent animate-spin" />
+              Checking for an in-progress batch…
+            </div>
+          )}
+
           {/* Drop zone */}
-          {!job && (
+          {!job && !resuming && (
             <div
               {...getRootProps()}
               className={cn(
@@ -103,7 +111,7 @@ function MovieBatchUploader() {
           )}
 
           {/* Diagnostics toggle */}
-          {!job && (
+          {!job && !resuming && (
             <label className="flex items-center gap-3 cursor-pointer group">
               <div className="relative">
                 <input
@@ -129,7 +137,7 @@ function MovieBatchUploader() {
           )}
 
           {/* AI Mode selector */}
-          {!job && (
+          {!job && !resuming && (
             <div className="flex flex-col gap-1.5">
               <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">AI mode</p>
               <div className="flex gap-2">
@@ -157,7 +165,7 @@ function MovieBatchUploader() {
           )}
 
           {/* Audit mode toggle */}
-          {!job && (
+          {!job && !resuming && (
             <div className="flex flex-col gap-1.5">
               <label className="flex items-center gap-3 cursor-pointer group">
                 <div className="relative">
@@ -191,7 +199,7 @@ function MovieBatchUploader() {
           )}
 
           {/* Upload button */}
-          {!job && (
+          {!job && !resuming && (
             <Button
               onClick={() => void handleUpload()}
               loading={uploading}

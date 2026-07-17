@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM public.ecr.aws/docker/library/node:22-slim
 
 # Claude Code auto-updater tries to write to the install path in containers — disable it
 ENV DISABLE_AUTOUPDATER=1

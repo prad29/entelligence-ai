@@ -13,6 +13,9 @@ Three moving parts:
   the job completed, then cleans up the upload + Redis hash. Idempotent.
 * :func:`dispatch_batch` — builds and applies the chord (group of rows +
   finalize callback). Marks the job failed if it can't even dispatch.
+* :func:`dispatch_batch_task` — Celery task wrapper the upload endpoint
+  enqueues instead of calling ``dispatch_batch`` inline, so the HTTP request
+  returns immediately regardless of file size (see its docstring).
 
 Counter updates use server-side ``column = column + 1`` SQL expressions
 (NEVER a Python read-modify-write) so concurrent workers can't lose an
@@ -281,6 +284,24 @@ def finalize_batch(_row_results, job_id: str) -> None:
         r.delete(_results_key(job_id))
     except Exception as exc:  # noqa: BLE001
         logger.warning("finalize_batch: could not delete redis hash for %s: %s", job_id, exc)
+
+
+@celery.task(
+    name="app.tasks.agentic_match_task.dispatch_batch_task",
+    queue=AGENTIC_QUEUE,
+)
+def dispatch_batch_task(job_id: str) -> None:
+    """Celery task wrapper around :func:`dispatch_batch`.
+
+    The upload endpoint enqueues this instead of calling ``dispatch_batch``
+    inline. Re-parsing the file and publishing one chord member per row is
+    the expensive part of dispatch (network round-trips to Redis, one per
+    row) — for large files this alone can take longer than the ALB/nginx
+    idle timeout if done inside the request. Moving it here means the HTTP
+    response returns as soon as the job row + upload are persisted,
+    regardless of file size.
+    """
+    dispatch_batch(job_id)
 
 
 def dispatch_batch(job_id: str) -> None:

@@ -71,14 +71,19 @@ def _agentic_enabled(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _stub_dispatch_batch(monkeypatch):
-    """Never touch real Celery/Redis/sandbox — dispatch_batch is a no-op."""
+    """Never touch real Celery/Redis/sandbox — dispatch_batch_task.delay is a no-op.
+
+    The router enqueues dispatch_batch_task rather than calling dispatch_batch
+    inline (see movie_title_match.py), so stubbing .delay is what actually
+    intercepts the call in these HTTP+DB-only tests.
+    """
     calls = []
 
-    def _fake_dispatch(job_id):
+    def _fake_delay(job_id):
         calls.append(job_id)
 
     monkeypatch.setattr(
-        "app.tasks.agentic_match_task.dispatch_batch", _fake_dispatch
+        "app.tasks.agentic_match_task.dispatch_batch_task.delay", _fake_delay
     )
     return calls
 

@@ -68,8 +68,11 @@ async def upload_batch(
 
     Requires settings.AGENTIC_TITLE_MATCH_ENABLED (batch matching is Mode B
     only). Validates the file extension, the 3 required columns, and the
-    MAX_BATCH_ROWS cap before dispatching an async Celery chord via
-    dispatch_batch (see app.tasks.agentic_match_task) — never synchronous.
+    MAX_BATCH_ROWS cap, then enqueues dispatch_batch_task (see
+    app.tasks.agentic_match_task) instead of calling dispatch_batch inline.
+    Building the chord re-parses the file and publishes one Celery message
+    per row — for large files that alone can exceed the ALB/nginx idle
+    timeout if done inside the request, so it always runs in the background.
     """
     if not settings.AGENTIC_TITLE_MATCH_ENABLED:
         raise HTTPException(
@@ -78,7 +81,7 @@ async def upload_batch(
         )
 
     from app.models import MovieTitleBatchJob
-    from app.tasks.agentic_match_task import dispatch_batch
+    from app.tasks.agentic_match_task import dispatch_batch_task
     from app.title_matching import batch_io, batch_storage
 
     filename = file.filename or ""
@@ -116,7 +119,7 @@ async def upload_batch(
     session.add(job)
     session.commit()
 
-    dispatch_batch(job_id)
+    dispatch_batch_task.delay(job_id)
 
     return {"job_id": job_id}
 

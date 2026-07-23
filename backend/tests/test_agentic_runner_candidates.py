@@ -172,6 +172,81 @@ class TestDbSearchTrigramFallback:
         assert results == []
 
 
+@pytest.mark.integration
+class TestDbSearchInternational:
+    """Requires the real Postgres DB with moviemasterintl (migration a7b8c9d0e1f2)."""
+
+    _FIXTURE_ROWS = [
+        (910001, "France", "2024-01-01", "Runner Intl Test Movie"),
+        (910001, "Germany", "2024-01-05", "Runner Intl Test Movie"),
+        (910002, "France", "2024-02-01", "Runner Intl Other Country Movie"),
+    ]
+
+    @pytest.fixture(autouse=True)
+    def _seed_and_cleanup_fixtures(self):
+        from sqlmodel import Session, select
+        from app.database import engine
+        from app.models import MovieMasterIntl
+
+        with Session(engine) as session:
+            for movie_id, country, release_date, title in self._FIXTURE_ROWS:
+                existing = session.exec(
+                    select(MovieMasterIntl).where(
+                        MovieMasterIntl.movie_id == movie_id,
+                        MovieMasterIntl.country == country,
+                        MovieMasterIntl.release_date == release_date,
+                    )
+                ).first()
+                if existing is None:
+                    session.add(MovieMasterIntl(
+                        movie_id=movie_id, country=country,
+                        release_date=release_date, movie_title=title,
+                    ))
+            session.commit()
+
+        yield
+
+        with Session(engine) as session:
+            for movie_id, country, release_date, _ in self._FIXTURE_ROWS:
+                row = session.exec(
+                    select(MovieMasterIntl).where(
+                        MovieMasterIntl.movie_id == movie_id,
+                        MovieMasterIntl.country == country,
+                        MovieMasterIntl.release_date == release_date,
+                    )
+                ).first()
+                if row is not None:
+                    session.delete(row)
+            session.commit()
+
+    def test_intl_search_scoped_to_country_excludes_other_countries(self):
+        from app.title_matching.agentic.runner import _db_search
+
+        results = _db_search("Runner Intl Test Movie", market="international", country="France")
+        countries = {r["country"] for r in results}
+        assert countries == {"France"}
+        assert any(r["movie_title"] == "Runner Intl Test Movie" for r in results)
+
+    def test_intl_search_without_country_returns_all_countries(self):
+        from app.title_matching.agentic.runner import _db_search
+
+        results = _db_search("Runner Intl Test Movie", market="international")
+        countries = {r["country"] for r in results}
+        assert countries == {"France", "Germany"}
+
+    def test_intl_search_does_not_leak_domestic_rows(self):
+        """Domestic market must never return a MovieMasterIntl fixture id —
+        _db_search(market="domestic") queries MovieMaster only. The trigram
+        fallback may still surface unrelated real domestic titles for this
+        query (expected fuzzy-match behavior against the full corpus); what
+        matters is that none of the international fixture ids leak through."""
+        from app.title_matching.agentic.runner import _db_search
+
+        domestic_results = _db_search("Runner Intl Other Country Movie", market="domestic")
+        fixture_ids = {movie_id for movie_id, *_ in self._FIXTURE_ROWS}
+        assert not (fixture_ids & {r["id"] for r in domestic_results})
+
+
 # ── Bug 3: NON_MOVIE must never zero out a real DB match ────────────────────
 
 def test_prompt_states_movie_master_contains_non_film_content():
@@ -184,6 +259,44 @@ def test_prompt_states_event_type_is_metadata_only():
     prompt = prompt_builder.build_prompt("some title", None, None, None)
     assert "metadata only" in prompt.lower()
     assert "never a reason to skip matching" in prompt.lower() or "never a reason" in prompt.lower()
+
+
+def test_fetch_vespa_candidates_scopes_source_by_market():
+    """Domestic queries must hit movie_master, international must hit
+    movie_master_intl — never the unscoped `sources *` (which would leak
+    cross-market results now that both document types have real data)."""
+    fake_resp = MagicMock()
+    fake_resp.read.return_value = _vespa_response([])
+    fake_resp.__enter__.return_value = fake_resp
+    fake_resp.__exit__.return_value = False
+
+    with patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
+        _fetch_vespa_candidates("Blue Beetle", market="domestic")
+        domestic_body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
+        assert "from sources movie_master " in domestic_body["yql"]
+        assert "movie_master_intl" not in domestic_body["yql"]
+
+        _fetch_vespa_candidates("Blue Beetle", market="international")
+        intl_body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
+        assert "from sources movie_master_intl " in intl_body["yql"]
+
+
+def test_fetch_vespa_candidates_reads_intl_id_field():
+    hit = {
+        "relevance": 15.0,
+        "fields": {"movie_master_intl_id": 555, "title": "Blue Beetle", "release_date": None},
+    }
+    fake_resp = MagicMock()
+    fake_resp.read.return_value = _vespa_response([hit])
+    fake_resp.__enter__.return_value = fake_resp
+    fake_resp.__exit__.return_value = False
+
+    with patch("urllib.request.urlopen", return_value=fake_resp):
+        candidates = _fetch_vespa_candidates("Blue Beetle", market="international")
+
+    assert candidates == [
+        {"id": 555, "movie_title": "Blue Beetle", "release_date": None, "relevance": 15.0}
+    ]
 
 
 def test_build_result_keeps_non_movie_candidate_id():

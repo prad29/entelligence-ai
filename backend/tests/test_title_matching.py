@@ -26,6 +26,7 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlmodel import select
 
 # ─── logging setup ────────────────────────────────────────────────────────────
 
@@ -868,6 +869,48 @@ class TestAPIEndpoint:
         assert not missing, f"Missing keys: {missing}"
         _pass("API/single", "response_schema", f"all {len(required)} required keys present")
 
+    def test_market_defaults_to_domestic_without_error(self, client_no_engine):
+        """Omitting market entirely must be accepted (defaults to 'domestic')
+        — same request shape as before this field existed."""
+        resp = client_no_engine.post(
+            "/api/v1/movie-title-match/single",
+            json={"title": "Inception", "show_date": "2010-07-16"}
+        )
+        assert resp.status_code == 200
+        _pass("API/single", "market_default_domestic", f"status={resp.status_code}")
+
+    def test_international_without_country_returns_422(self, client_no_engine):
+        resp = client_no_engine.post(
+            "/api/v1/movie-title-match/single",
+            json={"title": "Blue Beetle", "market": "international"}
+        )
+        assert resp.status_code == 422
+        _pass("API/single", "intl_missing_country_422", f"status={resp.status_code}")
+
+    def test_international_with_blank_country_returns_422(self, client_no_engine):
+        resp = client_no_engine.post(
+            "/api/v1/movie-title-match/single",
+            json={"title": "Blue Beetle", "market": "international", "country": "   "}
+        )
+        assert resp.status_code == 422
+        _pass("API/single", "intl_blank_country_422", f"status={resp.status_code}")
+
+    def test_international_with_country_accepted(self, client_no_engine):
+        resp = client_no_engine.post(
+            "/api/v1/movie-title-match/single",
+            json={"title": "Blue Beetle", "market": "international", "country": "France"}
+        )
+        assert resp.status_code == 200
+        _pass("API/single", "intl_with_country_accepted", f"status={resp.status_code}")
+
+    def test_invalid_market_value_returns_422(self, client_no_engine):
+        resp = client_no_engine.post(
+            "/api/v1/movie-title-match/single",
+            json={"title": "Inception", "market": "not-a-real-market"}
+        )
+        assert resp.status_code == 422
+        _pass("API/single", "invalid_market_422", f"status={resp.status_code}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEED LOADER — upsert logic
@@ -970,3 +1013,138 @@ class TestSeedLoader:
         assert result["skipped"] == 1
         _pass("SeedLoader", "mixed_batch",
               f"inserted={result['inserted']} updated={result['updated']} skipped={result['skipped']}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEED LOADER — international (moviemasterintl), grain (movie_id, country,
+# release_date). Uses a real in-memory sqlite DB (not a mocked session) so the
+# unique-constraint / upsert-by-triple behavior is genuinely exercised.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSeedLoaderIntl:
+    """seed_intl_from_rows: null-string coercion, undefined-country skip, per-triple upsert."""
+
+    def setup_method(self):
+        _section("SEED LOADER (INTL) — per-country/date upsert logic")
+
+    def _make_session(self):
+        from sqlmodel import Session, SQLModel, create_engine
+        from sqlmodel.pool import StaticPool
+
+        engine = create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        )
+        SQLModel.metadata.create_all(engine)
+        return Session(engine)
+
+    def test_null_string_coercion(self):
+        from app.title_matching.seed_loader import seed_intl_from_rows
+        from app.models import MovieMasterIntl
+
+        session = self._make_session()
+        rows = [{
+            "id": "1", "movie_id": "100", "movie_title": "Blue Beetle",
+            "country": "France", "release_date": "2023-08-16",
+            "rating": "null", "genre2": "null", "running_time": "null",
+        }]
+        result = seed_intl_from_rows(session, rows)
+        assert result["inserted"] == 1
+        row = session.exec(
+            select(MovieMasterIntl)
+        ).first()
+        assert row.rating is None
+        assert row.genre2 is None
+        assert row.running_time is None
+        _pass("SeedLoaderIntl", "null_string_coercion", "rating/genre2/running_time coerced to None")
+
+    def test_undefined_country_is_skipped(self):
+        from app.title_matching.seed_loader import seed_intl_from_rows
+
+        session = self._make_session()
+        rows = [{
+            "id": "1", "movie_id": "100", "movie_title": "Demon Slayer",
+            "country": "undefined", "release_date": "2025-09-25",
+        }]
+        result = seed_intl_from_rows(session, rows)
+        assert result["skipped_undefined_country"] == 1
+        assert result["inserted"] == 0
+        _pass("SeedLoaderIntl", "undefined_country_skipped",
+              f"skipped_undefined_country={result['skipped_undefined_country']}")
+
+    def test_same_movie_id_different_countries_both_retained(self):
+        from app.title_matching.seed_loader import seed_intl_from_rows
+        from app.models import MovieMasterIntl
+
+        session = self._make_session()
+        rows = [
+            {"id": "1", "movie_id": "16456", "movie_title": "Blue Beetle",
+             "country": "France", "release_date": "2023-08-16"},
+            {"id": "2", "movie_id": "16456", "movie_title": "Blue Beetle",
+             "country": "Germany", "release_date": "2023-08-17"},
+        ]
+        result = seed_intl_from_rows(session, rows)
+        assert result["inserted"] == 2
+        rows_in_db = session.exec(
+            select(MovieMasterIntl).where(MovieMasterIntl.movie_id == 16456)
+        ).all()
+        assert len(rows_in_db) == 2
+        _pass("SeedLoaderIntl", "same_movie_id_multi_country", f"rows={len(rows_in_db)}")
+
+    def test_same_country_different_release_dates_both_retained(self):
+        """Same movie_id + country re-released on a different date must not collide."""
+        from app.title_matching.seed_loader import seed_intl_from_rows
+        from app.models import MovieMasterIntl
+
+        session = self._make_session()
+        rows = [
+            {"id": "1", "movie_id": "20310", "movie_title": "Expend4bles",
+             "country": "Japan", "release_date": "2023-09-21"},
+            {"id": "2", "movie_id": "20310", "movie_title": "Expend4bles",
+             "country": "Japan", "release_date": "2024-01-12"},
+        ]
+        result = seed_intl_from_rows(session, rows)
+        assert result["inserted"] == 2
+        rows_in_db = session.exec(
+            select(MovieMasterIntl).where(MovieMasterIntl.movie_id == 20310)
+        ).all()
+        assert len(rows_in_db) == 2
+        _pass("SeedLoaderIntl", "same_country_diff_release_date", f"rows={len(rows_in_db)}")
+
+    def test_exact_triple_duplicate_upserts_in_place(self):
+        """Same (movie_id, country, release_date) seen twice updates, does not duplicate."""
+        from app.title_matching.seed_loader import seed_intl_from_rows
+        from app.models import MovieMasterIntl
+
+        session = self._make_session()
+        rows = [
+            {"id": "1", "movie_id": "133231", "movie_title": "Fiume o Morte!",
+             "country": "Sint Maarten", "release_date": "2025-04-04", "genre": "Documentary"},
+            {"id": "2", "movie_id": "133231", "movie_title": "Fiume o Morte!",
+             "country": "Sint Maarten", "release_date": "2025-04-04", "genre": "Documentary"},
+        ]
+        result = seed_intl_from_rows(session, rows)
+        assert result["inserted"] == 1
+        assert result["updated"] == 1
+        rows_in_db = session.exec(
+            select(MovieMasterIntl).where(MovieMasterIntl.movie_id == 133231)
+        ).all()
+        assert len(rows_in_db) == 1
+        _pass("SeedLoaderIntl", "exact_triple_duplicate_upsert", f"rows={len(rows_in_db)}")
+
+    def test_usa_rows_retained_unfiltered(self):
+        """USA rows in the international dump are not special-cased or filtered out."""
+        from app.title_matching.seed_loader import seed_intl_from_rows
+        from app.models import MovieMasterIntl
+
+        session = self._make_session()
+        rows = [{
+            "id": "1", "movie_id": "18028", "movie_title": "Black Box (2020)",
+            "country": "USA", "release_date": "2020-10-06",
+        }]
+        result = seed_intl_from_rows(session, rows)
+        assert result["inserted"] == 1
+        row = session.exec(
+            select(MovieMasterIntl).where(MovieMasterIntl.country == "USA")
+        ).first()
+        assert row is not None
+        _pass("SeedLoaderIntl", "usa_rows_retained", "USA country row inserted, not filtered")

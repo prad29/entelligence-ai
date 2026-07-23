@@ -29,13 +29,15 @@ def run_agentic_match(
     theater: Optional[str] = None,
     ticketing_url: Optional[str] = None,
     use_poster_vision: bool = False,
+    market: str = "domestic",
+    country: Optional[str] = None,
 ) -> TitleMatchResult:
     _check_sandbox_reachable()
 
     # Pre-fetch DB candidates before calling the sandbox so the agent
     # never needs to call localhost (the sidecar can't reach compose services).
-    db_candidates = _fetch_db_candidates(title)
-    vespa_candidates = _fetch_vespa_candidates(title)
+    db_candidates = _fetch_db_candidates(title, market=market, country=country)
+    vespa_candidates = _fetch_vespa_candidates(title, market=market)
 
     if use_poster_vision:
         _annotate_poster_availability(db_candidates)
@@ -45,6 +47,8 @@ def run_agentic_match(
         db_candidates=db_candidates,
         vespa_candidates=vespa_candidates,
         use_poster_vision=use_poster_vision,
+        market=market,
+        country=country,
     )
 
     # Built-in WebSearch is unavailable under Bedrock (CLAUDE_CODE_USE_BEDROCK=1
@@ -96,7 +100,7 @@ def run_agentic_match(
         )
         # Strip parentheticals from Claude's identified title (e.g. "The Odyssey (L'Odyssée)" → "The Odyssey")
         post_query = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", result.suggested_movie_title).strip(" -:")
-        post_hits = _db_search(post_query or result.suggested_movie_title)
+        post_hits = _db_search(post_query or result.suggested_movie_title, market=market, country=country)
 
         # An ordinal is a hard constraint the agent may have already used to
         # reject a DB row (e.g. discarding a "Part 2" candidate for a "Part 5"
@@ -207,7 +211,9 @@ def _check_sandbox_reachable() -> None:
         )
 
 
-def _fetch_db_candidates(title: str) -> list[dict]:
+def _fetch_db_candidates(
+    title: str, market: str = "domestic", country: Optional[str] = None,
+) -> list[dict]:
     """Best-effort keyword pre-fetch via direct DB query (avoids HTTP self-call deadlock).
     Claude does the real identification — this just gives it a head start."""
     try:
@@ -217,14 +223,16 @@ def _fetch_db_candidates(title: str) -> list[dict]:
             if after:
                 bare = after
         bare = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", bare).strip(" -:")
-        return _db_search(bare or title)
+        return _db_search(bare or title, market=market, country=country)
     except Exception as exc:
         logger.warning("db_candidate_fetch_failed title=%r error=%s", title, exc)
         return []
 
 
-def _db_search(query: str) -> list[dict]:
-    """Search Movie Master via direct DB query.
+def _db_search(
+    query: str, market: str = "domestic", country: Optional[str] = None,
+) -> list[dict]:
+    """Search Movie Master (or MovieMasterIntl, scoped by country) via direct DB query.
 
     Tries an ILIKE substring match first (fast, precise for exact/near-exact
     queries). Falls back to a pg_trgm similarity search (with unaccent) when
@@ -235,15 +243,22 @@ def _db_search(query: str) -> list[dict]:
     """
     try:
         from sqlmodel import Session, select
-        from app.models import MovieMaster
         from app.database import engine as db_engine
 
         with Session(db_engine) as session:
-            stmt = (
-                select(MovieMaster)
-                .where(MovieMaster.movie_title.ilike(f"%{query}%"))
-                .limit(20)
-            )
+            if market == "international":
+                from app.models import MovieMasterIntl as Model
+                stmt = select(Model).where(Model.movie_title.ilike(f"%{query}%"))
+                if country:
+                    stmt = stmt.where(Model.country == country)
+                stmt = stmt.limit(20)
+            else:
+                from app.models import MovieMaster as Model
+                stmt = (
+                    select(Model)
+                    .where(Model.movie_title.ilike(f"%{query}%"))
+                    .limit(20)
+                )
             rows = session.exec(stmt).all()
 
             if rows:
@@ -255,7 +270,19 @@ def _db_search(query: str) -> list[dict]:
                     key=lambda r: (r.movie_title.lower() != query.lower(), len(r.movie_title)),
                 )
             else:
-                rows = _trigram_search(session, MovieMaster, query)
+                rows = _trigram_search(session, Model, query, country=country if market == "international" else None)
+
+            if market == "international":
+                return [
+                    {
+                        "id": r.id,
+                        "movie_title": r.movie_title,
+                        "release_date": str(r.release_date) if r.release_date else None,
+                        "cover_image": "",
+                        "country": r.country,
+                    }
+                    for r in rows
+                ]
 
             return [
                 {
@@ -271,38 +298,39 @@ def _db_search(query: str) -> list[dict]:
         return []
 
 
-def _trigram_search(session, movie_master_model, query: str) -> list:
+def _trigram_search(session, master_model, query: str, country: Optional[str] = None) -> list:
     """pg_trgm + unaccent similarity fallback, ranked by similarity descending.
 
     Requires the pg_trgm/unaccent extensions and the trigram index added by
     migration f6a1b2c3d4e5. Returns [] (never raises) if unavailable so a
     missing migration degrades to "no fallback candidates" rather than
-    failing the whole pre-fetch.
+    failing the whole pre-fetch. When country is given (international path),
+    scopes the fallback to that country too.
     """
     from sqlmodel import select
     from sqlalchemy import func
 
     try:
-        unaccented_title = func.unaccent(movie_master_model.movie_title)
+        unaccented_title = func.unaccent(master_model.movie_title)
         unaccented_query = func.unaccent(query)
         similarity = func.similarity(unaccented_title, unaccented_query)
-        stmt = (
-            select(movie_master_model)
-            .where(unaccented_title.op("%")(unaccented_query))
-            .order_by(similarity.desc())
-            .limit(20)
-        )
+        stmt = select(master_model).where(unaccented_title.op("%")(unaccented_query))
+        if country:
+            stmt = stmt.where(master_model.country == country)
+        stmt = stmt.order_by(similarity.desc()).limit(20)
         return list(session.exec(stmt).all())
     except Exception as exc:
         logger.debug("trigram_search_failed query=%r error=%s", query, exc)
         return []
 
 
-def _fetch_vespa_candidates(title: str) -> list[dict]:
-    """Hybrid semantic+BM25 search against Vespa."""
+def _fetch_vespa_candidates(title: str, market: str = "domestic") -> list[dict]:
+    """Hybrid semantic+BM25 search against Vespa, scoped to the market's document type."""
+    schema = "movie_master_intl" if market == "international" else "movie_master"
+    id_field = "movie_master_intl_id" if market == "international" else "movie_master_id"
     try:
         body = json.dumps({
-            "yql": "select * from sources * where userQuery()",
+            "yql": f"select * from sources {schema} where userQuery()",
             "query": title,
             "ranking": "hybrid",
             "hits": 10,
@@ -317,7 +345,7 @@ def _fetch_vespa_candidates(title: str) -> list[dict]:
             hits = data.get("root", {}).get("children", [])
             return [
                 {
-                    "id": h.get("fields", {}).get("movie_master_id"),
+                    "id": h.get("fields", {}).get(id_field),
                     "movie_title": h.get("fields", {}).get("title"),
                     "release_date": h.get("fields", {}).get("release_date"),
                     "relevance": h.get("relevance"),
@@ -342,7 +370,10 @@ async def run_agentic_match_async(
     theater: Optional[str] = None,
     ticketing_url: Optional[str] = None,
     use_poster_vision: bool = False,
+    market: str = "domestic",
+    country: Optional[str] = None,
 ) -> TitleMatchResult:
     return await asyncio.to_thread(
         run_agentic_match, title, show_date, theater, ticketing_url, use_poster_vision,
+        market, country,
     )

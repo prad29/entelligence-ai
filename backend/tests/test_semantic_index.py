@@ -196,6 +196,8 @@ class TestVespaSemanticIndexSearch:
         from app.title_matching.semantic_index import VespaSemanticIndex
         idx = VespaSemanticIndex.__new__(VespaSemanticIndex)
         idx._settings = _make_settings()
+        idx._schema = "movie_master"
+        idx._id_field = "movie_master_id"
         return idx
 
     def test_returns_results(self, index):
@@ -317,7 +319,7 @@ class TestBuildSemanticIndex:
         already_indexed = {master_rows[0]["id"]}
         fed_rows = []
 
-        def _fake_feed(vespa_url, rows, embs):
+        def _fake_feed(vespa_url, rows, embs, schema=None):
             fed_rows.extend(rows)
             return len(rows)
 

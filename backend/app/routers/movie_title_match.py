@@ -454,3 +454,77 @@ async def seed_master_intl(
         "skipped_undefined_country": result["skipped_undefined_country"],
         "total_in_file": len(rows),
     }
+
+
+def _serialize_sync_job(job) -> dict:
+    progress = (job.processed / job.total) if job.total > 0 else 0
+    return {
+        "job_id": job.id,
+        "market": job.market,
+        "status": job.status,
+        "total": job.total,
+        "processed": job.processed,
+        "progress": progress,
+        "inserted": job.inserted,
+        "updated": job.updated,
+        "skipped": job.skipped,
+        "skipped_undefined_country": job.skipped_undefined_country,
+        "error": job.error,
+    }
+
+
+@router.post("/master/sync/{market}")
+async def sync_master_from_prod_db(
+    market: Literal["domestic", "international"],
+    session: Session = Depends(get_session),
+):
+    """Sync MovieMaster/MovieMasterIntl from the production MySQL DB
+    (fq_movie_master / fq_movie_master_intl) as a background Celery job,
+    mirroring the /batch upload's job+poll pattern rather than running
+    inline like /master/seed — a full-table fetch+upsert (~46K domestic /
+    ~158K international rows) risks the same ALB/nginx idle timeout the
+    batch upload flow was already changed to avoid.
+
+    If a sync for this market is already queued/processing, returns that
+    job instead of starting a second one — prevents two full-table syncs
+    racing each other and double-triggering the Vespa reindex.
+    """
+    from sqlmodel import select
+    from app.models import MovieMasterSyncJob
+
+    in_flight = session.exec(
+        select(MovieMasterSyncJob)
+        .where(MovieMasterSyncJob.market == market)
+        .where(MovieMasterSyncJob.status.in_(["queued", "processing"]))
+        .order_by(MovieMasterSyncJob.created_at.desc())
+    ).first()
+    if in_flight is not None:
+        return {"job_id": in_flight.id, "status": in_flight.status}
+
+    job = MovieMasterSyncJob(market=market)
+    session.add(job)
+    session.commit()
+
+    if market == "international":
+        from app.tasks.prod_db_sync_task import sync_movie_master_intl_task
+        sync_movie_master_intl_task.delay(job.id)
+    else:
+        from app.tasks.prod_db_sync_task import sync_movie_master_task
+        sync_movie_master_task.delay(job.id)
+
+    return {"job_id": job.id, "status": job.status}
+
+
+@router.get("/master/sync/{market}/{job_id}")
+async def get_master_sync_job(
+    market: Literal["domestic", "international"],
+    job_id: str,
+    session: Session = Depends(get_session),
+):
+    from app.models import MovieMasterSyncJob
+
+    job = session.get(MovieMasterSyncJob, job_id)
+    if job is None or job.market != market:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return _serialize_sync_job(job)

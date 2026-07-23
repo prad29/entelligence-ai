@@ -1,7 +1,9 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
-import { Upload, CheckCircle2, AlertCircle, Database, FileSpreadsheet, Loader2, Globe2 } from 'lucide-react'
+import { Upload, CheckCircle2, AlertCircle, Database, FileSpreadsheet, Loader2, Globe2, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useMovieMasterSeed, type MovieMasterMarket } from '@/hooks/useMovieMasterSeed'
+import { useMovieMasterSync } from '@/hooks/useMovieMasterSync'
+import { Progress } from '@/components/ui/Progress'
 
 function StatBadge({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
   return (
@@ -98,6 +100,7 @@ function MarketToggle({ market, onChange }: { market: MovieMasterMarket; onChang
 function MovieMasterSeedPage() {
   const [market, setMarket] = useState<MovieMasterMarket>('domestic')
   const { loading, result, error, uploadFile, fetchCount, reset } = useMovieMasterSeed(market)
+  const { job: syncJob, syncing, error: syncError, startSync, reset: resetSync } = useMovieMasterSync(market)
   const [currentCount, setCurrentCount] = useState<number | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
 
@@ -105,10 +108,18 @@ function MovieMasterSeedPage() {
     fetchCount().then(setCurrentCount)
   }, [market])
 
+  useEffect(() => {
+    if (syncJob?.status === 'completed') {
+      fetchCount().then(setCurrentCount)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncJob?.status])
+
   function handleMarketChange(next: MovieMasterMarket) {
     setMarket(next)
     setSelectedFile(null)
     reset()
+    resetSync()
   }
 
   function handleFile(file: File) {
@@ -124,6 +135,10 @@ function MovieMasterSeedPage() {
   }
 
   const isIntl = market === 'international'
+  const syncProgressPct = syncJob && syncJob.total > 0 ? Math.round((syncJob.processed / syncJob.total) * 100) : 0
+  const syncCompleted = syncJob?.status === 'completed'
+  const syncFailed = syncJob?.status === 'failed'
+  const syncRunning = syncing && !syncCompleted && !syncFailed
 
   return (
     <div className="max-w-2xl mx-auto flex flex-col gap-6 py-6">
@@ -164,6 +179,77 @@ function MovieMasterSeedPage() {
 
       {/* Drop zone */}
       <DropZone onFile={handleFile} disabled={loading} />
+
+      {/* Sync from Production DB */}
+      <div className="flex items-center gap-3">
+        <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+        <span className="text-xs font-medium text-zinc-400">or</span>
+        <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+      </div>
+
+      <button
+        onClick={() => void startSync()}
+        disabled={syncing || loading}
+        className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-3 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:border-[#4A9FD4]/50 hover:bg-[#4A9FD4]/5 disabled:opacity-60 transition-colors"
+      >
+        {syncRunning ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Syncing…
+          </>
+        ) : (
+          <>
+            <RefreshCw className="h-4 w-4" />
+            Sync from Production DB
+          </>
+        )}
+      </button>
+
+      {/* Sync progress */}
+      {syncJob && (syncRunning || syncJob.status === 'queued') && (
+        <div className="flex flex-col gap-1.5 rounded-xl border border-[#4A9FD4]/20 bg-[#4A9FD4]/5 px-4 py-3">
+          <Progress value={syncProgressPct} />
+          <div className="flex items-center justify-between text-xs text-[#4A9FD4]">
+            <span>{syncProgressPct}%</span>
+            <span>{syncJob.processed.toLocaleString()} / {syncJob.total.toLocaleString()} rows</span>
+          </div>
+        </div>
+      )}
+
+      {/* Sync error */}
+      {(syncError || syncFailed) && (
+        <div className="flex items-start gap-3 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 px-4 py-3">
+          <AlertCircle className="h-5 w-5 shrink-0 text-red-500 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-red-700 dark:text-red-400">Sync failed</p>
+            <p className="mt-0.5 text-xs text-red-600 dark:text-red-500">{syncError || syncJob?.error}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Sync success result */}
+      {syncCompleted && (
+        <div className="flex flex-col gap-4 rounded-2xl border border-emerald-200 dark:border-emerald-800/50 bg-emerald-50 dark:bg-emerald-950/20 px-5 py-5">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Sync complete</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <StatBadge label="Inserted" value={syncJob.inserted} accent />
+            <StatBadge label="Updated" value={syncJob.updated} />
+            <StatBadge label="Skipped" value={syncJob.skipped} />
+            {isIntl && (
+              <StatBadge label="Skipped (no country)" value={syncJob.skipped_undefined_country ?? 0} />
+            )}
+          </div>
+          <button
+            onClick={resetSync}
+            className="self-start rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-colors"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Selected file + upload button */}
       {selectedFile && !result && (

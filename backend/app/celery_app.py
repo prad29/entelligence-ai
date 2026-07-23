@@ -9,6 +9,7 @@ celery = Celery(
         "app.tasks.semantic_tasks",
         "app.tasks.agentic_match_task",
         "app.tasks.agentic_intl_match_task",
+        "app.tasks.prod_db_sync_task",
     ],
 )
 

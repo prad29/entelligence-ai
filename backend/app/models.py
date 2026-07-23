@@ -174,6 +174,39 @@ class MovieTitleIntlBatchJob(SQLModel, table=True):
     stats: Optional[str] = None  # JSON string
 
 
+class MovieMasterSyncJob(SQLModel, table=True):
+    """Background job for syncing MovieMaster/MovieMasterIntl from the
+    production MySQL DB (fq_movie_master / fq_movie_master_intl).
+
+    Uses a single shared table with a `market` discriminator column,
+    deliberately DIFFERENT from the one-table-per-market convention used for
+    MovieTitleBatchJob/MovieTitleIntlBatchJob above. Those are split because
+    each market's *processing logic* differs materially (country param,
+    different prompt); this sync job's lifecycle/fields are identical for
+    both markets and only the source query differs, so a discriminator
+    column avoids two near-duplicate tables for no benefit.
+
+    This sync is upsert-only in both directions (Postgres and Vespa) — it
+    never deletes MovieMaster/MovieMasterIntl rows that were removed
+    upstream in the production MySQL tables, nor removes stale Vespa
+    documents. A "sync" in the everyday sense implies mirroring deletions
+    too; this feature deliberately does not do that in v1.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    market: str  # "domestic" | "international"
+    status: str = Field(default="queued")  # queued|processing|completed|failed
+    total: int = Field(default=0)
+    processed: int = Field(default=0)
+    inserted: int = Field(default=0)
+    updated: int = Field(default=0)
+    skipped: int = Field(default=0)
+    skipped_undefined_country: int = Field(default=0)  # international only; always 0 for domestic
+    error: Optional[str] = None  # top-level job failure message, scrubbed of connection details
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    ttl: Optional[datetime] = None
+
+
 class MovieMasterIntl(SQLModel, table=True):
     """International Movie Master, grain (movie_id, country, release_date)."""
 

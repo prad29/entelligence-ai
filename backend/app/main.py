@@ -109,6 +109,57 @@ async def _attach_semantic_index_when_ready(application) -> None:
             _log.debug("semantic_watcher: error during attach attempt: %s", exc)
 
 
+async def _refresh_engine_when_sync_dirty(application) -> None:
+    """
+    Poll Redis every 15 s for the movie_master_sync:dirty signal set by
+    sync_movie_master_task (app/tasks/prod_db_sync_task.py) on completion,
+    and rebuild the fuzzy/alias TitleMatchEngine when it appears.
+
+    Mirrors _attach_semantic_index_when_ready's Redis-signal pattern above —
+    that watcher only attaches a Vespa index reference onto an already-built
+    engine; it does not reload the engine's underlying master_rows snapshot,
+    which is the concern this watcher exists for. Without this, rows synced
+    from the production DB stay invisible to fuzzy/alias matching (though
+    still reachable via Vespa semantic search once the reindex task
+    finishes) until the next app restart or CSV upload.
+    """
+    import asyncio
+    import logging
+
+    _log = logging.getLogger(__name__)
+    poll_interval = 15  # seconds
+
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.REDIS_URL)
+    except Exception as exc:
+        _log.warning("sync_watcher: cannot connect to Redis: %s", exc)
+        return
+
+    from app.tasks.prod_db_sync_task import MOVIE_MASTER_SYNC_DIRTY_KEY
+
+    while True:
+        await asyncio.sleep(poll_interval)
+        try:
+            if not r.get(MOVIE_MASTER_SYNC_DIRTY_KEY):
+                continue
+
+            from app.database import engine as db_engine
+            from sqlmodel import Session
+            from app.title_matching.loader import build_title_match_engine
+            from app.title_matching.engine import TitleMatchEngine
+
+            with Session(db_engine) as session:
+                gen, aliases = build_title_match_engine(session)
+                application.state.title_match_engine = TitleMatchEngine(gen, aliases)
+
+            r.delete(MOVIE_MASTER_SYNC_DIRTY_KEY)
+            _log.info("sync_watcher: title_match_engine rebuilt after production DB sync")
+
+        except Exception as exc:
+            _log.debug("sync_watcher: error during refresh attempt: %s", exc)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     """
@@ -160,3 +211,8 @@ async def startup() -> None:
         # Poll Redis in the background and attach VespaSemanticIndex once ready.
         import asyncio as _asyncio
         _asyncio.ensure_future(_attach_semantic_index_when_ready(app))
+
+    # Poll Redis in the background and rebuild the fuzzy/alias engine after
+    # a production DB sync completes (see sync_movie_master_task).
+    import asyncio as _asyncio
+    _asyncio.ensure_future(_refresh_engine_when_sync_dirty(app))

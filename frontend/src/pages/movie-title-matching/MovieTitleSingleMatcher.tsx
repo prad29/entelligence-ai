@@ -7,6 +7,7 @@ import { MovieTitleMatchCard } from './MovieTitleMatchCard'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card'
 import { Clapperboard, Eye, RotateCcw, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { Market } from './MovieTitleMatchingPage'
 
 const EXAMPLE_CHIPS = [
   'Moana (Live Action)',
@@ -21,22 +22,31 @@ const EXAMPLE_CHIPS = [
   'HP (OV 1-4) Germany',
 ]
 
-function MovieTitleSingleMatcher() {
+interface MovieTitleSingleMatcherProps {
+  market: Market
+}
+
+function MovieTitleSingleMatcher({ market }: MovieTitleSingleMatcherProps) {
   const [title, setTitle] = useState('')
   const [theater, setTheater] = useState('')
   const [showDate, setShowDate] = useState('')
   const [ticketingUrl, setTicketingUrl] = useState('')
+  const [country, setCountry] = useState('')
   const [posterVision, setPosterVision] = useState(false)
   const { result, loading, error, match, reset } = useMovieTitleMatch()
 
+  const isIntl = market === 'international'
+
   const handleMatch = async () => {
     if (!title.trim()) return
+    if (isIntl && !country.trim()) return
     await match({
       title: title.trim(),
       ...(theater.trim() ? { theater: theater.trim() } : {}),
       ...(showDate ? { show_date: showDate } : {}),
       ...(ticketingUrl.trim() ? { ticketing_url: ticketingUrl.trim() } : {}),
       ...(posterVision ? { use_poster_vision: true } : {}),
+      ...(isIntl ? { market: 'international', country: country.trim() } : {}),
     })
   }
 
@@ -50,6 +60,7 @@ function MovieTitleSingleMatcher() {
     setTheater('')
     setShowDate('')
     setTicketingUrl('')
+    setCountry('')
     setPosterVision(false)
     reset()
   }
@@ -138,6 +149,15 @@ function MovieTitleSingleMatcher() {
             onChange={(e) => setTicketingUrl(e.target.value)}
             placeholder="https://..."
           />
+          {isIntl && (
+            <Input
+              label="Country"
+              id="country"
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+              placeholder="e.g. France"
+            />
+          )}
 
           {/* Poster vision toggle */}
           <button
@@ -173,13 +193,13 @@ function MovieTitleSingleMatcher() {
             <Button
               onClick={() => void handleMatch()}
               loading={loading}
-              disabled={!title.trim()}
+              disabled={!title.trim() || (isIntl && !country.trim())}
               className="flex-1"
             >
               <Search className="h-4 w-4" />
               Find Match
             </Button>
-            {(title || theater || showDate || ticketingUrl || result) && (
+            {(title || theater || showDate || ticketingUrl || country || result) && (
               <Button variant="ghost" size="icon" onClick={handleReset} aria-label="Reset">
                 <RotateCcw className="h-4 w-4" />
               </Button>

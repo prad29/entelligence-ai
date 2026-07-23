@@ -7,6 +7,8 @@ export interface MovieTitleMatchPayload {
   show_date?: string
   ticketing_url?: string
   use_poster_vision?: boolean
+  market?: 'domestic' | 'international'
+  country?: string
 }
 
 export interface EliminatedCandidate {

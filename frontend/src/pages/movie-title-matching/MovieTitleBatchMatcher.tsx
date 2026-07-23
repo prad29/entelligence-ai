@@ -5,14 +5,20 @@ import { Progress } from '@/components/ui/Progress'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card'
 import { UploadCloud, FileSpreadsheet, Eye, X, Download, CheckCircle2, AlertCircle, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { Market } from './MovieTitleMatchingPage'
 
 const ACCEPTED_EXTENSIONS = '.csv,.xlsx'
 
-function MovieTitleBatchMatcher() {
+interface MovieTitleBatchMatcherProps {
+  market: Market
+}
+
+function MovieTitleBatchMatcher({ market }: MovieTitleBatchMatcherProps) {
   const [file, setFile] = useState<File | null>(null)
   const [posterVision, setPosterVision] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const { job, uploading, isActive, resuming, error, uploadBatch, reset } = useMovieTitleBatchJob()
+  const { job, uploading, isActive, resuming, error, uploadBatch, reset } = useMovieTitleBatchJob(market)
+  const isIntl = market === 'international'
 
   const isCompleted = job?.status === 'completed'
   const isFailed = job?.status === 'failed'
@@ -45,12 +51,18 @@ function MovieTitleBatchMatcher() {
               <UploadCloud className="h-4 w-4 text-violet-600 dark:text-violet-400" />
             </div>
             <div>
-              <CardTitle>Batch Upload</CardTitle>
+              <CardTitle>Batch Upload {isIntl && '(International)'}</CardTitle>
               <CardDescription>
                 Upload a CSV or XLSX with{' '}
                 <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">movie_title</code>,{' '}
-                <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">show_date</code>, and{' '}
-                <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">ticketing_url</code>{' '}
+                <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">show_date</code>,{' '}
+                <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">ticketing_url</code>
+                {isIntl && (
+                  <>
+                    , and{' '}
+                    <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">country</code>
+                  </>
+                )}{' '}
                 columns to match titles in bulk.
               </CardDescription>
             </div>
@@ -119,6 +131,9 @@ function MovieTitleBatchMatcher() {
                       Requires <code className="font-mono text-[11px]">movie_title</code>,{' '}
                       <code className="font-mono text-[11px]">show_date</code>,{' '}
                       <code className="font-mono text-[11px]">ticketing_url</code>
+                      {isIntl && (
+                        <>, <code className="font-mono text-[11px]">country</code></>
+                      )}
                     </p>
                   </div>
                 )}

@@ -12,6 +12,12 @@ SERPER_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/serper-api-
 BEDROCK_STATIC_CREDS=$(aws secretsmanager get-secret-value --secret-id amenity/aws-bedrock-keys --query SecretString --output text --region us-east-1)
 BEDROCK_STATIC_ACCESS_KEY_ID=$(echo "$BEDROCK_STATIC_CREDS" | jq -r .access_key_id)
 BEDROCK_STATIC_SECRET_ACCESS_KEY=$(echo "$BEDROCK_STATIC_CREDS" | jq -r .secret_access_key)
+PROD_DB_SECRET=$(aws secretsmanager get-secret-value --secret-id amenity/prod-db-credentials --query SecretString --output text --region us-east-1)
+PROD_DB_HOST=$(echo "$PROD_DB_SECRET" | jq -r .host)
+PROD_DB_PORT=$(echo "$PROD_DB_SECRET" | jq -r .port)
+PROD_DB_DATABASE=$(echo "$PROD_DB_SECRET" | jq -r .database)
+PROD_DB_USERNAME=$(echo "$PROD_DB_SECRET" | jq -r .username)
+PROD_DB_PASSWORD=$(echo "$PROD_DB_SECRET" | jq -r .password)
 
 cat > /app/.env.prod <<EOF
 DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@amenity-db.critf4jd3ef7.us-east-1.rds.amazonaws.com:5432/amenitydb
@@ -43,6 +49,11 @@ AWS_REGION=us-east-1
 AWS_DEFAULT_REGION=us-east-1
 AWS_ACCESS_KEY_ID=${BEDROCK_STATIC_ACCESS_KEY_ID}
 AWS_SECRET_ACCESS_KEY=${BEDROCK_STATIC_SECRET_ACCESS_KEY}
+PROD_DB_HOST=${PROD_DB_HOST}
+PROD_DB_PORT=${PROD_DB_PORT}
+PROD_DB_DATABASE=${PROD_DB_DATABASE}
+PROD_DB_USERNAME=${PROD_DB_USERNAME}
+PROD_DB_PASSWORD=${PROD_DB_PASSWORD}
 EOF
 
 chmod 600 /app/.env.prod

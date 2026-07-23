@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     AGENTIC_BATCH_S3_BUCKET: str = ""
     AGENTIC_BATCH_S3_REGION: str = "us-east-1"
 
+    # Production MySQL DB — source of truth for Movie Master sync (fq_movie_master /
+    # fq_movie_master_intl). Empty defaults let the app boot cleanly where prod DB
+    # access isn't configured (e.g. CI, local dev without the sync feature).
+    PROD_DB_HOST: str = ""
+    PROD_DB_PORT: int = 3306
+    PROD_DB_DATABASE: str = ""
+    PROD_DB_USERNAME: str = ""
+    PROD_DB_PASSWORD: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

@@ -293,6 +293,65 @@ class TestDbSearchInternational:
         assert not (fixture_ids & {r["id"] for r in domestic_results})
 
 
+# ── Fix 2: master_movie_title as a secondary international search target ───
+
+@pytest.mark.integration
+class TestDbSearchIntlMasterTitleFallback:
+    """Requires the real Postgres DB with moviemasterintl.master_movie_title
+    (migration adding that column). A ticketing page sometimes shows the
+    English title for a market where the DB only carries the country-local
+    movie_title — _db_search should still find the row via master_movie_title
+    when the movie_title ILIKE comes up empty."""
+
+    _MOVIE_ID = 920001
+    _COUNTRY = "Brazil"
+    _RELEASE_DATE = "2024-03-01"
+    _LOCAL_TITLE = "Aguas Mortais Test Fixture"
+    _MASTER_TITLE = "Deep Water Test Fixture"
+
+    @pytest.fixture(autouse=True)
+    def _seed_and_cleanup_fixture(self):
+        from sqlmodel import Session, select
+        from app.database import engine
+        from app.models import MovieMasterIntl
+
+        with Session(engine) as session:
+            existing = session.exec(
+                select(MovieMasterIntl).where(
+                    MovieMasterIntl.movie_id == self._MOVIE_ID,
+                    MovieMasterIntl.country == self._COUNTRY,
+                    MovieMasterIntl.release_date == self._RELEASE_DATE,
+                )
+            ).first()
+            if existing is None:
+                session.add(MovieMasterIntl(
+                    movie_id=self._MOVIE_ID, country=self._COUNTRY,
+                    release_date=self._RELEASE_DATE, movie_title=self._LOCAL_TITLE,
+                    master_movie_title=self._MASTER_TITLE,
+                ))
+                session.commit()
+
+        yield
+
+        with Session(engine) as session:
+            row = session.exec(
+                select(MovieMasterIntl).where(
+                    MovieMasterIntl.movie_id == self._MOVIE_ID,
+                    MovieMasterIntl.country == self._COUNTRY,
+                    MovieMasterIntl.release_date == self._RELEASE_DATE,
+                )
+            ).first()
+            if row is not None:
+                session.delete(row)
+            session.commit()
+
+    def test_movie_title_ilike_miss_falls_back_to_master_movie_title(self):
+        from app.title_matching.agentic.runner import _db_search
+
+        results = _db_search(self._MASTER_TITLE, market="international", country=self._COUNTRY)
+        assert any(r["movie_title"] == self._LOCAL_TITLE for r in results)
+
+
 # ── Bug 3: NON_MOVIE must never zero out a real DB match ────────────────────
 
 def test_prompt_states_movie_master_contains_non_film_content():

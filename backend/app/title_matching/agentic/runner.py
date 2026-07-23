@@ -241,6 +241,12 @@ def _db_search(
     accents, or word-order noise (e.g. "Oh Sukumari" vs the DB's "Oh..!
     Sukumari", or "DCI 2026 BIG LOUD AND LIVE" vs "DCI 2026: Big, Loud &
     Live"), which trigram similarity tolerates.
+
+    For the international path, also tries `master_movie_title` (the English
+    title MovieMasterIntl stores alongside the country-local `movie_title`)
+    when the `movie_title` ILIKE finds nothing — a defense-in-depth net for
+    the case where a ticketing page shows the English title for a market
+    where the DB only indexes the country-local one.
     """
     try:
         from sqlmodel import Session, select
@@ -261,6 +267,12 @@ def _db_search(
                     .limit(20)
                 )
             rows = session.exec(stmt).all()
+
+            if not rows and market == "international":
+                master_stmt = select(Model).where(Model.master_movie_title.ilike(f"%{query}%"))
+                if country:
+                    master_stmt = master_stmt.where(Model.country == country)
+                rows = session.exec(master_stmt.limit(20)).all()
 
             if rows:
                 # Exact (case-insensitive) title match first, then shortest title —

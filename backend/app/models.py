@@ -1,4 +1,5 @@
 from sqlmodel import SQLModel, Field
+from sqlalchemy import UniqueConstraint
 from typing import Optional
 from datetime import datetime
 import uuid
@@ -147,3 +148,26 @@ class MovieTitleAlias(SQLModel, table=True):
     movie_master_id: int = Field(foreign_key="moviemaster.id")
     source: str = Field(default="human")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MovieMasterIntl(SQLModel, table=True):
+    """International Movie Master, grain (movie_id, country, release_date)."""
+
+    __table_args__ = (
+        UniqueConstraint("movie_id", "country", "release_date", name="uq_intl_movie_country_date"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_row_id: Optional[int] = Field(default=None, index=True)
+    movie_id: int = Field(index=True)  # soft reference, not a FK to moviemaster.id
+    movie_title: str = Field(index=True)
+    master_movie_title: Optional[str] = None
+    country: str = Field(index=True)
+    country_id: Optional[int] = None
+    release_date: Optional[str] = None
+    studio: Optional[str] = None
+    rating: Optional[str] = None
+    genre: Optional[str] = None
+    genre2: Optional[str] = None
+    running_time: Optional[int] = None
+    updated_on: Optional[str] = None

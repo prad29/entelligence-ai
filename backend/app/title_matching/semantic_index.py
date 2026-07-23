@@ -28,6 +28,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _VESPA_SCHEMA = "movie_master"
+_VESPA_SCHEMA_INTL = "movie_master_intl"
 _VESPA_APP_NAME = "movie-title-matching"
 _BEDROCK_MAX_RETRIES = 3
 _BEDROCK_BACKOFF_BASE = 0.5
@@ -232,9 +233,9 @@ def _deploy_vespa_app(vespa_url: str) -> bool:
         return False
 
 
-def _get_indexed_ids(vespa_url: str) -> set[int]:
+def _get_indexed_ids(vespa_url: str, schema: str = _VESPA_SCHEMA) -> set[int]:
     """
-    Return the set of movie_master_id values already in Vespa.
+    Return the set of doc ids already in Vespa for the given schema.
     Pages through the document/v1 listing API until exhausted.
     """
     try:
@@ -246,7 +247,7 @@ def _get_indexed_ids(vespa_url: str) -> set[int]:
             if continuation:
                 params["continuation"] = continuation
             resp = requests.get(
-                f"{vespa_url}/document/v1/movie_master/movie_master/docid",
+                f"{vespa_url}/document/v1/{schema}/{schema}/docid",
                 params=params,
                 timeout=30,
             )
@@ -254,7 +255,7 @@ def _get_indexed_ids(vespa_url: str) -> set[int]:
                 break
             data = resp.json()
             for doc in data.get("documents", []):
-                # doc id is "id:movie_master:movie_master::N"
+                # doc id is "id:<schema>:<schema>::N"
                 raw = doc.get("id", "")
                 tail = raw.rsplit("::", 1)[-1]
                 if tail.isdigit():
@@ -274,10 +275,12 @@ def _get_indexed_ids(vespa_url: str) -> set[int]:
 class VespaSemanticIndex:
     """Wraps a pyvespa Vespa client for hybrid BM25+ANN search."""
 
-    def __init__(self, vespa_url: str, settings) -> None:
+    def __init__(self, vespa_url: str, settings, schema: str = _VESPA_SCHEMA) -> None:
         from vespa.application import Vespa
         self._app = Vespa(url=vespa_url)
         self._settings = settings
+        self._schema = schema
+        self._id_field = "movie_master_id" if schema == _VESPA_SCHEMA else "movie_master_intl_id"
 
     def search(
         self,
@@ -288,7 +291,7 @@ class VespaSemanticIndex:
     ) -> list[tuple[int, float]]:
         """
         Hybrid BM25 + ANN search.
-        Returns list of (movie_master_id, score) sorted by score descending.
+        Returns list of (doc_id, score) sorted by score descending.
         Scores are scaled to [0, 0.6] for pipeline weight compatibility.
         """
         exclude_ids = exclude_ids or set()
@@ -300,7 +303,7 @@ class VespaSemanticIndex:
             fetch_k = k + len(exclude_ids) + 10
             body = {
                 "yql": (
-                    f"select movie_master_id from {_VESPA_SCHEMA} "
+                    f"select {self._id_field} from {self._schema} "
                     f"where ({{targetHits:{fetch_k}}}nearestNeighbor(embedding,q_embedding)) "
                     f"or userQuery()"
                 ),
@@ -315,7 +318,7 @@ class VespaSemanticIndex:
 
             output: list[tuple[int, float]] = []
             for hit in hits:
-                mid = hit["fields"].get("movie_master_id")
+                mid = hit["fields"].get(self._id_field)
                 if mid is None or mid in exclude_ids:
                     continue
                 raw_score = hit.get("relevance", 0.0)
@@ -340,6 +343,7 @@ def _feed_rows(
     vespa_url: str,
     rows: list[dict],
     embeddings: list[Optional[list[float]]],
+    schema: str = _VESPA_SCHEMA,
 ) -> int:
     """Feed rows with embeddings into Vespa. Returns count of successful feeds."""
     try:
@@ -349,20 +353,22 @@ def _feed_rows(
         logger.warning("semantic_index: cannot create Vespa client for feeding: %s", exc)
         return 0
 
+    id_field = "movie_master_id" if schema == _VESPA_SCHEMA else "movie_master_intl_id"
+
     fed = 0
     for row, emb in zip(rows, embeddings):
         if emb is None:
             continue
         doc_id = str(row["id"])
         fields = {
-            "movie_master_id": row["id"],
+            id_field: row["id"],
             "title": row.get("movie_title") or "",
             "embed_text": _compose_embed_text(row),
             "embedding": emb,
         }
         try:
             resp = app.feed_data_point(
-                schema=_VESPA_SCHEMA,
+                schema=schema,
                 data_id=doc_id,
                 fields=fields,
             )
@@ -377,15 +383,16 @@ def _feed_rows(
 def build_semantic_index(
     master_rows: list[dict],
     settings,
+    schema: str = _VESPA_SCHEMA,
 ) -> Optional[VespaSemanticIndex]:
     """
-    Build (or reuse) the Vespa semantic index.
+    Build (or reuse) the Vespa semantic index for the given schema.
 
     Uses ID-based diffing so new rows added anywhere in the DB are picked up
     without re-embedding rows that are already indexed.
 
     1. Deploy Vespa app package if not already deployed.
-    2. Fetch the set of already-indexed movie_master_ids from Vespa.
+    2. Fetch the set of already-indexed ids from Vespa for this schema.
     3. Compute the diff: rows in master_rows whose id is not yet in Vespa.
     4. Embed and feed only the missing rows.
     5. Return a VespaSemanticIndex ready for queries.
@@ -402,10 +409,11 @@ def build_semantic_index(
         logger.warning("semantic_index: Vespa deploy failed, skipping semantic index")
         return None
 
-    indexed_ids = _get_indexed_ids(vespa_url)
+    indexed_ids = _get_indexed_ids(vespa_url, schema=schema)
     rows_to_feed = [r for r in master_rows if r["id"] not in indexed_ids]
     logger.info(
-        "semantic_index: %d/%d rows already indexed; %d to feed",
+        "semantic_index[%s]: %d/%d rows already indexed; %d to feed",
+        schema,
         len(indexed_ids),
         len(master_rows),
         len(rows_to_feed),
@@ -416,12 +424,20 @@ def build_semantic_index(
         if bedrock_client is None:
             logger.warning("semantic_index: no Bedrock client, cannot feed embeddings")
             if indexed_ids:
-                return VespaSemanticIndex(vespa_url, settings)
+                return VespaSemanticIndex(vespa_url, settings, schema=schema)
             return None
 
-        logger.info("semantic_index: embedding %d rows...", len(rows_to_feed))
+        logger.info("semantic_index[%s]: embedding %d rows...", schema, len(rows_to_feed))
         embeddings = _embed_batch(rows_to_feed, settings, bedrock_client)
-        fed = _feed_rows(vespa_url, rows_to_feed, embeddings)
-        logger.info("semantic_index: fed %d/%d rows to Vespa", fed, len(rows_to_feed))
+        fed = _feed_rows(vespa_url, rows_to_feed, embeddings, schema=schema)
+        logger.info("semantic_index[%s]: fed %d/%d rows to Vespa", schema, fed, len(rows_to_feed))
 
-    return VespaSemanticIndex(vespa_url, settings)
+    return VespaSemanticIndex(vespa_url, settings, schema=schema)
+
+
+def build_semantic_index_intl(
+    master_rows: list[dict],
+    settings,
+) -> Optional[VespaSemanticIndex]:
+    """Build (or reuse) the Vespa semantic index for the international schema."""
+    return build_semantic_index(master_rows, settings, schema=_VESPA_SCHEMA_INTL)

@@ -10,6 +10,7 @@
     <redundancy>1</redundancy>
     <documents>
       <document type="movie_master" mode="index" />
+      <document type="movie_master_intl" mode="index" />
     </documents>
     <nodes>
       <node hostalias="node1" distribution-key="0" />

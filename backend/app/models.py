@@ -150,6 +150,30 @@ class MovieTitleAlias(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class MovieTitleIntlBatchJob(SQLModel, table=True):
+    """Batch job for the Mode B agentic international title matching pipeline.
+
+    Kept as a separate table from MovieTitleBatchJob (not a shared table with
+    a type discriminator) to match this codebase's one-table-per-feature
+    convention (MovieFormatJob, DetectionJob, MovieTitleBatchJob).
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    status: str = Field(default="queued")  # queued|processing|completed|failed
+    total: int = Field(default=0)
+    processed: int = Field(default=0)
+    matched: int = Field(default=0)
+    no_match: int = Field(default=0)
+    failed: int = Field(default=0)
+    error: Optional[str] = None  # top-level job failure message (not per-row)
+    use_poster_vision: bool = Field(default=False)
+    file_path: Optional[str] = None
+    output_path: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    ttl: Optional[datetime] = None
+    stats: Optional[str] = None  # JSON string
+
+
 class MovieMasterIntl(SQLModel, table=True):
     """International Movie Master, grain (movie_id, country, release_date)."""
 

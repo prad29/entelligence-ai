@@ -72,17 +72,24 @@ async def match_single_title(
 async def upload_batch(
     file: UploadFile = File(...),
     use_poster_vision: str = Form("false"),
+    market: str = Form("domestic"),
     session: Session = Depends(get_session),
 ):
     """Upload a .csv/.xlsx of titles for Mode B agentic batch matching.
 
     Requires settings.AGENTIC_TITLE_MATCH_ENABLED (batch matching is Mode B
-    only). Validates the file extension, the 3 required columns, and the
-    MAX_BATCH_ROWS cap, then enqueues dispatch_batch_task (see
-    app.tasks.agentic_match_task) instead of calling dispatch_batch inline.
-    Building the chord re-parses the file and publishes one Celery message
-    per row — for large files that alone can exceed the ALB/nginx idle
-    timeout if done inside the request, so it always runs in the background.
+    only). Validates the file extension, the required columns for the given
+    market, and the MAX_BATCH_ROWS cap. market="domestic" (the default,
+    unchanged behavior) enqueues dispatch_batch_task against
+    MovieTitleBatchJob; market="international" additionally requires a
+    "country" column and enqueues dispatch_intl_batch_task against
+    MovieTitleIntlBatchJob instead — a fully separate job table/queue path so
+    international batch load can never affect domestic job state.
+
+    Either way dispatch is enqueued as its own Celery task rather than run
+    inline: building the chord re-parses the file and publishes one Celery
+    message per row, which for large files alone can exceed the ALB/nginx
+    idle timeout if done inside the request.
     """
     if not settings.AGENTIC_TITLE_MATCH_ENABLED:
         raise HTTPException(
@@ -90,8 +97,6 @@ async def upload_batch(
             detail="Batch title matching requires Mode B (agentic) to be enabled",
         )
 
-    from app.models import MovieTitleBatchJob
-    from app.tasks.agentic_match_task import dispatch_batch_task
     from app.title_matching import batch_io, batch_storage
 
     filename = file.filename or ""
@@ -102,7 +107,7 @@ async def upload_batch(
     contents = await file.read()
 
     try:
-        _headers, rows = batch_io.parse_upload(contents, ext)
+        _headers, rows = batch_io.parse_upload(contents, ext, market=market)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -119,17 +124,36 @@ async def upload_batch(
     upload_key = batch_storage.upload_key(job_id, ext)
     batch_storage.put_bytes(upload_key, contents)
 
-    job = MovieTitleBatchJob(
-        id=job_id,
-        status="queued",
-        total=row_count,
-        use_poster_vision=use_poster_vision_bool,
-        file_path=upload_key,
-    )
-    session.add(job)
-    session.commit()
+    if market == "international":
+        from app.models import MovieTitleIntlBatchJob
+        from app.tasks.agentic_intl_match_task import dispatch_intl_batch_task
 
-    dispatch_batch_task.delay(job_id)
+        job = MovieTitleIntlBatchJob(
+            id=job_id,
+            status="queued",
+            total=row_count,
+            use_poster_vision=use_poster_vision_bool,
+            file_path=upload_key,
+        )
+        session.add(job)
+        session.commit()
+
+        dispatch_intl_batch_task.delay(job_id)
+    else:
+        from app.models import MovieTitleBatchJob
+        from app.tasks.agentic_match_task import dispatch_batch_task
+
+        job = MovieTitleBatchJob(
+            id=job_id,
+            status="queued",
+            total=row_count,
+            use_poster_vision=use_poster_vision_bool,
+            file_path=upload_key,
+        )
+        session.add(job)
+        session.commit()
+
+        dispatch_batch_task.delay(job_id)
 
     return {"job_id": job_id}
 
@@ -187,6 +211,63 @@ async def download_batch_job(job_id: str, session: Session = Depends(get_session
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="movie_title_match_results_{job_id[:8]}.xlsx"'
+        },
+    )
+
+
+@router.get("/batch/intl/{job_id}")
+async def get_intl_batch_job(job_id: str, session: Session = Depends(get_session)):
+    from app.models import MovieTitleIntlBatchJob
+
+    job = session.get(MovieTitleIntlBatchJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    progress = (job.processed / job.total) if job.total > 0 else 0
+
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "total": job.total,
+        "processed": job.processed,
+        "progress": progress,
+        "matched": job.matched,
+        "no_match": job.no_match,
+        "failed": job.failed,
+        "output_url": (
+            f"/api/v1/movie-title-match/batch/intl/{job.id}/download"
+            if job.status == "completed" and job.output_path
+            else None
+        ),
+        "error": job.error,
+    }
+
+
+@router.get("/batch/intl/{job_id}/download")
+async def download_intl_batch_job(job_id: str, session: Session = Depends(get_session)) -> Response:
+    from app.models import MovieTitleIntlBatchJob
+    from app.title_matching import batch_storage
+
+    job = session.get(MovieTitleIntlBatchJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job not completed")
+
+    if job.ttl and datetime.utcnow() > job.ttl:
+        raise HTTPException(status_code=410, detail="Download expired")
+
+    if not job.output_path or not batch_storage.exists(job.output_path):
+        raise HTTPException(status_code=404, detail="Output file not found")
+
+    contents = batch_storage.get_bytes(job.output_path)
+
+    return Response(
+        content=contents,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="movie_title_match_intl_results_{job_id[:8]}.xlsx"'
         },
     )
 

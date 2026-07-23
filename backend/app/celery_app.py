@@ -5,7 +5,11 @@ celery = Celery(
     "entelligence",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.semantic_tasks", "app.tasks.agentic_match_task"],
+    include=[
+        "app.tasks.semantic_tasks",
+        "app.tasks.agentic_match_task",
+        "app.tasks.agentic_intl_match_task",
+    ],
 )
 
 celery.conf.update(
@@ -21,5 +25,7 @@ celery.conf.update(
     task_routes={
         "app.tasks.agentic_match_task.agentic_batch_row": {"queue": "agentic"},
         "app.tasks.agentic_match_task.finalize_batch": {"queue": "agentic"},
+        "app.tasks.agentic_intl_match_task.agentic_intl_batch_row": {"queue": "agentic"},
+        "app.tasks.agentic_intl_match_task.finalize_intl_batch": {"queue": "agentic"},
     },
 )

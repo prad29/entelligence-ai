@@ -19,6 +19,7 @@ from app.title_matching.agentic import (
 from app.title_matching.agentic.prompt_builder import build_prompt
 from app.title_matching.agentic.result_parser import parse_agent_output
 from app.title_matching.normalizer import has_conflicting_ordinal, normalize_title
+from app.title_matching.semantic_index import get_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -325,16 +326,40 @@ def _trigram_search(session, master_model, query: str, country: Optional[str] = 
 
 
 def _fetch_vespa_candidates(title: str, market: str = "domestic") -> list[dict]:
-    """Hybrid semantic+BM25 search against Vespa, scoped to the market's document type."""
+    """Hybrid semantic (ANN) + BM25 search against Vespa, scoped to the market's
+    document type. Embeds the query title via Cohere Embed Multilingual v3 so
+    cross-language titles (e.g. "Aguas Mortais" -> "Deep Water") can be found
+    by vector similarity even when they share no keywords with the English
+    master title. Falls back to BM25-only search if embedding is unavailable
+    (Bedrock unreachable, etc.) rather than failing the whole pre-fetch."""
     schema = "movie_master_intl" if market == "international" else "movie_master"
     id_field = "movie_master_intl_id" if market == "international" else "movie_master_id"
+    hits = 10
     try:
-        body = json.dumps({
-            "yql": f"select * from sources {schema} where userQuery()",
-            "query": title,
-            "ranking": "hybrid",
-            "hits": 10,
-        }).encode()
+        embedding = get_embedding(title, settings)
+
+        if embedding is not None:
+            yql = (
+                f"select * from sources {schema} "
+                f"where ({{targetHits:{hits}}}nearestNeighbor(embedding,q_embedding)) "
+                f"or userQuery()"
+            )
+            body_dict = {
+                "yql": yql,
+                "query": title,
+                "ranking": "hybrid",
+                "input.query(q_embedding)": embedding,
+                "hits": hits,
+            }
+        else:
+            body_dict = {
+                "yql": f"select * from sources {schema} where userQuery()",
+                "query": title,
+                "ranking": "hybrid",
+                "hits": hits,
+            }
+
+        body = json.dumps(body_dict).encode()
         req = urllib.request.Request(
             "http://vespa:8080/search/",
             data=body,

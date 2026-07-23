@@ -50,7 +50,8 @@ def test_fetch_vespa_candidates_reads_schema_field_names():
     fake_resp.__enter__.return_value = fake_resp
     fake_resp.__exit__.return_value = False
 
-    with patch("urllib.request.urlopen", return_value=fake_resp):
+    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
+         patch("urllib.request.urlopen", return_value=fake_resp):
         candidates = _fetch_vespa_candidates("Oh Sukumari")
 
     assert candidates == [
@@ -76,7 +77,8 @@ def test_fetch_vespa_candidates_never_returns_null_id_for_a_real_hit():
     fake_resp.__enter__.return_value = fake_resp
     fake_resp.__exit__.return_value = False
 
-    with patch("urllib.request.urlopen", return_value=fake_resp):
+    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
+         patch("urllib.request.urlopen", return_value=fake_resp):
         candidates = _fetch_vespa_candidates("Oh Sukumari")
 
     assert candidates[0]["id"] is not None
@@ -84,8 +86,52 @@ def test_fetch_vespa_candidates_never_returns_null_id_for_a_real_hit():
 
 
 def test_fetch_vespa_candidates_degrades_to_empty_list_on_error():
-    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
+         patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
         assert _fetch_vespa_candidates("anything") == []
+
+
+# ── Fix: real hybrid (BM25 + ANN embedding) search ──────────────────────────
+
+def test_fetch_vespa_candidates_sends_embedding_and_nearest_neighbor_clause():
+    """Root-cause fix: the pre-fetch must embed the query title and issue the
+    nearestNeighbor YQL clause (matching semantic_index.py's proven pattern),
+    not BM25-keyword-only search. This is what lets cross-language titles like
+    "Aguas Mortais" retrieve "Deep Water" as a candidate."""
+    fake_embedding = [0.1, 0.2, 0.3]
+    fake_resp = MagicMock()
+    fake_resp.read.return_value = _vespa_response([])
+    fake_resp.__enter__.return_value = fake_resp
+    fake_resp.__exit__.return_value = False
+
+    with patch("app.title_matching.agentic.runner.get_embedding", return_value=fake_embedding) as mock_embed, \
+         patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
+        _fetch_vespa_candidates("Aguas Mortais", market="international")
+
+    mock_embed.assert_called_once()
+    assert mock_embed.call_args[0][0] == "Aguas Mortais"
+
+    body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
+    assert "nearestNeighbor(embedding,q_embedding)" in body["yql"]
+    assert body["input.query(q_embedding)"] == fake_embedding
+
+
+def test_fetch_vespa_candidates_falls_back_to_bm25_when_embedding_unavailable():
+    """If get_embedding returns None (e.g. Bedrock unreachable), the pre-fetch
+    must still run a plain BM25 search rather than failing outright."""
+    fake_resp = MagicMock()
+    fake_resp.read.return_value = _vespa_response([])
+    fake_resp.__enter__.return_value = fake_resp
+    fake_resp.__exit__.return_value = False
+
+    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
+         patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
+        candidates = _fetch_vespa_candidates("Aguas Mortais", market="international")
+
+    assert candidates == []
+    body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
+    assert "nearestNeighbor" not in body["yql"]
+    assert "input.query(q_embedding)" not in body
 
 
 # ── Bug 2: brittle DB keyword search / trigram fallback ─────────────────────
@@ -270,7 +316,8 @@ def test_fetch_vespa_candidates_scopes_source_by_market():
     fake_resp.__enter__.return_value = fake_resp
     fake_resp.__exit__.return_value = False
 
-    with patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
+    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
+         patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
         _fetch_vespa_candidates("Blue Beetle", market="domestic")
         domestic_body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
         assert "from sources movie_master " in domestic_body["yql"]
@@ -291,7 +338,8 @@ def test_fetch_vespa_candidates_reads_intl_id_field():
     fake_resp.__enter__.return_value = fake_resp
     fake_resp.__exit__.return_value = False
 
-    with patch("urllib.request.urlopen", return_value=fake_resp):
+    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
+         patch("urllib.request.urlopen", return_value=fake_resp):
         candidates = _fetch_vespa_candidates("Blue Beetle", market="international")
 
     assert candidates == [

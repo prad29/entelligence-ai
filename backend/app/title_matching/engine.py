@@ -25,12 +25,16 @@ class TitleMatchEngine:
         theater: Optional[str] = None,
         ticketing_url: Optional[str] = None,
         use_poster_vision: bool = False,
+        market: str = "domestic",
+        country: Optional[str] = None,
     ) -> TitleMatchResult:
         if settings.AGENTIC_TITLE_MATCH_ENABLED:
             from app.title_matching.agentic.runner import run_agentic_match
             return run_agentic_match(
                 title, show_date, theater, ticketing_url,
                 use_poster_vision=use_poster_vision,
+                market=market,
+                country=country,
             )
 
         normalized = normalize_title(title)

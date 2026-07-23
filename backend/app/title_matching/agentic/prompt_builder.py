@@ -7,18 +7,20 @@ from app.config import settings
 
 
 _SYSTEM_PROMPT = """\
-You are a title matching specialist. Your job is to identify which row in the Movie Master \
-database (45,347 titles) a given scraped cinema listing refers to. Movie Master is the \
+You are a title matching specialist. Your job is to identify which row in the {db_label} \
+database a given scraped cinema listing refers to. {db_label} is the \
 authoritative source — always prefer a match found there over any external source.
 
-IMPORTANT: despite the name, Movie Master is NOT limited to theatrical films. It also contains \
+IMPORTANT: despite the name, {db_label} is NOT limited to theatrical films. It also contains \
 non-film cinema content that is booked and ticketed the same way: sports broadcasts (e.g. "Semifinals \
 - Telemundo presents the FIFA World Cup"), televised/streamed specials, concerts, drum corps and \
 marching-band broadcasts (e.g. "DCI 2026: Big, Loud & Live"), opera/ballet relays, and anniversary \
 re-releases. A row existing for this kind of content is normal and expected — do not assume that \
 because an input "isn't a movie" it therefore has no DB row.
 
-The Movie Master DB candidates have already been looked up for you (see below). Your job is to:
+{market_scope_note}
+
+The {db_label} DB candidates have already been looked up for you (see below). Your job is to:
 1. Analyse the candidates against the input title.
 2. Use the web_search tool to resolve ambiguity (IMDb, Wikipedia) when the DB candidates are too \
 similar or when the title is localized / obscure.
@@ -91,12 +93,7 @@ what confirms this pick, why auto-accept or review>",
 ## Critical rules
 - movie_master_id MUST be a real id from the DB candidates list below — never invent an id.
   If the DB candidates list is empty, set movie_master_id to 0 and explain in reasoning.
-  CRITICAL: When movie_master_id is 0, movie_title MUST be the English-language title used for the
-  film's US/domestic theatrical release (e.g. "Battles Without Honor and Humanity", NOT "仁義の墓場";
-  "Father There Is Only One 5", NOT "Padre no hay más que uno 5: Nido repleto") — this is what a
-  DB post-lookup will search for, and Movie Master stores domestic-release titles, not original-
-  language titles. If web_search results show both an original-language and an English title,
-  always report the English one here, even if the input itself was in the original language.
+  {master_id_zero_rule}
 - Ordinals are a hard constraint — never suggest Part 2 for a Part 1 query
 - "Live Action" means the input refers to a live-action remake. In the DB the live-action
   version is often stored without that suffix (e.g. "Moana (2026)" IS the live-action remake —
@@ -127,6 +124,32 @@ _POSTER_VISION_SKIP = """\
 Step 3 — POSTER VISION (DISABLED for this request — skip entirely, do not fetch any images)"""
 
 
+_DOMESTIC_MASTER_ID_ZERO_RULE = """\
+CRITICAL: When movie_master_id is 0, movie_title MUST be the English-language title used for the
+  film's US/domestic theatrical release (e.g. "Battles Without Honor and Humanity", NOT "仁義の墓場";
+  "Father There Is Only One 5", NOT "Padre no hay más que uno 5: Nido repleto") — this is what a
+  DB post-lookup will search for, and Movie Master stores domestic-release titles, not original-
+  language titles. If web_search results show both an original-language and an English title,
+  always report the English one here, even if the input itself was in the original language."""
+
+_INTL_MASTER_ID_ZERO_RULE_TEMPLATE = """\
+CRITICAL: When movie_master_id is 0, movie_title MUST be the title used for this film's theatrical \
+release in {country} — this is what a DB post-lookup will search for, and Movie Master \
+International stores per-country release titles (which may be a localized spelling/translation, \
+not always the English title). If web_search results show multiple regional titles, prefer the one \
+used specifically for the {country} release."""
+
+_DOMESTIC_SCOPE_NOTE = ""
+
+_INTL_SCOPE_NOTE_TEMPLATE = """\
+MARKET SCOPE: This request is for the INTERNATIONAL release database, scoped to country: \
+{country}. All DB candidates below are already filtered to this country. movie_title is the \
+per-country release title (spelling/translation may differ from other countries or from the \
+domestic release); master_movie_title (when present in a candidate) is the canonical grouping \
+title across countries — prefer matching on movie_title since that reflects what was actually \
+released and ticketed in {country}."""
+
+
 def build_prompt(
     title: str,
     show_date: Optional[str],
@@ -135,11 +158,25 @@ def build_prompt(
     db_candidates: Optional[list] = None,
     vespa_candidates: Optional[list] = None,
     use_poster_vision: bool = False,
+    market: str = "domestic",
+    country: Optional[str] = None,
 ) -> str:
     poster_step = _POSTER_VISION_STEP if use_poster_vision else _POSTER_VISION_SKIP
+
+    if market == "international":
+        db_label = "Movie Master International"
+        master_id_zero_rule = _INTL_MASTER_ID_ZERO_RULE_TEMPLATE.format(country=country or "the requested country")
+        market_scope_note = _INTL_SCOPE_NOTE_TEMPLATE.format(country=country or "the requested country")
+    else:
+        db_label = "Movie Master"
+        master_id_zero_rule = _DOMESTIC_MASTER_ID_ZERO_RULE
+        market_scope_note = _DOMESTIC_SCOPE_NOTE
+
     system = _SYSTEM_PROMPT.format(
-        tmdb_token=settings.AGENTIC_TMDB_READ_TOKEN or "<not configured>",
+        db_label=db_label,
+        market_scope_note=market_scope_note,
         poster_vision_step=poster_step,
+        master_id_zero_rule=master_id_zero_rule,
     )
     parts = [system, "---", f'Input title: "{title}"']
     if show_date:
@@ -148,6 +185,8 @@ def build_prompt(
         parts.append(f"Theater: {theater}")
     if ticketing_url:
         parts.append(f"Ticketing URL (fetch this page for extra evidence): {ticketing_url}")
+    if market == "international" and country:
+        parts.append(f"Country: {country}")
 
     parts.append("\n## Pre-fetched Movie Master candidates")
 

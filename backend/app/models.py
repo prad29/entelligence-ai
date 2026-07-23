@@ -1,4 +1,5 @@
 from sqlmodel import SQLModel, Field
+from sqlalchemy import UniqueConstraint
 from typing import Optional
 from datetime import datetime
 import uuid
@@ -147,3 +148,50 @@ class MovieTitleAlias(SQLModel, table=True):
     movie_master_id: int = Field(foreign_key="moviemaster.id")
     source: str = Field(default="human")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MovieTitleIntlBatchJob(SQLModel, table=True):
+    """Batch job for the Mode B agentic international title matching pipeline.
+
+    Kept as a separate table from MovieTitleBatchJob (not a shared table with
+    a type discriminator) to match this codebase's one-table-per-feature
+    convention (MovieFormatJob, DetectionJob, MovieTitleBatchJob).
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    status: str = Field(default="queued")  # queued|processing|completed|failed
+    total: int = Field(default=0)
+    processed: int = Field(default=0)
+    matched: int = Field(default=0)
+    no_match: int = Field(default=0)
+    failed: int = Field(default=0)
+    error: Optional[str] = None  # top-level job failure message (not per-row)
+    use_poster_vision: bool = Field(default=False)
+    file_path: Optional[str] = None
+    output_path: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    ttl: Optional[datetime] = None
+    stats: Optional[str] = None  # JSON string
+
+
+class MovieMasterIntl(SQLModel, table=True):
+    """International Movie Master, grain (movie_id, country, release_date)."""
+
+    __table_args__ = (
+        UniqueConstraint("movie_id", "country", "release_date", name="uq_intl_movie_country_date"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_row_id: Optional[int] = Field(default=None, index=True)
+    movie_id: int = Field(index=True)  # soft reference, not a FK to moviemaster.id
+    movie_title: str = Field(index=True)
+    master_movie_title: Optional[str] = None
+    country: str = Field(index=True)
+    country_id: Optional[int] = None
+    release_date: Optional[str] = None
+    studio: Optional[str] = None
+    rating: Optional[str] = None
+    genre: Optional[str] = None
+    genre2: Optional[str] = None
+    running_time: Optional[int] = None
+    updated_on: Optional[str] = None

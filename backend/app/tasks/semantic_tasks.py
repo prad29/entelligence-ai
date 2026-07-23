@@ -68,3 +68,57 @@ def build_semantic_index_task(self):
     except Exception as exc:
         logger.error("semantic_task: failed: %s", exc)
         raise self.retry(exc=exc)
+
+
+_READY_KEY_INTL = "semantic_index_intl:ready"
+
+
+@celery.task(
+    bind=True,
+    name="app.tasks.semantic_tasks.build_semantic_index_intl",
+    max_retries=3,
+    default_retry_delay=60,
+    acks_late=True,
+)
+def build_semantic_index_intl_task(self):
+    """
+    Build (or resume) the Vespa semantic index for international master rows.
+
+    Mirrors build_semantic_index_task but reads MovieMasterIntl and feeds
+    the separate movie_master_intl document type — run independently of
+    the domestic index build so international seeding/indexing never
+    touches or waits on domestic index state.
+    """
+    try:
+        from sqlmodel import Session, select
+        from app.database import engine as db_engine
+        from app.models import MovieMasterIntl
+        from app.title_matching.semantic_index import build_semantic_index_intl
+
+        logger.info("semantic_task_intl: loading international master rows from DB")
+        with Session(db_engine) as session:
+            rows = session.exec(select(MovieMasterIntl)).all()
+
+        master_rows = [
+            {
+                "id": r.id,
+                "movie_title": r.movie_title,
+                "release_date": r.release_date,
+            }
+            for r in rows
+        ]
+
+        logger.info("semantic_task_intl: starting index build for %d rows", len(master_rows))
+        index = build_semantic_index_intl(master_rows, settings)
+
+        if index is not None:
+            import redis as redis_lib
+            r = redis_lib.from_url(settings.REDIS_URL)
+            r.set(_READY_KEY_INTL, "1")
+            logger.info("semantic_task_intl: index ready, signalled via Redis key '%s'", _READY_KEY_INTL)
+        else:
+            logger.warning("semantic_task_intl: build_semantic_index_intl returned None")
+
+    except Exception as exc:
+        logger.error("semantic_task_intl: failed: %s", exc)
+        raise self.retry(exc=exc)

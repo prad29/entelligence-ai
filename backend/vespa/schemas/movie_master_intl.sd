@@ -1,0 +1,49 @@
+schema movie_master_intl {
+
+    document movie_master_intl {
+
+        field movie_master_intl_id type int {
+            indexing: attribute | summary
+        }
+
+        field title type string {
+            indexing: index | summary
+            index: enable-bm25
+        }
+
+        field embed_text type string {
+            indexing: summary
+        }
+
+        field embedding type tensor<float>(x[1024]) {
+            indexing: attribute | index | summary
+            index {
+                hnsw {
+                    max-links-per-node: 16
+                    neighbors-to-explore-at-insert: 200
+                }
+            }
+            attribute {
+                distance-metric: angular
+            }
+        }
+
+    }
+
+    fieldset default {
+        fields: title
+    }
+
+    rank-profile hybrid inherits default {
+        inputs {
+            query(q_embedding) tensor<float>(x[1024])
+        }
+
+        first-phase {
+            expression: bm25(title) + closeness(field, embedding)
+        }
+
+        match-features: bm25(title) closeness(field, embedding)
+    }
+
+}

@@ -56,5 +56,33 @@ def seed_movie_master(
         typer.echo(f"Warning: could not queue semantic index build: {exc}")
 
 
+@cli.command()
+def seed_movie_master_intl(
+    path: str = typer.Argument(..., help="Path to Movie Master International Dump.csv"),
+    reset: bool = typer.Option(False, "--reset", help="Truncate table before seeding"),
+) -> None:
+    """
+    Seed the moviemasterintl table from the international CSV dump.
+
+    Grain is (movie_id, country, release_date) — unlike seed-movie-master,
+    rows are never collapsed by movie_id alone. Safe to re-run without
+    --reset; rows are upserted by the (movie_id, country, release_date) triple.
+    """
+    create_db_and_tables()
+    from app.title_matching.seed_loader import seed_movie_master_intl as _seed_intl
+    with Session(db_engine) as session:
+        result = _seed_intl(session, path, reset=reset)
+    total = result["inserted"] + result["updated"]
+    typer.echo(f"Done: {total} rows seeded from {path}")
+
+    # Queue international semantic index build after seeding
+    try:
+        from app.tasks.semantic_tasks import build_semantic_index_intl_task
+        task = build_semantic_index_intl_task.delay()
+        typer.echo(f"Vespa international semantic index build queued (task: {task.id})")
+    except Exception as exc:
+        typer.echo(f"Warning: could not queue international semantic index build: {exc}")
+
+
 if __name__ == "__main__":
     cli()

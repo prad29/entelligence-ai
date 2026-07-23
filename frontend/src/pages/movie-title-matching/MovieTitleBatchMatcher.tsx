@@ -3,16 +3,23 @@ import { useMovieTitleBatchJob } from '@/hooks/useMovieTitleBatchJob'
 import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card'
-import { UploadCloud, FileSpreadsheet, Eye, X, Download, CheckCircle2, AlertCircle, RotateCcw } from 'lucide-react'
+import { UploadCloud, FileSpreadsheet, Eye, Globe2, X, Download, CheckCircle2, AlertCircle, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { Market } from './MovieTitleMatchingPage'
 
 const ACCEPTED_EXTENSIONS = '.csv,.xlsx'
 
-function MovieTitleBatchMatcher() {
+interface MovieTitleBatchMatcherProps {
+  market: Market
+  onMarketChange: (m: Market) => void
+}
+
+function MovieTitleBatchMatcher({ market, onMarketChange }: MovieTitleBatchMatcherProps) {
   const [file, setFile] = useState<File | null>(null)
   const [posterVision, setPosterVision] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const { job, uploading, isActive, resuming, error, uploadBatch, reset } = useMovieTitleBatchJob()
+  const { job, uploading, isActive, resuming, error, uploadBatch, reset } = useMovieTitleBatchJob(market)
+  const isIntl = market === 'international'
 
   const isCompleted = job?.status === 'completed'
   const isFailed = job?.status === 'failed'
@@ -45,12 +52,18 @@ function MovieTitleBatchMatcher() {
               <UploadCloud className="h-4 w-4 text-violet-600 dark:text-violet-400" />
             </div>
             <div>
-              <CardTitle>Batch Upload</CardTitle>
+              <CardTitle>Batch Upload {isIntl && '(International)'}</CardTitle>
               <CardDescription>
                 Upload a CSV or XLSX with{' '}
                 <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">movie_title</code>,{' '}
-                <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">show_date</code>, and{' '}
-                <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">ticketing_url</code>{' '}
+                <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">show_date</code>,{' '}
+                <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">ticketing_url</code>
+                {isIntl && (
+                  <>
+                    , and{' '}
+                    <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">country</code>
+                  </>
+                )}{' '}
                 columns to match titles in bulk.
               </CardDescription>
             </div>
@@ -119,6 +132,9 @@ function MovieTitleBatchMatcher() {
                       Requires <code className="font-mono text-[11px]">movie_title</code>,{' '}
                       <code className="font-mono text-[11px]">show_date</code>,{' '}
                       <code className="font-mono text-[11px]">ticketing_url</code>
+                      {isIntl && (
+                        <>, <code className="font-mono text-[11px]">country</code></>
+                      )}
                     </p>
                   </div>
                 )}
@@ -126,35 +142,59 @@ function MovieTitleBatchMatcher() {
             </div>
           )}
 
-          {/* Poster vision toggle (visually identical to Single Match) */}
+          {/* Poster vision + Domestic/International toggles, side by side */}
           {!job && !resuming && (
-            <button
-              type="button"
-              onClick={() => setPosterVision(!posterVision)}
-              className={cn(
-                'flex items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-all duration-200 w-full text-left',
-                posterVision
-                  ? 'border-violet-400 dark:border-violet-600 bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300'
-                  : 'border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
-              )}
-            >
-              {/* Track */}
-              <div className={cn(
-                'relative h-5 w-9 rounded-full transition-colors duration-200 shrink-0',
-                posterVision ? 'bg-violet-500' : 'bg-zinc-300 dark:bg-zinc-600'
-              )}>
-                {/* Thumb */}
-                <span className={cn(
-                  'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200',
-                  posterVision ? 'translate-x-4' : 'translate-x-0'
-                )} />
-              </div>
-              <Eye className="h-3.5 w-3.5 shrink-0" />
-              <span className="font-medium">Poster Vision</span>
-              <span className="ml-auto text-xs opacity-60 shrink-0">
-                {posterVision ? 'AI inspects DB posters · slower' : 'Faster · no image analysis'}
-              </span>
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setPosterVision(!posterVision)}
+                className={cn(
+                  'flex flex-1 items-center gap-2.5 rounded-xl border px-3.5 py-3 text-sm transition-all duration-200 text-left min-w-0',
+                  posterVision
+                    ? 'border-violet-400 dark:border-violet-600 bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300'
+                    : 'border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
+                )}
+              >
+                {/* Track */}
+                <div className={cn(
+                  'relative h-5 w-9 rounded-full transition-colors duration-200 shrink-0',
+                  posterVision ? 'bg-violet-500' : 'bg-zinc-300 dark:bg-zinc-600'
+                )}>
+                  {/* Thumb */}
+                  <span className={cn(
+                    'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200',
+                    posterVision ? 'translate-x-4' : 'translate-x-0'
+                  )} />
+                </div>
+                <Eye className="h-3.5 w-3.5 shrink-0" />
+                <span className="font-medium truncate">Poster Vision</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onMarketChange(isIntl ? 'domestic' : 'international')}
+                className={cn(
+                  'flex flex-1 items-center gap-2.5 rounded-xl border px-3.5 py-3 text-sm transition-all duration-200 text-left min-w-0',
+                  isIntl
+                    ? 'border-[#4A9FD4] dark:border-[#4A9FD4]/70 bg-[#4A9FD4]/5 dark:bg-[#4A9FD4]/10 text-[#4A9FD4]'
+                    : 'border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
+                )}
+              >
+                {/* Track */}
+                <div className={cn(
+                  'relative h-5 w-9 rounded-full transition-colors duration-200 shrink-0',
+                  isIntl ? 'bg-[#4A9FD4]' : 'bg-zinc-300 dark:bg-zinc-600'
+                )}>
+                  {/* Thumb */}
+                  <span className={cn(
+                    'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200',
+                    isIntl ? 'translate-x-4' : 'translate-x-0'
+                  )} />
+                </div>
+                <Globe2 className="h-3.5 w-3.5 shrink-0" />
+                <span className="font-medium truncate">International</span>
+              </button>
+            </div>
           )}
 
           {/* Upload button */}

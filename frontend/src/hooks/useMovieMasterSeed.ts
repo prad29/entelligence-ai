@@ -5,6 +5,7 @@ interface SeedResult {
   inserted: number
   updated: number
   skipped: number
+  skipped_undefined_country?: number
   total_in_file: number
 }
 
@@ -14,7 +15,19 @@ interface SeedState {
   error: string | null
 }
 
-export function useMovieMasterSeed() {
+export type MovieMasterMarket = 'domestic' | 'international'
+
+const SEED_ENDPOINT: Record<MovieMasterMarket, string> = {
+  domestic: '/api/v1/movie-title-match/master/seed',
+  international: '/api/v1/movie-title-match/master/intl/seed',
+}
+
+const COUNT_ENDPOINT: Record<MovieMasterMarket, string> = {
+  domestic: '/api/v1/movie-title-match/master/count',
+  international: '/api/v1/movie-title-match/master/intl/count',
+}
+
+export function useMovieMasterSeed(market: MovieMasterMarket = 'domestic') {
   const [state, setState] = useState<SeedState>({ loading: false, result: null, error: null })
 
   async function uploadFile(file: File) {
@@ -22,7 +35,7 @@ export function useMovieMasterSeed() {
     try {
       const form = new FormData()
       form.append('file', file)
-      const res = await fetch('/api/v1/movie-title-match/master/seed', {
+      const res = await fetch(SEED_ENDPOINT[market], {
         method: 'POST',
         body: form,
       })
@@ -38,7 +51,7 @@ export function useMovieMasterSeed() {
   }
 
   async function fetchCount(): Promise<number> {
-    const res = await fetch('/api/v1/movie-title-match/master/count')
+    const res = await fetch(COUNT_ENDPOINT[market])
     if (!res.ok) return 0
     const data = await res.json()
     return data.count ?? 0

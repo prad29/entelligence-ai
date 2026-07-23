@@ -28,7 +28,7 @@ import app.database as _db_module
 from app.config import settings
 from app.database import get_session
 from app.main import app
-from app.models import MovieTitleBatchJob
+from app.models import MovieTitleBatchJob, MovieTitleIntlBatchJob
 
 # ── shared in-memory sqlite engine ───────────────────────────────────────────
 _sqlite_engine = create_engine(
@@ -52,10 +52,14 @@ client = TestClient(app, raise_server_exceptions=False)
 
 @pytest.fixture(autouse=True)
 def _clean_tables():
-    """Wipe MovieTitleBatchJob rows between tests for isolation."""
+    """Wipe MovieTitleBatchJob/MovieTitleIntlBatchJob rows between tests for isolation."""
     with Session(_sqlite_engine) as session:
         for row in session.exec(
             __import__("sqlmodel").select(MovieTitleBatchJob)
+        ).all():
+            session.delete(row)
+        for row in session.exec(
+            __import__("sqlmodel").select(MovieTitleIntlBatchJob)
         ).all():
             session.delete(row)
         session.commit()
@@ -89,6 +93,20 @@ def _stub_dispatch_batch(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_dispatch_intl_batch(monkeypatch):
+    """Never touch real Celery/Redis/sandbox for the international path either."""
+    calls = []
+
+    def _fake_delay(job_id):
+        calls.append(job_id)
+
+    monkeypatch.setattr(
+        "app.tasks.agentic_intl_match_task.dispatch_intl_batch_task.delay", _fake_delay
+    )
+    return calls
+
+
+@pytest.fixture(autouse=True)
 def _stub_batch_storage(monkeypatch):
     """Never touch real S3 — batch_storage backed by an in-memory dict."""
     import app.title_matching.batch_storage as storage
@@ -114,9 +132,21 @@ def _valid_csv() -> bytes:
     )
 
 
+def _valid_intl_csv() -> bytes:
+    return _csv_bytes(
+        "movie_title,show_date,ticketing_url,country",
+        "Blue Beetle,2023-08-16,https://example.com/blue-beetle,France",
+    )
+
+
 def _get_job(job_id: str) -> MovieTitleBatchJob:
     with Session(_sqlite_engine) as session:
         return session.get(MovieTitleBatchJob, job_id)
+
+
+def _get_intl_job(job_id: str) -> MovieTitleIntlBatchJob:
+    with Session(_sqlite_engine) as session:
+        return session.get(MovieTitleIntlBatchJob, job_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,4 +333,136 @@ def test_download_completed_but_file_missing_returns_404():
         session.commit()
 
     resp = client.get("/api/v1/movie-title-match/batch/job-nofile/download")
+    assert resp.status_code == 404
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /batch — market="international"
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_domestic_upload_unaffected_when_market_omitted():
+    """Regression guard: omitting market entirely must behave exactly like
+    before market/country existed — MovieTitleBatchJob, not the intl table."""
+    resp = client.post(
+        "/api/v1/movie-title-match/batch",
+        files={"file": ("titles.csv", _valid_csv(), "text/csv")},
+    )
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+    assert _get_job(job_id) is not None
+    assert _get_intl_job(job_id) is None
+
+
+def test_international_upload_returns_200_and_creates_intl_job():
+    resp = client.post(
+        "/api/v1/movie-title-match/batch",
+        files={"file": ("titles.csv", _valid_intl_csv(), "text/csv")},
+        data={"market": "international"},
+    )
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+
+    intl_job = _get_intl_job(job_id)
+    assert intl_job is not None
+    assert intl_job.total == 1
+    # Must NOT also land in the domestic table
+    assert _get_job(job_id) is None
+
+
+def test_international_upload_missing_country_column_returns_400():
+    bad_csv = _csv_bytes(
+        "movie_title,show_date,ticketing_url",
+        "Blue Beetle,2023-08-16,https://example.com/blue-beetle",
+    )
+    resp = client.post(
+        "/api/v1/movie-title-match/batch",
+        files={"file": ("titles.csv", bad_csv, "text/csv")},
+        data={"market": "international"},
+    )
+    assert resp.status_code == 400
+    assert "country" in resp.json()["detail"]
+
+
+def test_international_upload_dispatches_intl_task_not_domestic(
+    _stub_dispatch_intl_batch, _stub_dispatch_batch,
+):
+    resp = client.post(
+        "/api/v1/movie-title-match/batch",
+        files={"file": ("titles.csv", _valid_intl_csv(), "text/csv")},
+        data={"market": "international"},
+    )
+    job_id = resp.json()["job_id"]
+    assert _stub_dispatch_intl_batch == [job_id]
+    assert _stub_dispatch_batch == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /batch/intl/{job_id}, GET /batch/intl/{job_id}/download
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_intl_status_unknown_job_returns_404():
+    resp = client.get("/api/v1/movie-title-match/batch/intl/does-not-exist")
+    assert resp.status_code == 404
+
+
+def test_intl_status_progress_computed_when_total_positive():
+    with Session(_sqlite_engine) as session:
+        job = MovieTitleIntlBatchJob(id="intl-job-progress", status="processing", total=4, processed=1)
+        session.add(job)
+        session.commit()
+
+    resp = client.get("/api/v1/movie-title-match/batch/intl/intl-job-progress")
+    assert resp.status_code == 200
+    assert resp.json()["progress"] == 0.25
+
+
+def test_intl_download_before_completion_returns_400():
+    with Session(_sqlite_engine) as session:
+        job = MovieTitleIntlBatchJob(id="intl-job-notdone", status="processing", total=1)
+        session.add(job)
+        session.commit()
+
+    resp = client.get("/api/v1/movie-title-match/batch/intl/intl-job-notdone/download")
+    assert resp.status_code == 400
+
+
+def test_intl_download_after_completion_returns_200_xlsx_and_status_shows_intl_url(_stub_batch_storage):
+    import io as _io
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    wb.active.append(["movie_title", "country", "mapped_title"])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    output_key = "batch-outputs/intl-job-done_output.xlsx"
+    _stub_batch_storage[output_key] = buf.getvalue()
+
+    with Session(_sqlite_engine) as session:
+        job = MovieTitleIntlBatchJob(
+            id="intl-job-done",
+            status="completed",
+            total=1,
+            processed=1,
+            matched=1,
+            output_path=output_key,
+            ttl=datetime.utcnow() + timedelta(hours=1),
+        )
+        session.add(job)
+        session.commit()
+
+    resp = client.get("/api/v1/movie-title-match/batch/intl/intl-job-done/download")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    status_resp = client.get("/api/v1/movie-title-match/batch/intl/intl-job-done")
+    assert status_resp.json()["output_url"] == (
+        "/api/v1/movie-title-match/batch/intl/intl-job-done/download"
+    )
+
+
+def test_intl_download_missing_job_returns_404():
+    resp = client.get("/api/v1/movie-title-match/batch/intl/no-such-job/download")
     assert resp.status_code == 404

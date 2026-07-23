@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional
 import openpyxl
 
 REQUIRED_COLUMNS: tuple[str, str, str] = ("movie_title", "show_date", "ticketing_url")
+REQUIRED_COLUMNS_INTL: tuple[str, str, str, str] = ("movie_title", "show_date", "ticketing_url", "country")
 
 # "title" is accepted as an alias for "movie_title" — some upstream exports
 # (e.g. Tableau mapping lists) use "title" instead of the canonical column name.
@@ -41,13 +42,16 @@ def peek_headers(contents: bytes, ext: str) -> list[str]:
         wb.close()
 
 
-def parse_upload(contents: bytes, ext: str) -> tuple[list[str], list[dict[str, Any]]]:
+def parse_upload(
+    contents: bytes, ext: str, market: str = "domestic",
+) -> tuple[list[str], list[dict[str, Any]]]:
     """
     Parse an uploaded .csv or .xlsx file into (original-case headers, row dicts).
 
     Row dicts are keyed by the original-case header string as it appeared in
-    the file. Validates (case-insensitively) that all of REQUIRED_COLUMNS are
-    present, raising ValueError naming the missing column(s) if not.
+    the file. Validates (case-insensitively) that all required columns for the
+    given market are present, raising ValueError naming the missing column(s)
+    if not. market="international" additionally requires a "country" column.
     """
     ext = ext.lower()
     if ext == ".csv":
@@ -57,9 +61,10 @@ def parse_upload(contents: bytes, ext: str) -> tuple[list[str], list[dict[str, A
     else:
         raise ValueError(f"Unsupported file extension: {ext!r}")
 
+    required_columns = REQUIRED_COLUMNS_INTL if market == "international" else REQUIRED_COLUMNS
     lower_headers = {h.strip().lower() for h in headers}
     missing = [
-        col for col in REQUIRED_COLUMNS
+        col for col in required_columns
         if col not in lower_headers
         and not (col == "movie_title" and lower_headers & set(TITLE_COLUMN_ALIASES))
     ]

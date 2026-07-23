@@ -9,6 +9,7 @@ import pytest
 
 from app.title_matching.batch_io import (
     REQUIRED_COLUMNS,
+    REQUIRED_COLUMNS_INTL,
     build_output_xlsx,
     failed_row_result,
     parse_upload,
@@ -277,3 +278,52 @@ class TestBuildOutputXlsx:
 
 def test_required_columns_constant():
     assert REQUIRED_COLUMNS == ("movie_title", "show_date", "ticketing_url")
+
+
+class TestParseUploadInternational:
+    def test_domestic_upload_without_country_still_succeeds(self):
+        """market='domestic' (the default) must be completely unaffected by
+        the new country requirement — regression guard."""
+        contents = _csv_bytes(
+            "movie_title,show_date,ticketing_url",
+            "Dune,2024-01-01,https://example.com/dune",
+        )
+
+        headers, rows = parse_upload(contents, ".csv")
+
+        assert headers == ["movie_title", "show_date", "ticketing_url"]
+        assert len(rows) == 1
+
+    def test_international_upload_with_country_succeeds(self):
+        contents = _csv_bytes(
+            "movie_title,show_date,ticketing_url,country",
+            "Blue Beetle,2023-08-16,https://example.com/blue-beetle,France",
+        )
+
+        headers, rows = parse_upload(contents, ".csv", market="international")
+
+        assert headers == ["movie_title", "show_date", "ticketing_url", "country"]
+        assert len(rows) == 1
+        assert rows[0]["country"] == "France"
+
+    def test_international_upload_missing_country_raises_value_error(self):
+        contents = _csv_bytes(
+            "movie_title,show_date,ticketing_url",
+            "Blue Beetle,2023-08-16,https://example.com/blue-beetle",
+        )
+
+        with pytest.raises(ValueError, match="country"):
+            parse_upload(contents, ".csv", market="international")
+
+    def test_international_country_matched_case_insensitively(self):
+        contents = _csv_bytes(
+            "Movie_Title,Show_Date,Ticketing_URL,Country",
+            "Blue Beetle,2023-08-16,https://example.com/blue-beetle,France",
+        )
+
+        headers, rows = parse_upload(contents, ".csv", market="international")
+        assert len(rows) == 1
+
+
+def test_required_columns_intl_constant():
+    assert REQUIRED_COLUMNS_INTL == ("movie_title", "show_date", "ticketing_url", "country")

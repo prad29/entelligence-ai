@@ -36,3 +36,11 @@ class TitleMatchResult:
     ticketing_poster_url: Optional[str] = None
     fired_ai: bool = False
     page_metadata: Optional[dict] = None
+    # Second title guess for the id=0 DB post-lookup (runner._db_search fallback
+    # attempt). Populated only for market="international" when the agent supplies
+    # both a localized and an English/master title — e.g. suggested_movie_title
+    # ="Deep Water" (English) with alternate_movie_title="Águas Mortais" (the
+    # Brazil release title), or vice versa. Lets the post-lookup try both guesses
+    # instead of failing outright when the agent picks the "wrong" one of the two
+    # for whichever title MovieMasterIntl.movie_title actually stores.
+    alternate_movie_title: Optional[str] = None

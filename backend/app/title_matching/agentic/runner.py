@@ -127,8 +127,18 @@ def run_agentic_match(
             best = post_hits[0]
             result.suggested_movie_id = best["id"]
             result.canonical_movie_id = best["id"]
-            if not result.suggested_movie_title or result.suggested_movie_title == "Unknown":
-                result.suggested_movie_title = best["movie_title"]
+            # Always sync the displayed title to the row that actually got
+            # matched — not just when it started empty. Without this, a
+            # successful *alternate*-title fallback hit still displays
+            # Claude's original (wrong) primary guess as suggested_movie_title,
+            # even though suggested_movie_id/canonical_movie_id correctly
+            # point at the alternate's row. Confirmed live during batch
+            # testing: "Little Creatures" resolved to the correct DB row
+            # (id 156949, "Pequenas Criaturas") via the alternate title, but
+            # the batch output kept displaying "Little Creatures" as the
+            # mapped title, making an otherwise-correct match look wrong in
+            # any downstream title-string comparison.
+            result.suggested_movie_title = best["movie_title"]
             logger.info(
                 "agentic_post_lookup_hit id=%d title=%r",
                 best["id"], best["movie_title"],

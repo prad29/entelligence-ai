@@ -612,3 +612,31 @@ def test_post_lookup_does_not_attempt_alternate_when_none_supplied():
 
     assert result.suggested_movie_id == 0
     assert mock_db_search.call_count == 1
+
+
+def test_post_lookup_syncs_displayed_title_to_the_alternate_hit():
+    """Regression guard for a display bug found during live batch testing:
+    when the PRIMARY title guess misses and the ALTERNATE title resolves a
+    row whose stored movie_title differs from both guesses (e.g. agent says
+    "Little Creatures" / alternate "Pequenas Criaturas", but the DB row's
+    movie_title is "Pequenas Criaturas"), suggested_movie_title must be
+    updated to the row actually matched — not left as Claude's original
+    (now-superseded) primary guess. Before this fix, the id/canonical_id were
+    correct but the displayed title silently stayed wrong."""
+    def fake_db_search(query, market="domestic", country=None):
+        if query == "Little Creatures":
+            return []  # primary guess misses entirely
+        if query == "Pequenas Criaturas":
+            return [{"id": 156949, "movie_title": "Pequenas Criaturas", "country": "Brazil", "cover_image": ""}]
+        return []
+
+    result, mock_db_search = _run_agentic_match_with_mocks(
+        suggested_movie_title="Little Creatures",
+        alternate_movie_title="Pequenas Criaturas",
+        db_search_side_effect=fake_db_search,
+    )
+
+    assert result.suggested_movie_id == 156949
+    assert result.canonical_movie_id == 156949
+    assert result.suggested_movie_title == "Pequenas Criaturas"
+    assert mock_db_search.call_count == 2

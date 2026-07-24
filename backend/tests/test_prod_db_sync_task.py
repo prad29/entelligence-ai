@@ -133,6 +133,34 @@ class TestSyncMovieMasterTask:
         monkeypatch.setattr("app.database.engine", db_engine, raising=False)
         task_mod.sync_movie_master_task("does-not-exist")  # must not raise
 
+    def test_crash_loading_job_still_marks_job_failed(self, monkeypatch, db_engine):
+        """Regression test: a crash on the very first DB call (_load_job
+        itself, e.g. a dropped connection) must not leave the job stuck at
+        "queued" forever — that permanently blocks the in-flight-job guard
+        in movie_title_match.py from ever starting a new sync for this
+        market, since it only treats "queued"/"processing" jobs as busy."""
+        import app.tasks.prod_db_sync_task as task_mod
+
+        monkeypatch.setattr("app.database.engine", db_engine, raising=False)
+
+        real_load_job = task_mod._load_job
+        calls = {"n": 0}
+
+        def _flaky_load_job(session, job_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise Exception("SSL SYSCALL error: EOF detected")
+            return real_load_job(session, job_id)
+
+        monkeypatch.setattr(task_mod, "_load_job", _flaky_load_job)
+
+        job_id = _make_job(db_engine, "domestic")
+        task_mod.sync_movie_master_task(job_id)  # must not raise
+
+        job = _get_job(db_engine, job_id)
+        assert job.status == "failed"
+        assert job.error is not None
+
 
 # ── International ────────────────────────────────────────────────────────────
 

@@ -61,6 +61,25 @@ def _load_job(session: Session, job_id: str):
     return session.get(MovieMasterSyncJob, job_id)
 
 
+def _mark_job_failed(job_id: str) -> None:
+    """Mark a sync job "failed" using a brand-new session/connection —
+    called from the outermost except block, where the session that raised
+    may itself be unusable."""
+    from app.database import engine as db_engine
+
+    try:
+        with Session(db_engine) as session:
+            job = _load_job(session, job_id)
+            if job is None:
+                return
+            job.status = "failed"
+            job.error = _GENERIC_ERROR_MESSAGE.format(job_id=job_id)
+            session.add(job)
+            session.commit()
+    except Exception:
+        logger.exception("prod_db_sync: job_id=%r failed to mark job as failed", job_id)
+
+
 def _chunked(iterator, size: int):
     """Yield lists of up to `size` items from `iterator`."""
     chunk: list = []
@@ -86,13 +105,13 @@ def sync_movie_master_task(self, job_id: str) -> None:
     minutes for what's likely a persistent outage, not a transient blip."""
     from app.database import engine as db_engine
 
-    with Session(db_engine) as session:
-        job = _load_job(session, job_id)
-        if job is None:
-            logger.warning("prod_db_sync: job_id=%r not found, aborting", job_id)
-            return
+    try:
+        with Session(db_engine) as session:
+            job = _load_job(session, job_id)
+            if job is None:
+                logger.warning("prod_db_sync: job_id=%r not found, aborting", job_id)
+                return
 
-        try:
             job.status = "processing"
             job.total = prod_db.fetch_fq_movie_master_count()
             session.add(job)
@@ -135,12 +154,16 @@ def sync_movie_master_task(self, job_id: str) -> None:
                 job_id, inserted, updated, skipped,
             )
 
-        except Exception:
-            logger.exception("prod_db_sync: job_id=%r failed", job_id)
-            job.status = "failed"
-            job.error = _GENERIC_ERROR_MESSAGE.format(job_id=job_id)
-            session.add(job)
-            session.commit()
+    except Exception:
+        # Deliberately outside the `with Session(...)` block above: the
+        # exception that lands here (e.g. a dropped connection) may have
+        # come from that same session, leaving its transaction unusable. A
+        # fresh session guarantees the job can still be marked "failed" —
+        # without this, a job could be stuck at "queued"/"processing"
+        # forever and permanently block the in-flight-job guard in
+        # movie_title_match.py from ever starting a new sync for this market.
+        logger.exception("prod_db_sync: job_id=%r failed", job_id)
+        _mark_job_failed(job_id)
 
 
 @celery.task(
@@ -156,13 +179,13 @@ def sync_movie_master_intl_task(self, job_id: str) -> None:
     MovieMaster, per title_matching/loader.py)."""
     from app.database import engine as db_engine
 
-    with Session(db_engine) as session:
-        job = _load_job(session, job_id)
-        if job is None:
-            logger.warning("prod_db_sync_intl: job_id=%r not found, aborting", job_id)
-            return
+    try:
+        with Session(db_engine) as session:
+            job = _load_job(session, job_id)
+            if job is None:
+                logger.warning("prod_db_sync_intl: job_id=%r not found, aborting", job_id)
+                return
 
-        try:
             job.status = "processing"
             job.total = prod_db.fetch_fq_movie_master_intl_count()
             session.add(job)
@@ -199,9 +222,8 @@ def sync_movie_master_intl_task(self, job_id: str) -> None:
                 job_id, inserted, updated, skipped, skipped_undefined_country,
             )
 
-        except Exception:
-            logger.exception("prod_db_sync_intl: job_id=%r failed", job_id)
-            job.status = "failed"
-            job.error = _GENERIC_ERROR_MESSAGE.format(job_id=job_id)
-            session.add(job)
-            session.commit()
+    except Exception:
+        # See sync_movie_master_task's matching except block for why this
+        # lives outside the `with Session(...)` block and uses a fresh one.
+        logger.exception("prod_db_sync_intl: job_id=%r failed", job_id)
+        _mark_job_failed(job_id)

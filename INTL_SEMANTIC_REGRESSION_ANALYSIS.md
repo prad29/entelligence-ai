@@ -571,3 +571,70 @@ recall without web search ever becomes a hard requirement.
   the Vespa app package via the config server (`prepareandactivate`). Confirmed query-time
   only — `refeed`/`reindex` empty on deploy — so rollback is a redeploy with no data
   movement, taking effect in seconds.
+
+---
+
+## Post-ship live verification (Step 1, shipped commit `ef57860`)
+
+Re-ran the exact same 54-row `testintl.xlsx` batch (market=international, real Celery
+workers, real Vespa/Postgres/Bedrock, Serper credits confirmed available) against the
+rebuilt backend/celery images. **Correctness was verified against the actual resolved DB
+row id via the Celery worker logs (`agentic_post_lookup_hit id=X title=Y`), not the
+`mapped_title`/`reasoning` fields stored in Redis — those fields hold the agent's original
+pre-post-lookup guess (`resolve_present_in_db` in `batch_io.py:109-125` returns
+`result.suggested_movie_title`, which `run_agentic_match` does not overwrite with the
+post-lookup row's real title when it was already non-empty), so a naive comparison against
+them understates or misreports accuracy for rows where the post-lookup changed the
+resolved id. This is a known, pre-existing display quirk, out of scope for this fix.**
+
+| | Before (clean baseline) | After Step 1 |
+|---|---|---|
+| Correct matches | 41/54 (76%) | **50/54 (93%)** |
+| `present_in_db = "Yes"` (found *some* row) | 41/54 | 52/54 |
+| Genuine `no_match` | 13/54 | 2/54 (Non Non Dans L Espace, Lmd Solo La Mas 2 — same research-gap character as before, unrelated to Bug 1) |
+| **New false positives caused by Step 1** | 0 | **2/54** |
+| Wrong match, pre-existing/unrelated to Step 1 | — | 1/54 (Hiddensee, see below) |
+
+**The dual-title fallback fired and worked as designed** at least once: "Little Creatures"
+— primary title "Little Creatures" missed the DB, `alternate_movie_title="Pequenas
+Criaturas"` hit id 156949 on the second bounded attempt, confirmed correct.
+
+### New false positives (2) — a real, distinct side-effect of Step 1
+
+Both are the same failure shape: the agent now more often reports a plausible *generic*
+English title for the id=0 case (Step 1 working as intended), and `_db_search`'s pg_trgm
+trigram fallback (designed for spelling variants like "Oh Sukumari" vs "Oh..! Sukumari",
+not generic-word overlap) matches that generic title to an unrelated row that happens to
+share one common word:
+
+- **"Terapia di famiglia"** → agent's alternate guess "Family Therapy" → trigram-matched
+  id 77923 **"Rental Family"** (shares only the word "Family"). Ground truth: id 156867
+  "Jamais sans mon psy".
+- **"Thousand Moons"** → agent's post-lookup title "A Thousand Moons" → trigram-matched
+  id 27732 **"The Son of a Thousand Men"** (shares only the word "Thousand"). Ground truth:
+  "La Mamma"/"Mil Luas".
+
+Before Step 1, these same inputs correctly landed as `no_match` — the localized titles the
+old prompt asked for almost never trigram-matched anything, which was accidentally safer.
+Confirmed by the user: **ship Step 1 as-is** (net effect is strongly positive — 9 more
+correct matches for 2 new false positives) and **treat tightening the post-lookup's
+trigram threshold as a fast-follow, not a blocker**. The same trigram fallback is shared
+with the pre-fetch path (`_fetch_db_candidates`), so hardening it benefits both.
+
+**Suggested fast-follow (not implemented here):** require a minimum `pg_trgm` similarity
+score (e.g. via `similarity(unaccented_title, unaccented_query) > 0.4`, tunable) before
+trusting a post-lookup trigram hit as `present_in_db = "Yes"`, or fall back to keeping
+`movie_master_id = 0` when the only hit came from the trigram path and the query string is
+short/generic (e.g. fewer than ~3 significant words). Verify against this same 54-row set
+plus the 2 new false-positive cases specifically before shipping, to confirm the tightened
+threshold doesn't regress genuine trigram saves elsewhere (e.g. the existing "Oh Sukumari"
+regression test in `test_agentic_runner_candidates.py`).
+
+### Wrong match unrelated to Step 1 (1) — pre-existing DB near-duplicate rows
+
+**"Hiddensee + Besuch der Regisseurin"** resolved to id 152019 ("Hiddensee") via the
+*pre-fetch* candidate list directly — confirmed no `agentic_post_lookup` log line exists
+for this title, so Step 1's post-lookup code path was never invoked. Ground truth expects
+id 156988 ("Hiddensee + Q&A"), a near-duplicate row for the same event. This is a
+pre-existing DB-disambiguation issue (two rows for essentially the same screening) and Step
+1 did not cause, worsen, or fix it.

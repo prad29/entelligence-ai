@@ -99,25 +99,28 @@ def run_agentic_match(
             "agentic_post_lookup title=%r claude_identified=%r",
             title, result.suggested_movie_title,
         )
-        # Strip parentheticals from Claude's identified title (e.g. "The Odyssey (L'Odyssée)" → "The Odyssey")
-        post_query = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", result.suggested_movie_title).strip(" -:")
-        post_hits = _db_search(post_query or result.suggested_movie_title, market=market, country=country)
-
-        # An ordinal is a hard constraint the agent may have already used to
-        # reject a DB row (e.g. discarding a "Part 2" candidate for a "Part 5"
-        # input). The trigram fallback in _db_search is permissive on spelling
-        # but knows nothing about ordinals, so it can resurface exactly the
-        # row the agent just rejected — filter those back out before trusting
-        # post_hits[0].
         query_ordinal = (
             normalize_title(title).ordinal
             or normalize_title(result.suggested_movie_title).ordinal
         )
-        if query_ordinal:
-            post_hits = [
-                h for h in post_hits
-                if not has_conflicting_ordinal(h["movie_title"], query_ordinal)
-            ]
+        post_hits = _post_lookup_search(
+            result.suggested_movie_title, market, country, query_ordinal,
+        )
+
+        # International-only fallback: the agent may have guessed the "wrong"
+        # one of the English/localized title pair for whichever string
+        # MovieMasterIntl.movie_title actually stores for this row (see
+        # INTL_SEMANTIC_REGRESSION_ANALYSIS.md — the intl prompt now asks for
+        # the English title first, but the agent may only be confident in the
+        # localized one, or vice versa). One bounded second attempt, not a loop.
+        if not post_hits and result.alternate_movie_title:
+            logger.info(
+                "agentic_post_lookup_alternate title=%r claude_alternate=%r",
+                title, result.alternate_movie_title,
+            )
+            post_hits = _post_lookup_search(
+                result.alternate_movie_title, market, country, query_ordinal,
+            )
 
         if post_hits:
             db_candidates = post_hits  # refresh for cover_image lookup below
@@ -210,6 +213,32 @@ def _check_sandbox_reachable() -> None:
             "Start it with: docker compose up claude-sandbox. "
             f"Error: {exc}"
         )
+
+
+def _post_lookup_search(
+    claude_title: str,
+    market: str,
+    country: Optional[str],
+    query_ordinal: Optional[int],
+) -> list[dict]:
+    """Re-search the DB using a title Claude identified after finding no
+    pre-fetch candidate (movie_master_id=0). Shared by the primary
+    suggested_movie_title attempt and the international alternate_movie_title
+    fallback attempt in run_agentic_match — same query/filter logic either way.
+    """
+    # Strip parentheticals (e.g. "The Odyssey (L'Odyssée)" -> "The Odyssey")
+    post_query = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", claude_title).strip(" -:")
+    hits = _db_search(post_query or claude_title, market=market, country=country)
+
+    # An ordinal is a hard constraint the agent may have already used to
+    # reject a DB row (e.g. discarding a "Part 2" candidate for a "Part 5"
+    # input). The trigram fallback in _db_search is permissive on spelling
+    # but knows nothing about ordinals, so it can resurface exactly the row
+    # the agent just rejected — filter those back out before trusting hits[0].
+    if query_ordinal:
+        hits = [h for h in hits if not has_conflicting_ordinal(h["movie_title"], query_ordinal)]
+
+    return hits
 
 
 def _fetch_db_candidates(

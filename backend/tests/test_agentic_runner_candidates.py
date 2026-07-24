@@ -23,9 +23,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.title_matching.agentic import prompt_builder
+from app.title_matching.agentic import prompt_builder, runner as runner_mod
 from app.title_matching.agentic.result_parser import _build_result
-from app.title_matching.agentic.runner import _fetch_vespa_candidates
+from app.title_matching.agentic.runner import _fetch_vespa_candidates, run_agentic_match
+from app.title_matching.types import TitleMatchResult
 
 
 # ── Bug 1: Vespa field-name mismatch ─────────────────────────────────────────
@@ -428,3 +429,186 @@ def test_build_result_keeps_non_movie_candidate_id():
     assert result.suggested_movie_id == 147828
     assert result.canonical_movie_id == 147828
     assert result.decision == "REVIEW_NON_MOVIE"
+
+
+# ── Fix: international id=0 post-lookup used the wrong (localized) title ────
+#
+# See INTL_SEMANTIC_REGRESSION_ANALYSIS.md. The intl prompt used to tell the
+# agent to report the *localized* release title (e.g. "Águas Mortais") when
+# movie_master_id is 0, but MovieMasterIntl actually stores the English/master
+# title ("Deep Water") for these rows — so the id=0 post-lookup in
+# run_agentic_match searched for a string that doesn't exist in the DB and
+# always came up empty, even though the agent had already identified the
+# correct film. Fix: tell the agent to report the English title (what the DB
+# actually stores), and let it optionally supply a second guess in
+# alternate_movie_title so the post-lookup can try both.
+
+def test_intl_prompt_instructs_english_title_not_localized():
+    prompt = prompt_builder.build_prompt(
+        "Aguas Mortais", None, None, None, market="international", country="Brazil",
+    )
+    assert "ENGLISH" in prompt
+    assert "Deep Water" in prompt  # the illustrative example naming the failure mode
+    # The old (buggy) wording told the agent to report the localized release
+    # title as the primary post-lookup key — must no longer be present.
+    assert "title used for this film's theatrical" not in prompt
+
+
+def test_intl_prompt_documents_alternate_movie_title_output_key():
+    prompt = prompt_builder.build_prompt(
+        "Aguas Mortais", None, None, None, market="international", country="Brazil",
+    )
+    assert "alternate_movie_title" in prompt
+
+
+def test_domestic_prompt_zero_rule_unchanged_by_intl_fix():
+    """Regression guard: the domestic id=0 rule and prompt output must be
+    byte-identical to before this fix — only the international template
+    changed."""
+    prompt = prompt_builder.build_prompt("Some Domestic Title", None, None, None)
+    assert "US/domestic theatrical release" in prompt
+    assert "alternate_movie_title" not in prompt
+
+
+def test_build_result_reads_alternate_movie_title_from_payload():
+    payload = {
+        "candidates": [
+            {
+                "movie_master_id": 0,
+                "movie_title": "Deep Water",
+                "alternate_movie_title": "Aguas Mortais",
+                "confidence": 0.4,
+                "reasoning": "No DB candidate; Deep Water identified via web search.",
+            }
+        ],
+        "best_match_index": 0,
+        "event_type": "MOVIE",
+    }
+
+    result = _build_result(payload, raw_text=json.dumps(payload))
+
+    assert result.suggested_movie_title == "Deep Water"
+    assert result.alternate_movie_title == "Aguas Mortais"
+
+
+def test_build_result_alternate_movie_title_defaults_to_none():
+    payload = {
+        "candidates": [
+            {"movie_master_id": 0, "movie_title": "Deep Water", "confidence": 0.4, "reasoning": "x"}
+        ],
+        "best_match_index": 0,
+        "event_type": "MOVIE",
+    }
+
+    result = _build_result(payload, raw_text=json.dumps(payload))
+
+    assert result.alternate_movie_title is None
+
+
+def _run_agentic_match_with_mocks(
+    suggested_movie_title: str,
+    alternate_movie_title: str | None,
+    db_search_side_effect,
+    market: str = "international",
+    country: str | None = "Brazil",
+):
+    """Drive run_agentic_match end-to-end with the sandbox call and DB layer
+    mocked out, so only the post-lookup logic under test actually runs."""
+    agent_result = TitleMatchResult(
+        suggested_movie_id=0,
+        suggested_movie_title=suggested_movie_title,
+        canonical_movie_id=0,
+        confidence=0.4,
+        decision="REVIEW",
+        reasoning="No DB candidate; identified via web search.",
+        evidence={"agentic": True},
+        fired_ai=True,
+        alternate_movie_title=alternate_movie_title,
+    )
+
+    with patch.object(runner_mod, "_check_sandbox_reachable", return_value=None), \
+         patch.object(runner_mod, "_fetch_db_candidates", return_value=[]), \
+         patch.object(runner_mod, "_fetch_vespa_candidates", return_value=[]), \
+         patch.object(runner_mod, "_call_sandbox", return_value="irrelevant-stdout"), \
+         patch.object(runner_mod, "parse_agent_output", return_value=agent_result), \
+         patch.object(runner_mod, "_db_search", side_effect=db_search_side_effect) as mock_db_search:
+        result = run_agentic_match(
+            "Aguas Mortais", market=market, country=country,
+        )
+    return result, mock_db_search
+
+
+def test_post_lookup_resolves_via_english_title_the_agent_now_reports():
+    """The primary regression case: agent reports the English title (per the
+    fixed prompt rule); DB stores it under that title; post-lookup must
+    resolve it on the first attempt."""
+    def fake_db_search(query, market="domestic", country=None):
+        if query == "Deep Water":
+            return [{"id": 156728, "movie_title": "Deep Water", "country": "Brazil", "cover_image": ""}]
+        return []
+
+    result, mock_db_search = _run_agentic_match_with_mocks(
+        suggested_movie_title="Deep Water",
+        alternate_movie_title="Aguas Mortais",
+        db_search_side_effect=fake_db_search,
+    )
+
+    assert result.suggested_movie_id == 156728
+    assert result.canonical_movie_id == 156728
+    # First attempt (the primary title) already hit — the alternate fallback
+    # must not have been needed, i.e. _db_search was called exactly once.
+    assert mock_db_search.call_count == 1
+
+
+def test_post_lookup_falls_back_to_alternate_title_when_primary_misses():
+    """If the agent's primary guess doesn't match what the DB stores, the
+    bounded second attempt with alternate_movie_title must still resolve it."""
+    def fake_db_search(query, market="domestic", country=None):
+        if query == "Deep Water":
+            return []  # primary guess misses
+        if query == "Aguas Mortais":
+            return [{"id": 156728, "movie_title": "Deep Water", "country": "Brazil", "cover_image": ""}]
+        return []
+
+    result, mock_db_search = _run_agentic_match_with_mocks(
+        suggested_movie_title="Deep Water",
+        alternate_movie_title="Aguas Mortais",
+        db_search_side_effect=fake_db_search,
+    )
+
+    assert result.suggested_movie_id == 156728
+    assert result.canonical_movie_id == 156728
+    assert mock_db_search.call_count == 2
+
+
+def test_post_lookup_stays_zero_when_neither_title_resolves():
+    """Negative case: no regression to the existing 'no candidates' behavior
+    when both the primary and alternate titles come up empty."""
+    result, mock_db_search = _run_agentic_match_with_mocks(
+        suggested_movie_title="Some Unresolvable Title",
+        alternate_movie_title="Also Unresolvable",
+        db_search_side_effect=lambda query, market="domestic", country=None: [],
+    )
+
+    assert result.suggested_movie_id == 0
+    assert result.canonical_movie_id == 0
+    assert mock_db_search.call_count == 2
+
+
+def test_post_lookup_does_not_attempt_alternate_when_none_supplied():
+    """Domestic path (and any international result where the agent didn't
+    supply an alternate) must behave exactly as before this fix: exactly one
+    post-lookup attempt, no second call."""
+    def fake_db_search(query, market="domestic", country=None):
+        return []
+
+    result, mock_db_search = _run_agentic_match_with_mocks(
+        suggested_movie_title="Some Domestic Title",
+        alternate_movie_title=None,
+        db_search_side_effect=fake_db_search,
+        market="domestic",
+        country=None,
+    )
+
+    assert result.suggested_movie_id == 0
+    assert mock_db_search.call_count == 1

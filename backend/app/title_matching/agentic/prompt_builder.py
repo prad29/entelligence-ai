@@ -70,6 +70,7 @@ Step 6 — OUTPUT
     {{
       "movie_master_id": <int — MUST be an id from the DB candidates list below>,
       "movie_title": "<string>",
+      {alternate_movie_title_schema_line}
       "release_date": "<YYYY-MM-DD or null>",
       "confidence": <float 0–1>,
       "reasoning": "<plain English: what the title means, what was ruled out and why, \
@@ -133,11 +134,19 @@ CRITICAL: When movie_master_id is 0, movie_title MUST be the English-language ti
   always report the English one here, even if the input itself was in the original language."""
 
 _INTL_MASTER_ID_ZERO_RULE_TEMPLATE = """\
-CRITICAL: When movie_master_id is 0, movie_title MUST be the title used for this film's theatrical \
-release in {country} — this is what a DB post-lookup will search for, and Movie Master \
-International stores per-country release titles (which may be a localized spelling/translation, \
-not always the English title). If web_search results show multiple regional titles, prefer the one \
-used specifically for the {country} release."""
+CRITICAL: When movie_master_id is 0, movie_title MUST be the ENGLISH / canonical (master) title of \
+the film — this is what a DB post-lookup will search for. Movie Master International most often \
+stores the English master title in the searchable title field even for a {country} release (e.g. \
+the Brazil row for "Águas Mortais" is stored as "Deep Water"), so reporting only the localized \
+{country} spelling here will cause the lookup to miss a row that actually exists. If web_search \
+results show both a localized {country} title and an English/international title, report the \
+ENGLISH one in movie_title. If you are only confident in the localized {country} title (or unsure \
+which title the DB uses), still report your best English guess in movie_title AND put the \
+localized title in alternate_movie_title — the post-lookup will try both."""
+
+_ALTERNATE_MOVIE_TITLE_SCHEMA_LINE = (
+    '"alternate_movie_title": <string or null — OPTIONAL, see rule below>,'
+)
 
 _DOMESTIC_SCOPE_NOTE = ""
 
@@ -167,16 +176,23 @@ def build_prompt(
         db_label = "Movie Master International"
         master_id_zero_rule = _INTL_MASTER_ID_ZERO_RULE_TEMPLATE.format(country=country or "the requested country")
         market_scope_note = _INTL_SCOPE_NOTE_TEMPLATE.format(country=country or "the requested country")
+        # Only international needs the dual-title (English/localized) guess —
+        # domestic's zero-rule already asks for a single unambiguous English
+        # title, so keep the domestic schema/output byte-identical to before
+        # this fix by omitting the line entirely rather than emitting "null".
+        alternate_movie_title_schema_line = _ALTERNATE_MOVIE_TITLE_SCHEMA_LINE
     else:
         db_label = "Movie Master"
         master_id_zero_rule = _DOMESTIC_MASTER_ID_ZERO_RULE
         market_scope_note = _DOMESTIC_SCOPE_NOTE
+        alternate_movie_title_schema_line = ""
 
     system = _SYSTEM_PROMPT.format(
         db_label=db_label,
         market_scope_note=market_scope_note,
         poster_vision_step=poster_step,
         master_id_zero_rule=master_id_zero_rule,
+        alternate_movie_title_schema_line=alternate_movie_title_schema_line,
     )
     parts = [system, "---", f'Input title: "{title}"']
     if show_date:

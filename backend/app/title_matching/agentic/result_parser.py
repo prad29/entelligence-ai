@@ -182,6 +182,7 @@ def _build_result(payload: dict[str, Any], raw_text: str) -> TitleMatchResult:
         decision = "REVIEW"
 
     raw_id = best.get("movie_master_id") or 0
+    alternate_title = best.get("alternate_movie_title")
     return TitleMatchResult(
         suggested_movie_id=int(raw_id),
         suggested_movie_title=str(best.get("movie_title", "")),
@@ -197,4 +198,5 @@ def _build_result(payload: dict[str, Any], raw_text: str) -> TitleMatchResult:
             "event_type": event_type,
         },
         fired_ai=True,
+        alternate_movie_title=str(alternate_title) if alternate_title else None,
     )

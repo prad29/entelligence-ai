@@ -7,6 +7,7 @@ from app.routers import detect, amenities, circuits, review, jobs
 from app.routers import settings as settings_router
 from app.routers import movie_detect, movie_formats, movie_review, movie_jobs
 from app.routers import movie_title_match
+from app.routers import external_title_match
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -35,6 +36,9 @@ app.include_router(movie_formats.router)
 app.include_router(movie_review.router)
 app.include_router(movie_jobs.router)
 app.include_router(movie_title_match.router)
+
+if settings.EXTERNAL_API_ENABLED:
+    app.include_router(external_title_match.router)
 
 
 _DEFAULT_MOVIE_FORMAT_SEEDS = [

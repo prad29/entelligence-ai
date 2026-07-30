@@ -12,7 +12,6 @@ vs. xlsx + ephemeral Redis) is deliberately different.
 from __future__ import annotations
 
 import base64
-from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,7 +20,7 @@ from sqlmodel import Session, select
 
 from app.database import get_session
 from app.dependencies.api_auth import require_api_key, require_db_update_permission
-from app.models import ApiKey, ApiKeyMonthlyUsage, ApiTitleMatchJob, ApiTitleMatchRow
+from app.models import ApiKey, ApiTitleMatchJob, ApiTitleMatchRow
 from app.title_matching.external_schemas import (
     ExternalBatchRequest,
     ExternalRowInput,
@@ -93,8 +92,6 @@ def _submit_job(
         )
     session.commit()
 
-    _bump_monthly_usage(session, api_key.id, len(rows))
-
     from app.tasks.external_match_task import external_dispatch_job_task
 
     external_dispatch_job_task.delay(job.id)
@@ -105,29 +102,6 @@ def _submit_job(
         "rows_total": job.rows_total,
         "submitted_at": job.created_at.isoformat() + "Z",
     }
-
-
-def _bump_monthly_usage(session: Session, api_key_id: str, row_count: int) -> None:
-    from sqlalchemy import update
-
-    year_month = datetime.utcnow().strftime("%Y-%m")
-    usage = session.exec(
-        select(ApiKeyMonthlyUsage)
-        .where(ApiKeyMonthlyUsage.api_key_id == api_key_id)
-        .where(ApiKeyMonthlyUsage.year_month == year_month)
-    ).first()
-
-    if usage is None:
-        session.add(ApiKeyMonthlyUsage(api_key_id=api_key_id, year_month=year_month, rows_used=row_count))
-        session.commit()
-        return
-
-    session.execute(
-        update(ApiKeyMonthlyUsage)
-        .where(ApiKeyMonthlyUsage.id == usage.id)
-        .values(rows_used=ApiKeyMonthlyUsage.rows_used + row_count)
-    )
-    session.commit()
 
 
 @router.post("/singletitle", status_code=202)
@@ -209,6 +183,9 @@ class RetryRequest(BaseModel):
     row_uuids: list[str]
 
 
+_TERMINAL_PHASES = ("completed", "completed_with_errors", "failed")
+
+
 @router.post(JOBS_PREFIX + "/{job_id}/retry")
 async def retry_job_rows(
     job_id: str,
@@ -216,13 +193,15 @@ async def retry_job_rows(
     api_key: ApiKey = Depends(require_api_key),
     session: Session = Depends(get_session),
 ):
-    job = _get_owned_job(job_id, api_key, session)
+    from sqlalchemy import update
 
-    if job.phase in ("queued", "syncing", "processing"):
-        raise HTTPException(status_code=409, detail="Job is still running; cannot retry yet")
+    job = _get_owned_job(job_id, api_key, session)
 
     from app.config import settings
 
+    # Validate row_uuids before touching job.phase at all — a 404 here must
+    # never leave the job stuck in "processing" with no dispatch to move it
+    # back out.
     owned_rows = session.exec(
         select(ApiTitleMatchRow)
         .where(ApiTitleMatchRow.job_id == job_id)
@@ -234,6 +213,21 @@ async def retry_job_rows(
     if unknown:
         raise HTTPException(status_code=404, detail=f"Unknown row_uuid(s) for this job: {unknown}")
 
+    # Atomic, conditional phase flip: only one concurrent /retry call for
+    # this job can win the transition out of a terminal phase. A second
+    # call racing the first sees rowcount==0 (phase no longer matches
+    # terminal, since the first call already moved it) and gets a 409
+    # instead of both dispatching a retry over the same rows.
+    result = session.execute(
+        update(ApiTitleMatchJob)
+        .where(ApiTitleMatchJob.id == job_id)
+        .where(ApiTitleMatchJob.phase.in_(_TERMINAL_PHASES))
+        .values(phase="processing")
+    )
+    session.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=409, detail="Job is still running; cannot retry yet")
+
     queued = [u for u, r in owned_by_uuid.items() if r.status == "failed" and r.attempts < settings.EXTERNAL_API_ROW_MAX_ATTEMPTS]
     skipped = [u for u in payload.row_uuids if u not in queued]
 
@@ -241,5 +235,15 @@ async def retry_job_rows(
         from app.tasks.external_match_task import external_retry_rows_task
 
         external_retry_rows_task.delay(job_id, queued)
+    else:
+        # No retryable rows found (e.g. all requested rows are already at
+        # the attempt cap) — nothing will move the phase off 'processing'
+        # via finalize, so put it back to what it was before this attempt.
+        session.execute(
+            update(ApiTitleMatchJob)
+            .where(ApiTitleMatchJob.id == job_id)
+            .values(phase="completed" if job.rows_failed == 0 else "completed_with_errors")
+        )
+        session.commit()
 
     return {"job_id": job_id, "queued": queued, "skipped": skipped}

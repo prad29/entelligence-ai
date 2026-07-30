@@ -243,6 +243,13 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
         job = session.get(ApiTitleMatchJob, job_id)
         market = job.market if job is not None else "domestic"
         input_data = json.loads(row.input_json)
+        # attempts > 0 means a prior attempt already counted this row into
+        # rows_processed (and, on failure, rows_failed) — this run must
+        # adjust those counters instead of blindly re-incrementing them,
+        # or a retried row inflates rows_processed past rows_total and
+        # rows_failed never clears, permanently stranding the job at
+        # completed_with_errors even after every row eventually succeeds.
+        is_retry = row.attempts > 0
 
     title = input_data.get("movie_title", "") or ""
     show_date = input_data.get("show_date")
@@ -272,7 +279,7 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
                 "external_match_row exhausted job=%s row=%s title=%r err=%s",
                 job_id, row_id, title, exc,
             )
-            _record_failed_row(job_id, row_id, str(exc))
+            _record_failed_row(job_id, row_id, str(exc), is_retry=is_retry)
             return
 
         with Session(engine) as session:
@@ -291,7 +298,13 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
             session.commit()
 
             outcome_col = "rows_matched" if present == "Yes" else "rows_no_match"
-            _bump_job_counters(session, job_id, rows_processed=1, **{outcome_col: 1})
+            if is_retry:
+                # This row was already counted into rows_processed (and
+                # rows_failed) on its prior failed attempt — only clear the
+                # failure, don't re-count rows_processed.
+                _bump_job_counters(session, job_id, rows_failed=-1, **{outcome_col: 1})
+            else:
+                _bump_job_counters(session, job_id, rows_processed=1, **{outcome_col: 1})
     except Retry:
         # celery's self.retry() control-flow signal — MUST propagate so the
         # row is rescheduled. Not a failure of this row.
@@ -307,7 +320,7 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
             job_id, row_id, title,
         )
         try:
-            _record_failed_row(job_id, row_id, _failure_message(exc))
+            _record_failed_row(job_id, row_id, _failure_message(exc), is_retry=is_retry)
         except Exception:  # noqa: BLE001 - last-resort: never re-raise from here
             logger.exception(
                 "external_match_row: could not even record failed row job=%s row=%s",
@@ -328,7 +341,7 @@ def _failure_message(exc: BaseException) -> str:
     return text or f"{type(exc).__name__}"
 
 
-def _record_failed_row(job_id: str, row_id: int, message: str) -> None:
+def _record_failed_row(job_id: str, row_id: int, message: str, *, is_retry: bool = False) -> None:
     from app.database import engine
     from app.models import ApiTitleMatchRow
 
@@ -341,6 +354,11 @@ def _record_failed_row(job_id: str, row_id: int, message: str) -> None:
             row.updated_at = datetime.utcnow()
             session.add(row)
             session.commit()
+        # A retried row was already counted into rows_processed/rows_failed
+        # on its prior failed attempt — failing again must not double-count
+        # either counter.
+        if is_retry:
+            return
         _bump_job_counters(session, job_id, rows_processed=1, rows_failed=1)
 
 

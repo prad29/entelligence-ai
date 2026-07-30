@@ -246,28 +246,9 @@ class ApiKey(SQLModel, table=True):
     max_rows_per_batch: Optional[int] = None  # falls back to settings.MAX_BATCH_ROWS if null
     max_concurrent_jobs: int = Field(default=5)
     requests_per_minute: int = Field(default=60)
-    monthly_row_quota: Optional[int] = None  # unlimited if null
     db_update_allowed: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     rotated_at: Optional[datetime] = None
-
-
-class ApiKeyMonthlyUsage(SQLModel, table=True):
-    """Per-key row-consumption counter, reset by calendar month.
-
-    Incremented via a server-side `col = col + N` SQL expression (never a
-    Python read-modify-write) — same convention as MovieTitleBatchJob's
-    counters in agentic_match_task.py.
-    """
-
-    __table_args__ = (
-        UniqueConstraint("api_key_id", "year_month", name="uq_apikey_usage_month"),
-    )
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    api_key_id: str = Field(foreign_key="apikey.id", index=True)
-    year_month: str  # "YYYY-MM"
-    rows_used: int = Field(default=0)
 
 
 class ApiTitleMatchJob(SQLModel, table=True):

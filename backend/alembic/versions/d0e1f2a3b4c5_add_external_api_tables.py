@@ -1,4 +1,4 @@
-"""add external api tables (apikey, apikeymonthlyusage, apititlematchjob, apititlematchrow)
+"""add external api tables (apikey, apititlematchjob, apititlematchrow)
 
 Revision ID: d0e1f2a3b4c5
 Revises: c9d0e1f2a3b4
@@ -28,26 +28,12 @@ def upgrade() -> None:
             sa.Column('max_rows_per_batch', sa.Integer(), nullable=True),
             sa.Column('max_concurrent_jobs', sa.Integer(), nullable=False, server_default='5'),
             sa.Column('requests_per_minute', sa.Integer(), nullable=False, server_default='60'),
-            sa.Column('monthly_row_quota', sa.Integer(), nullable=True),
             sa.Column('db_update_allowed', sa.Boolean(), nullable=False, server_default=sa.false()),
             sa.Column('created_at', sa.DateTime(), nullable=False),
             sa.Column('rotated_at', sa.DateTime(), nullable=True),
             sa.PrimaryKeyConstraint('id'),
         )
         op.create_index('ix_apikey_key_hash', 'apikey', ['key_hash'], unique=True)
-
-    if not inspector.has_table('apikeymonthlyusage'):
-        op.create_table(
-            'apikeymonthlyusage',
-            sa.Column('id', sa.Integer(), nullable=False),
-            sa.Column('api_key_id', sa.String(), nullable=False),
-            sa.Column('year_month', sa.String(), nullable=False),
-            sa.Column('rows_used', sa.Integer(), nullable=False, server_default='0'),
-            sa.PrimaryKeyConstraint('id'),
-            sa.ForeignKeyConstraint(['api_key_id'], ['apikey.id']),
-            sa.UniqueConstraint('api_key_id', 'year_month', name='uq_apikey_usage_month'),
-        )
-        op.create_index('ix_apikeymonthlyusage_api_key_id', 'apikeymonthlyusage', ['api_key_id'])
 
     if not inspector.has_table('apititlematchjob'):
         op.create_table(
@@ -103,9 +89,6 @@ def downgrade() -> None:
 
     op.drop_index('ix_apititlematchjob_api_key_id', 'apititlematchjob')
     op.drop_table('apititlematchjob')
-
-    op.drop_index('ix_apikeymonthlyusage_api_key_id', 'apikeymonthlyusage')
-    op.drop_table('apikeymonthlyusage')
 
     op.drop_index('ix_apikey_key_hash', 'apikey')
     op.drop_table('apikey')

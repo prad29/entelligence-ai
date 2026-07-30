@@ -1,6 +1,6 @@
 """
-Auth, rate-limit, and quota dependencies for the external title-matching API
-(app/routers/external_title_match.py).
+Auth, rate-limit, and concurrency dependencies for the external
+title-matching API (app/routers/external_title_match.py).
 
 Plain FastAPI `Depends()` callables — no new middleware. This mirrors the
 codebase's existing convention: every route in movie_title_match.py only
@@ -16,14 +16,13 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from typing import Optional
 
 from fastapi import Depends, HTTPException, Request
 from sqlmodel import Session, select
 
 from app.config import settings
 from app.database import get_session
-from app.models import ApiKey, ApiKeyMonthlyUsage, ApiTitleMatchJob
+from app.models import ApiKey, ApiTitleMatchJob
 
 IN_FLIGHT_PHASES = ("queued", "syncing", "processing")
 
@@ -36,10 +35,6 @@ def _get_redis():
     import redis
 
     return redis.Redis.from_url(settings.REDIS_URL)
-
-
-def _current_year_month() -> str:
-    return datetime.utcnow().strftime("%Y-%m")
 
 
 def require_api_key(
@@ -57,7 +52,6 @@ def require_api_key(
         raise HTTPException(status_code=401, detail="Invalid or inactive API key")
 
     _check_rate_limit(api_key)
-    _check_monthly_quota(session, api_key)
     _check_concurrent_jobs(session, api_key)
 
     return api_key
@@ -85,26 +79,6 @@ def _check_rate_limit(api_key: ApiKey) -> None:
             status_code=429,
             detail="Rate limit exceeded",
             headers={"Retry-After": "60"},
-        )
-
-
-def _check_monthly_quota(session: Session, api_key: ApiKey) -> None:
-    if api_key.monthly_row_quota is None:
-        return
-
-    year_month = _current_year_month()
-    usage = session.exec(
-        select(ApiKeyMonthlyUsage)
-        .where(ApiKeyMonthlyUsage.api_key_id == api_key.id)
-        .where(ApiKeyMonthlyUsage.year_month == year_month)
-    ).first()
-    rows_used = usage.rows_used if usage is not None else 0
-
-    if rows_used >= api_key.monthly_row_quota:
-        raise HTTPException(
-            status_code=429,
-            detail="Monthly row quota exceeded",
-            headers={"Retry-After": "3600"},
         )
 
 

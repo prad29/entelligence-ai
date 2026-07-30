@@ -65,6 +65,41 @@ def _seed_default_movie_formats(session) -> None:
     session.commit()
 
 
+def _seed_env_api_key(session) -> None:
+    """
+    If settings.X_API_KEY is set, ensure a matching ApiKey row exists —
+    idempotent, so this can run on every startup without duplicating rows
+    or fighting a manually-created key.
+
+    This is how the operator's own key gets from .env (locally) or Secrets
+    Manager (in production) into the hashed ApiKey table the external API's
+    require_api_key dependency checks against, without ever hand-writing a
+    raw INSERT. The env var only ever holds the plaintext; only the hash is
+    persisted.
+    """
+    if not settings.X_API_KEY:
+        return
+
+    from sqlmodel import select
+    from app.dependencies.api_auth import hash_api_key
+    from app.models import ApiKey
+
+    key_hash = hash_api_key(settings.X_API_KEY)
+    existing = session.exec(select(ApiKey).where(ApiKey.key_hash == key_hash)).first()
+    if existing is not None:
+        return
+
+    session.add(
+        ApiKey(
+            key_hash=key_hash,
+            key_prefix=settings.X_API_KEY[:8],
+            label="env-seeded (X_API_KEY)",
+            db_update_allowed=True,
+        )
+    )
+    session.commit()
+
+
 async def _attach_semantic_index_when_ready(application) -> None:
     """
     Poll Redis every 15 s until the Celery semantic-index task signals readiness,
@@ -184,6 +219,7 @@ async def startup() -> None:
     with Session(db_engine) as session:
         app.state.engine = build_engine_from_db(session)
         _seed_default_movie_formats(session)
+        _seed_env_api_key(session)
         app.state.movie_engine = build_movie_format_engine_from_db(session)
 
         from app.title_matching.loader import build_title_match_engine

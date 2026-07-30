@@ -18,19 +18,46 @@ from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 # "title" is NOT accepted as an alias here — unlike batch_io.py's internal
 # Excel flow, the external contract's field names are strict.
 
 
 class ExternalRowInput(BaseModel):
-    row_uuid: str
-    movie_title: str
-    show_date: str  # YYYY-MM-DD
-    ticketing_url: str
-    country: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
+    row_uuid: str = Field(
+        description="Client-supplied UUID. Sole join key between input and output; "
+        "must be unique within a submission. Opaque to the API — never parsed or interpreted.",
+        examples=["3f7a1c92-5d84-4b21-9e6f-1a2b3c4d5e6f"],
+    )
+    movie_title: str = Field(
+        description="Raw title string as it appears at source (local-language or exhibitor-supplied). "
+        "Not normalized, case-folded, or repaired — tolerance for degraded input is a property "
+        "of the matching layer, not this contract.",
+        examples=["Verflucht normal"],
+    )
+    show_date: str = Field(
+        description="Showing date, YYYY-MM-DD. Boosts candidate scoring by proximity to a "
+        "candidate's release date and is passed to the matching agent as corroborating evidence.",
+        examples=["2026-07-28"],
+    )
+    ticketing_url: str = Field(
+        description="Ticketing/showtime page for this showing. Often the strongest available "
+        "signal when movie_title is a placeholder (e.g. 'ESTRENO').",
+        examples=["https://www.cinemaxx.de/buchtickets/zusammenfassung/1203/HO00001310/3700"],
+    )
+    country: Optional[str] = Field(
+        default=None,
+        description="Full English country name as held in the international Movie Master table. "
+        "Required when type=international, rejected when type=domestic.",
+        examples=["Germany"],
+    )
+    metadata: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Arbitrary key-value passthrough, returned untouched on the result row. "
+        "Where theater_name and any other client-side columns belong.",
+        examples=[{"theater_name": "HOLI Hamburg"}],
+    )
 
     @model_validator(mode="after")
     def _validate_fields(self) -> "ExternalRowInput":
@@ -52,7 +79,11 @@ class ExternalRowInput(BaseModel):
 
 
 class ExternalBatchRequest(BaseModel):
-    rows: list[ExternalRowInput]
+    rows: list[ExternalRowInput] = Field(
+        description="Rows to match, in submission order. Must be non-empty, capped at the "
+        "calling key's row limit (defaults to MAX_BATCH_ROWS), and every row_uuid must be "
+        "unique within this list.",
+    )
 
     @model_validator(mode="after")
     def _validate_rows(self) -> "ExternalBatchRequest":
@@ -72,6 +103,75 @@ class RowError(BaseModel):
     row_uuid: str
     field: str
     message: str
+
+
+class ValidationFailedResponse(BaseModel):
+    """422 body shape when any row fails validation. The whole submission is
+    rejected — a client fixes every row_error in a single pass rather than
+    resubmitting repeatedly."""
+
+    error: str = Field(default="validation_failed", examples=["validation_failed"])
+    row_errors: list[RowError]
+
+
+class SubmitJobResponse(BaseModel):
+    job_id: str = Field(description="UUID identifying this job. Use with the /external/jobs/* endpoints.")
+    status: str = Field(examples=["queued"])
+    rows_total: int
+    submitted_at: str = Field(description="ISO-8601 UTC timestamp.", examples=["2026-07-31T09:14:22Z"])
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str = Field(
+        description="queued | syncing | processing | completed | completed_with_errors | failed",
+        examples=["processing"],
+    )
+    rows_total: int
+    rows_processed: int
+    rows_matched: int
+    rows_no_match: int
+    rows_failed: int
+    started_at: Optional[str] = Field(default=None, description="ISO-8601 UTC timestamp.")
+    completed_at: Optional[str] = Field(default=None, description="ISO-8601 UTC timestamp.")
+    error: Optional[str] = Field(default=None, description="Set only when status=failed.")
+
+
+class RowResultResponse(BaseModel):
+    row_uuid: str = Field(description="Echoed verbatim from the input — the join key.")
+    input: dict[str, Any] = Field(description="The submitted row as received, including metadata.")
+    mapped_title: str = Field(description="Resolved Movie Master title. Empty string if no confident match.")
+    confidence_score: float = Field(description="0 for failed or unmatched rows.")
+    ai_reasoning: str = Field(description="Agent's explanation, or 'error: ...' for a failed row.")
+    present_in_db: bool = Field(
+        description="Whether the resolved movie id exists in MovieMaster/MovieMasterIntl."
+    )
+
+
+class JobResultsResponse(JobStatusResponse):
+    results: list[RowResultResponse] = Field(
+        description="Completed rows only (status completed or failed), sorted by submission order. "
+        "Returned whether or not the job has finished — supports partial retrieval mid-run."
+    )
+    next_cursor: Optional[str] = Field(
+        default=None,
+        description="Opaque cursor for the next page of results, or null if this is the last page.",
+    )
+
+
+class RetryRequestBody(BaseModel):
+    row_uuids: list[str] = Field(
+        description="row_uuid values to retry. Must belong to this job and currently be failed.",
+        examples=[["3f7a1c92-5d84-4b21-9e6f-1a2b3c4d5e6f"]],
+    )
+
+
+class RetryResponse(BaseModel):
+    job_id: str
+    queued: list[str] = Field(description="row_uuids that were actually re-queued for matching.")
+    skipped: list[str] = Field(
+        description="row_uuids not retried — already at the attempt cap, or not currently failed."
+    )
 
 
 def validate_rows_for_market(rows: list[ExternalRowInput], market: str) -> list[RowError]:

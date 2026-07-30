@@ -16,6 +16,19 @@ app = FastAPI(
     title="Amenity Screen Format Detector",
     description="Detect cinema screen formats from amenity strings.",
     version="0.3.0",
+    openapi_tags=[
+        {
+            "name": "external-title-match",
+            "description": (
+                "External, API-key-authenticated surface for movie title matching. Submit one "
+                "(POST /singletitle) or many (POST /batchtitle) rows for asynchronous AI matching "
+                "against Movie Master, then poll /external/jobs/{job_id} for status and "
+                "/external/jobs/{job_id}/results for row-level results. Every request requires "
+                "an x-api-key header. This is a parallel surface to the internal Excel-upload "
+                "flow under movie-title-match — both delegate to the same matching core."
+            ),
+        },
+    ],
 )
 
 app.add_middleware(

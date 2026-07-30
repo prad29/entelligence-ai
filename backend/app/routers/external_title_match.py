@@ -15,7 +15,6 @@ import base64
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.database import get_session
@@ -24,12 +23,27 @@ from app.models import ApiKey, ApiTitleMatchJob, ApiTitleMatchRow
 from app.title_matching.external_schemas import (
     ExternalBatchRequest,
     ExternalRowInput,
+    JobResultsResponse,
+    JobStatusResponse,
+    RetryRequestBody,
+    RetryResponse,
+    SubmitJobResponse,
+    ValidationFailedResponse,
     serialize_job_status,
     serialize_row_result,
     validate_rows_for_market,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["external-title-match"])
+
+_AUTH_RESPONSES = {401: {"description": "Missing or unknown x-api-key"}}
+_SUBMIT_RESPONSES = {
+    **_AUTH_RESPONSES,
+    403: {"description": "db_update=true requested without permission on this API key"},
+    422: {"description": "Row validation failed", "model": ValidationFailedResponse},
+    429: {"description": "Rate limit or concurrent-job limit exceeded"},
+}
+_JOB_RESPONSES = {**_AUTH_RESPONSES, 404: {"description": "Unknown job, or a job owned by another key"}}
 
 RESULTS_PAGE_SIZE = 100
 
@@ -104,22 +118,60 @@ def _submit_job(
     }
 
 
-@router.post("/singletitle", status_code=202)
+@router.post(
+    "/singletitle",
+    status_code=202,
+    response_model=SubmitJobResponse,
+    summary="Submit one title for asynchronous matching",
+    description=(
+        "Submits a single row for AI title matching against Movie Master. Row processing "
+        "takes on the order of minutes (candidate retrieval, an optional ticketing-page fetch, "
+        "and a Claude Code sandbox call), so this endpoint never blocks — it returns 202 with a "
+        "job_id immediately. Poll GET /external/jobs/{job_id} for status, or "
+        "GET /external/jobs/{job_id}/results for the resolved match once available."
+    ),
+    responses=_SUBMIT_RESPONSES,
+)
 async def submit_single_title(
     payload: ExternalRowInput,
-    type: Literal["domestic", "international"] = Query(...),
-    db_update: bool = Query(False),
+    type: Literal["domestic", "international"] = Query(
+        ..., description="Selects MovieMaster (domestic) or MovieMasterIntl (international)."
+    ),
+    db_update: bool = Query(
+        False,
+        description="If true, refreshes the local Movie Master corpus from production before "
+        "matching begins. Requires db_update_allowed on the calling API key.",
+    ),
     api_key: ApiKey = Depends(require_db_update_permission),
     session: Session = Depends(get_session),
 ):
     return _submit_job([payload], type, db_update, api_key, session)
 
 
-@router.post("/batchtitle", status_code=202)
+@router.post(
+    "/batchtitle",
+    status_code=202,
+    response_model=SubmitJobResponse,
+    summary="Submit a batch of titles for asynchronous matching",
+    description=(
+        "Submits N rows for AI title matching. A 100-row batch runs roughly "
+        "(rows ÷ worker concurrency) × per-row match time, so this endpoint never blocks — it "
+        "returns 202 with a job_id immediately. Row results are durable and individually "
+        "addressable: poll GET /external/jobs/{job_id}/results for partial results while the "
+        "job runs, and use POST /external/jobs/{job_id}/retry to re-run only the rows that failed."
+    ),
+    responses=_SUBMIT_RESPONSES,
+)
 async def submit_batch_title(
     payload: ExternalBatchRequest,
-    type: Literal["domestic", "international"] = Query(...),
-    db_update: bool = Query(False),
+    type: Literal["domestic", "international"] = Query(
+        ..., description="Selects MovieMaster (domestic) or MovieMasterIntl (international)."
+    ),
+    db_update: bool = Query(
+        False,
+        description="If true, refreshes the local Movie Master corpus from production before "
+        "matching begins. Requires db_update_allowed on the calling API key.",
+    ),
     api_key: ApiKey = Depends(require_db_update_permission),
     session: Session = Depends(get_session),
 ):
@@ -135,7 +187,17 @@ def _get_owned_job(job_id: str, api_key: ApiKey, session: Session) -> ApiTitleMa
     return job
 
 
-@router.get(JOBS_PREFIX + "/{job_id}")
+@router.get(
+    JOBS_PREFIX + "/{job_id}",
+    response_model=JobStatusResponse,
+    summary="Poll job status and progress",
+    description=(
+        "Returns the job's current phase and row-level progress counters. Poll no more "
+        "frequently than every 60 seconds — a job may legitimately show no progress for "
+        "several minutes given per-row runtime."
+    ),
+    responses=_JOB_RESPONSES,
+)
 async def get_job_status(
     job_id: str,
     api_key: ApiKey = Depends(require_api_key),
@@ -145,10 +207,20 @@ async def get_job_status(
     return serialize_job_status(job)
 
 
-@router.get(JOBS_PREFIX + "/{job_id}/results")
+@router.get(
+    JOBS_PREFIX + "/{job_id}/results",
+    response_model=JobResultsResponse,
+    summary="Fetch completed row results (supports partial retrieval mid-run)",
+    description=(
+        "Returns completed rows (status completed or failed), whether or not the job has "
+        "finished. Paginated at 100 rows per page via an opaque next_cursor. Rows complete in "
+        "arbitrary order — key on row_uuid, not array position, since results shift between polls."
+    ),
+    responses=_JOB_RESPONSES,
+)
 async def get_job_results(
     job_id: str,
-    next_cursor: Optional[str] = Query(None),
+    next_cursor: Optional[str] = Query(None, description="Opaque cursor from a previous response's next_cursor field."),
     api_key: ApiKey = Depends(require_api_key),
     session: Session = Depends(get_session),
 ):
@@ -179,17 +251,24 @@ async def get_job_results(
     return payload
 
 
-class RetryRequest(BaseModel):
-    row_uuids: list[str]
-
-
 _TERMINAL_PHASES = ("completed", "completed_with_errors", "failed")
 
 
-@router.post(JOBS_PREFIX + "/{job_id}/retry")
+@router.post(
+    JOBS_PREFIX + "/{job_id}/retry",
+    response_model=RetryResponse,
+    summary="Re-run only the named failed rows within an existing job",
+    description=(
+        "Re-runs failed rows in place without a full 90-minute rerun over a handful of failures. "
+        "Only rows currently status=failed and below the per-row attempt cap are retried; others "
+        "are reported back in `skipped`. Requires the job to be in a terminal phase — a job still "
+        "queued/syncing/processing returns 409."
+    ),
+    responses={**_JOB_RESPONSES, 409: {"description": "Job is still running; cannot retry yet"}},
+)
 async def retry_job_rows(
     job_id: str,
-    payload: RetryRequest,
+    payload: RetryRequestBody,
     api_key: ApiKey = Depends(require_api_key),
     session: Session = Depends(get_session),
 ):

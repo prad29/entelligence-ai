@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     PROD_DB_USERNAME: str = ""
     PROD_DB_PASSWORD: str = ""
 
+    # External API (singletitle/batchtitle) — feature-flagged like Mode B above.
+    EXTERNAL_API_ENABLED: bool = False
+    EXTERNAL_API_ROW_MAX_ATTEMPTS: int = 3
+    # Safety-net ceiling while polling the Vespa reindex ready-key during a
+    # db_update=true job; matching proceeds anyway past this point rather
+    # than failing the job outright over indexing lag.
+    EXTERNAL_API_SYNC_WAIT_CEILING_SECONDS: int = 1800
+    # Longer than JOB_TTL_HOURS (24h, used for xlsx output) — external API
+    # rows must survive long enough for a client to retry across a business day.
+    EXTERNAL_API_JOB_TTL_HOURS: int = 72
+
     class Config:
         env_file = ".env"
         extra = "ignore"

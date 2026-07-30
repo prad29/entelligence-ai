@@ -228,3 +228,98 @@ class MovieMasterIntl(SQLModel, table=True):
     genre2: Optional[str] = None
     running_time: Optional[int] = None
     updated_on: Optional[str] = None
+
+
+class ApiKey(SQLModel, table=True):
+    """External API tenancy record. Keys are stored hashed (SHA-256) — the
+    plaintext key is shown to the client once at creation and never
+    persisted. `key_prefix` (first 8 chars of the plaintext) exists only so
+    an admin listing can identify a key without ever storing/logging the
+    full secret.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    key_hash: str = Field(index=True, unique=True)
+    key_prefix: str
+    label: Optional[str] = None
+    active: bool = Field(default=True)
+    max_rows_per_batch: Optional[int] = None  # falls back to settings.MAX_BATCH_ROWS if null
+    max_concurrent_jobs: int = Field(default=5)
+    requests_per_minute: int = Field(default=60)
+    monthly_row_quota: Optional[int] = None  # unlimited if null
+    db_update_allowed: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    rotated_at: Optional[datetime] = None
+
+
+class ApiKeyMonthlyUsage(SQLModel, table=True):
+    """Per-key row-consumption counter, reset by calendar month.
+
+    Incremented via a server-side `col = col + N` SQL expression (never a
+    Python read-modify-write) — same convention as MovieTitleBatchJob's
+    counters in agentic_match_task.py.
+    """
+
+    __table_args__ = (
+        UniqueConstraint("api_key_id", "year_month", name="uq_apikey_usage_month"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    api_key_id: str = Field(foreign_key="apikey.id", index=True)
+    year_month: str  # "YYYY-MM"
+    rows_used: int = Field(default=0)
+
+
+class ApiTitleMatchJob(SQLModel, table=True):
+    """External-API job for the singletitle/batchtitle endpoints.
+
+    A separate job model and Celery task module from MovieTitleBatchJob /
+    MovieTitleIntlBatchJob (see external_match_task.py) — this surface needs
+    durable, individually addressable rows for partial retrieval and
+    row-scoped retry across a job that can run for over an hour, which the
+    existing xlsx + ephemeral-Redis-hash pipeline was never built for. Both
+    paths call the same run_agentic_match core, so matching logic itself
+    never forks.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    api_key_id: str = Field(foreign_key="apikey.id", index=True)
+    market: str  # "domestic" | "international"
+    db_update: bool = Field(default=False)
+    phase: str = Field(default="queued")  # queued|syncing|processing|completed|completed_with_errors|failed
+    rows_total: int = Field(default=0)
+    rows_processed: int = Field(default=0)
+    rows_matched: int = Field(default=0)
+    rows_no_match: int = Field(default=0)
+    rows_failed: int = Field(default=0)
+    error: Optional[str] = None  # top-level job failure message (not per-row)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    ttl: Optional[datetime] = None
+
+
+class ApiTitleMatchRow(SQLModel, table=True):
+    """One row of an ApiTitleMatchJob. row_uuid is client-supplied and is the
+    sole join key between input and output — never parsed or interpreted,
+    only echoed back. Unique per job (not globally) via the composite
+    constraint below.
+    """
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "row_uuid", name="uq_api_row_job_uuid"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    job_id: str = Field(foreign_key="apititlematchjob.id", index=True)
+    row_uuid: str = Field(index=True)
+    input_json: str  # the submitted row as received, including metadata
+    status: str = Field(default="pending")  # pending|processing|completed|failed
+    mapped_title: Optional[str] = None
+    confidence: Optional[float] = None
+    reasoning: Optional[str] = None
+    present_in_db: bool = Field(default=False)
+    attempts: int = Field(default=0)
+    error: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

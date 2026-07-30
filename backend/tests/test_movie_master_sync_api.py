@@ -20,6 +20,8 @@ DB isolated without that cross-file side effect.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -131,6 +133,35 @@ class TestPostSync:
 
         assert resp.status_code == 200
         assert len(_stub_sync_tasks["domestic"]) == 1
+
+    def test_stale_queued_job_is_marked_failed_and_does_not_block_new_sync(self, _stub_sync_tasks):
+        # Simulates a worker that crashed before ever reaching its except
+        # block (e.g. a dropped DB connection on the very first query) —
+        # the job is left at "queued" forever with no natural expiry.
+        stale_created_at = datetime.utcnow() - timedelta(minutes=31)
+        stale_job_id = _make_job("domestic", status="queued", created_at=stale_created_at)
+
+        resp = client.post("/api/v1/movie-title-match/master/sync/domestic")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["job_id"] != stale_job_id
+        assert _stub_sync_tasks["domestic"] == [body["job_id"]]
+
+        with Session(_sqlite_engine) as session:
+            stale_job = session.get(MovieMasterSyncJob, stale_job_id)
+            assert stale_job.status == "failed"
+            assert stale_job.error is not None
+
+    def test_recently_queued_job_still_blocks_new_sync(self, _stub_sync_tasks):
+        recent_created_at = datetime.utcnow() - timedelta(minutes=5)
+        recent_job_id = _make_job("domestic", status="queued", created_at=recent_created_at)
+
+        resp = client.post("/api/v1/movie-title-match/master/sync/domestic")
+
+        assert resp.status_code == 200
+        assert resp.json()["job_id"] == recent_job_id
+        assert _stub_sync_tasks["domestic"] == []
 
 
 class TestGetSync:

@@ -7,6 +7,7 @@ from app.routers import detect, amenities, circuits, review, jobs
 from app.routers import settings as settings_router
 from app.routers import movie_detect, movie_formats, movie_review, movie_jobs
 from app.routers import movie_title_match
+from app.routers import external_title_match
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -15,6 +16,19 @@ app = FastAPI(
     title="Amenity Screen Format Detector",
     description="Detect cinema screen formats from amenity strings.",
     version="0.3.0",
+    openapi_tags=[
+        {
+            "name": "external-title-match",
+            "description": (
+                "External, API-key-authenticated surface for movie title matching. Submit one "
+                "(POST /singletitle) or many (POST /batchtitle) rows for asynchronous AI matching "
+                "against Movie Master, then poll /external/jobs/{job_id} for status and "
+                "/external/jobs/{job_id}/results for row-level results. Every request requires "
+                "an x-api-key header. This is a parallel surface to the internal Excel-upload "
+                "flow under movie-title-match — both delegate to the same matching core."
+            ),
+        },
+    ],
 )
 
 app.add_middleware(
@@ -35,6 +49,9 @@ app.include_router(movie_formats.router)
 app.include_router(movie_review.router)
 app.include_router(movie_jobs.router)
 app.include_router(movie_title_match.router)
+
+if settings.EXTERNAL_API_ENABLED:
+    app.include_router(external_title_match.router)
 
 
 _DEFAULT_MOVIE_FORMAT_SEEDS = [
@@ -58,6 +75,41 @@ def _seed_default_movie_formats(session) -> None:
             priority_tier=tier,
             status="approved",
         ))
+    session.commit()
+
+
+def _seed_env_api_key(session) -> None:
+    """
+    If settings.X_API_KEY is set, ensure a matching ApiKey row exists —
+    idempotent, so this can run on every startup without duplicating rows
+    or fighting a manually-created key.
+
+    This is how the operator's own key gets from .env (locally) or Secrets
+    Manager (in production) into the hashed ApiKey table the external API's
+    require_api_key dependency checks against, without ever hand-writing a
+    raw INSERT. The env var only ever holds the plaintext; only the hash is
+    persisted.
+    """
+    if not settings.X_API_KEY:
+        return
+
+    from sqlmodel import select
+    from app.dependencies.api_auth import hash_api_key
+    from app.models import ApiKey
+
+    key_hash = hash_api_key(settings.X_API_KEY)
+    existing = session.exec(select(ApiKey).where(ApiKey.key_hash == key_hash)).first()
+    if existing is not None:
+        return
+
+    session.add(
+        ApiKey(
+            key_hash=key_hash,
+            key_prefix=settings.X_API_KEY[:8],
+            label="env-seeded (X_API_KEY)",
+            db_update_allowed=True,
+        )
+    )
     session.commit()
 
 
@@ -180,6 +232,7 @@ async def startup() -> None:
     with Session(db_engine) as session:
         app.state.engine = build_engine_from_db(session)
         _seed_default_movie_formats(session)
+        _seed_env_api_key(session)
         app.state.movie_engine = build_movie_format_engine_from_db(session)
 
         from app.title_matching.loader import build_title_match_engine

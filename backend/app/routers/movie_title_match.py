@@ -2,7 +2,7 @@ import csv
 import io
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -456,6 +456,16 @@ async def seed_master_intl(
     }
 
 
+# International sync alone runs ~158K rows; 30 minutes comfortably covers
+# a genuinely slow real run while still reclaiming a crashed job quickly.
+_SYNC_JOB_STALE_MINUTES = 30
+
+_STALE_JOB_ERROR_MESSAGE = (
+    "job_id={job_id} was stuck in queued/processing past the stale "
+    "threshold — treated as crashed and marked failed to unblock new syncs."
+)
+
+
 def _serialize_sync_job(job) -> dict:
     progress = (job.processed / job.total) if job.total > 0 else 0
     return {
@@ -499,7 +509,20 @@ async def sync_master_from_prod_db(
         .order_by(MovieMasterSyncJob.created_at.desc())
     ).first()
     if in_flight is not None:
-        return {"job_id": in_flight.id, "status": in_flight.status}
+        # A job stuck in "queued"/"processing" well past a full-table
+        # sync's plausible runtime is a crashed worker that never reached
+        # its except block (e.g. a dropped DB connection on the very first
+        # query) rather than a genuinely in-flight sync — treat it as
+        # failed instead of letting it block every future sync for this
+        # market forever.
+        stale_cutoff = datetime.utcnow() - timedelta(minutes=_SYNC_JOB_STALE_MINUTES)
+        if in_flight.created_at < stale_cutoff:
+            in_flight.status = "failed"
+            in_flight.error = _STALE_JOB_ERROR_MESSAGE.format(job_id=in_flight.id)
+            session.add(in_flight)
+            session.commit()
+        else:
+            return {"job_id": in_flight.id, "status": in_flight.status}
 
     job = MovieMasterSyncJob(market=market)
     session.add(job)

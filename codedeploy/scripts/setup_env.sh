@@ -18,6 +18,7 @@ PROD_DB_PORT=$(echo "$PROD_DB_SECRET" | jq -r .port)
 PROD_DB_DATABASE=$(echo "$PROD_DB_SECRET" | jq -r .database)
 PROD_DB_USERNAME=$(echo "$PROD_DB_SECRET" | jq -r .username)
 PROD_DB_PASSWORD=$(echo "$PROD_DB_SECRET" | jq -r .password)
+EXTERNAL_API_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/external-api-key --query SecretString --output text --region us-east-1)
 
 cat > /app/.env.prod <<EOF
 DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@amenity-db.critf4jd3ef7.us-east-1.rds.amazonaws.com:5432/amenitydb
@@ -54,6 +55,8 @@ PROD_DB_PORT=${PROD_DB_PORT}
 PROD_DB_DATABASE=${PROD_DB_DATABASE}
 PROD_DB_USERNAME=${PROD_DB_USERNAME}
 PROD_DB_PASSWORD=${PROD_DB_PASSWORD}
+EXTERNAL_API_ENABLED=true
+X_API_KEY=${EXTERNAL_API_KEY}
 EOF
 
 chmod 600 /app/.env.prod

@@ -12,7 +12,6 @@ vs. xlsx + ephemeral Redis) is deliberately different.
 from __future__ import annotations
 
 import base64
-import json
 from datetime import datetime
 from typing import Literal, Optional
 

@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # Claude sandbox sidecar URL (set via CLAUDE_SANDBOX_URL env var)
     CLAUDE_SANDBOX_URL: str = "http://claude-sandbox:3100"
     AGENTIC_BATCH_MAX_CONCURRENCY: int = 2
+    # Category-B fix: an independent verification pass over the first pass's
+    # candidate pick, for market="international" only. Calls Bedrock Converse
+    # directly (not a second claude-sandbox subprocess) since it only needs
+    # to reason over evidence already gathered — no web tools required.
+    AGENTIC_INTL_RERANK_ENABLED: bool = True
     # S3 bucket backing batch upload/output storage — required because backend,
     # celery-worker, and celery-agentic-worker are separate containers with no
     # shared filesystem; a local /tmp path written by one is invisible to another.

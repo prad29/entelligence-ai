@@ -17,6 +17,7 @@ from app.title_matching.agentic import (
     AgenticTimeoutError,
 )
 from app.title_matching.agentic.prompt_builder import build_prompt
+from app.title_matching.agentic.rerank import verify_candidate_pick
 from app.title_matching.agentic.result_parser import parse_agent_output
 from app.title_matching.normalizer import has_conflicting_ordinal, normalize_title
 from app.title_matching.semantic_index import get_embedding
@@ -38,7 +39,7 @@ def run_agentic_match(
     # Pre-fetch DB candidates before calling the sandbox so the agent
     # never needs to call localhost (the sidecar can't reach compose services).
     db_candidates = _fetch_db_candidates(title, market=market, country=country)
-    vespa_candidates = _fetch_vespa_candidates(title, market=market)
+    vespa_candidates = _fetch_vespa_candidates(title, market=market, country=country)
 
     if use_poster_vision:
         _annotate_poster_availability(db_candidates)
@@ -90,6 +91,21 @@ def run_agentic_match(
         except Exception as retry_exc:
             logger.warning("agentic_retry_failed title=%r error=%s", title, retry_exc)
 
+    # Category-B fix: independent verification pass over the first pass's
+    # candidate pick, international only. Runs BEFORE the id=0 post-lookup
+    # below so an OVERRULE/NO_DB_MATCH verdict's corrected titles are what
+    # the post-lookup searches for, rather than the first pass's (possibly
+    # wrong) title. Skipped when there are no candidates at all — nothing to
+    # verify against, so go straight to post-lookup.
+    if (
+        market == "international"
+        and settings.AGENTIC_INTL_RERANK_ENABLED
+        and (db_candidates or vespa_candidates)
+    ):
+        result = verify_candidate_pick(
+            title, show_date, country, result, db_candidates, vespa_candidates, settings,
+        )
+
     # If Claude identified the movie but couldn't match a DB id (id=0),
     # do a second DB lookup using Claude's identified movie_title.
     # This handles cases like "Graveyard Shift: CANNIBAL HOLOCAUST (New Restoration)"
@@ -103,9 +119,26 @@ def run_agentic_match(
             normalize_title(title).ordinal
             or normalize_title(result.suggested_movie_title).ordinal
         )
-        post_hits = _post_lookup_search(
-            result.suggested_movie_title, market, country, query_ordinal,
-        )
+
+        # International-only, tried FIRST: rerelease_lookup_title (e.g.
+        # "Shrek 25th Anniversary") is the most specific guess when the
+        # anniversary rule (see intl-title-match skill Section A) says a
+        # dated re-release row should exist but wasn't found among the
+        # pre-fetched candidates.
+        post_hits: list[dict] = []
+        if market == "international" and result.rerelease_lookup_title:
+            logger.info(
+                "agentic_post_lookup_rerelease title=%r rerelease_lookup_title=%r",
+                title, result.rerelease_lookup_title,
+            )
+            post_hits = _post_lookup_search(
+                result.rerelease_lookup_title, market, country, query_ordinal,
+            )
+
+        if not post_hits:
+            post_hits = _post_lookup_search(
+                result.suggested_movie_title, market, country, query_ordinal,
+            )
 
         # International-only fallback: the agent may have guessed the "wrong"
         # one of the English/localized title pair for whichever string
@@ -139,6 +172,68 @@ def run_agentic_match(
             # mapped title, making an otherwise-correct match look wrong in
             # any downstream title-string comparison.
             result.suggested_movie_title = best["movie_title"]
+            # Rewrite reasoning to reflect the true outcome for BOTH markets —
+            # left untouched, the UI shows "no DB candidate matched" text next
+            # to a movie_master_id that in fact resolved via this post-lookup,
+            # read by a user as "match failed" when it didn't. Confidence is
+            # bumped for both markets too, but to different tiers: international
+            # gets 0.90 (AUTO_ACCEPT-eligible) because the hit is a country-scoped
+            # exact-title match on MovieMasterIntl; domestic gets a smaller 0.75
+            # bump that stays inside the REVIEW band (0.60-0.90) and is NEVER
+            # auto-accepted, because MovieMaster has no country column, so a
+            # domestic post-lookup hit is an uncorroborated title-only match —
+            # a genuinely weaker signal that still deserves human review. 0.75
+            # (not lower, e.g. 0.70) is deliberate: the review-queue UI colors
+            # confidence red below 0.75 — the same red as a garbage match —
+            # which would defeat the point of distinguishing a real post-lookup
+            # hit from the stale low-confidence state it replaces.
+            original_reasoning = result.reasoning
+            if market == "international":
+                result.confidence = 0.90
+                if result.decision == "REVIEW":
+                    result.decision = "AUTO_ACCEPT"
+            else:
+                result.confidence = 0.75
+                # Event-type-driven decisions (REVIEW_NON_MOVIE/REVIEW_MULTI_FILM)
+                # are never touched — they aren't a confidence signal. But an
+                # AUTO_ACCEPT the FIRST pass already assigned (confidence >= 0.90
+                # alone triggers this in result_parser._build_result, independent
+                # of movie_master_id) must be downgraded back to REVIEW here —
+                # otherwise a domestic post-lookup hit could silently keep
+                # AUTO_ACCEPT while confidence drops to 0.75, which is exactly
+                # the "confidence/decision say something the row doesn't back up"
+                # bug this fix exists to remove.
+                if result.decision == "AUTO_ACCEPT":
+                    result.decision = "REVIEW"
+
+            # tier_phrase is derived from the FINAL decision (after the branch
+            # above), not just from market — a rerank-produced NO_DB_MATCH
+            # verdict (see rerank.py) can leave decision as REVIEW_NON_MOVIE/
+            # REVIEW_MULTI_FILM even for an international row, and the phrase
+            # must not claim "auto-accepted" when it didn't happen.
+            if result.decision == "AUTO_ACCEPT":
+                tier_phrase = "the result was updated to point at it and auto-accepted"
+            elif result.decision in ("REVIEW_NON_MOVIE", "REVIEW_MULTI_FILM"):
+                tier_phrase = (
+                    f"the result was updated to point at it but kept in "
+                    f"{result.decision} for human review (event-type "
+                    f"classification, not a confidence signal)"
+                )
+            elif market == "international":
+                tier_phrase = "the result was updated to point at it but kept in REVIEW"
+            else:
+                tier_phrase = (
+                    "the result was updated to point at it but kept in REVIEW, "
+                    "since a domestic title-only DB match has no country field "
+                    "to corroborate it"
+                )
+            result.reasoning = (
+                f"Resolved via exact-title post-lookup: Claude identified this as "
+                f"{result.suggested_movie_title!r} but found no plausible pre-fetched "
+                f"DB candidate; a follow-up exact DB search on that title found "
+                f"movie_master_id={best['id']} and {tier_phrase}. "
+                f"Claude's original reasoning: {original_reasoning}"
+            )
             logger.info(
                 "agentic_post_lookup_hit id=%d title=%r",
                 best["id"], best["movie_title"],
@@ -376,25 +471,42 @@ def _trigram_search(session, master_model, query: str, country: Optional[str] = 
         return []
 
 
-def _fetch_vespa_candidates(title: str, market: str = "domestic") -> list[dict]:
+def _fetch_vespa_candidates(
+    title: str, market: str = "domestic", country: Optional[str] = None,
+) -> list[dict]:
     """Hybrid semantic (ANN) + BM25 search against Vespa, scoped to the market's
     document type. Embeds the query title via Cohere Embed Multilingual v3 so
     cross-language titles (e.g. "Aguas Mortais" -> "Deep Water") can be found
     by vector similarity even when they share no keywords with the English
     master title. Falls back to BM25-only search if embedding is unavailable
-    (Bedrock unreachable, etc.) rather than failing the whole pre-fetch."""
+    (Bedrock unreachable, etc.) rather than failing the whole pre-fetch.
+
+    country, when given and market="international", adds an exact-match YQL
+    filter on the intl schema's `country` attribute so cross-country title
+    collisions never surface as candidates (movie_master has no such field,
+    so this is a no-op for market="domestic"). The recall clause (ANN or
+    BM25) is parenthesized as a group before the filter is appended — YQL's
+    `and` binds tighter than `or`, so an unparenthesized
+    `nn or userQuery() and country contains "X"` would parse as
+    `nn or (userQuery() and country contains "X")`, leaving the ANN branch
+    country-blind.
+    """
     schema = "movie_master_intl" if market == "international" else "movie_master"
     id_field = "movie_master_intl_id" if market == "international" else "movie_master_id"
     hits = 10
+    country_filter = ""
+    if country and market == "international":
+        escaped_country = country.replace('"', '\\"')
+        country_filter = f' and country contains "{escaped_country}"'
     try:
         embedding = get_embedding(title, settings)
 
         if embedding is not None:
-            yql = (
-                f"select * from sources {schema} "
-                f"where ({{targetHits:{hits}}}nearestNeighbor(embedding,q_embedding)) "
-                f"or userQuery()"
+            recall_clause = (
+                f"(({{targetHits:{hits}}}nearestNeighbor(embedding,q_embedding)) "
+                f"or userQuery())"
             )
+            yql = f"select * from sources {schema} where {recall_clause}{country_filter}"
             body_dict = {
                 "yql": yql,
                 "query": title,
@@ -403,8 +515,9 @@ def _fetch_vespa_candidates(title: str, market: str = "domestic") -> list[dict]:
                 "hits": hits,
             }
         else:
+            yql = f"select * from sources {schema} where userQuery(){country_filter}"
             body_dict = {
-                "yql": f"select * from sources {schema} where userQuery()",
+                "yql": yql,
                 "query": title,
                 "ranking": "hybrid",
                 "hits": hits,
@@ -419,7 +532,7 @@ def _fetch_vespa_candidates(title: str, market: str = "domestic") -> list[dict]:
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
             hits = data.get("root", {}).get("children", [])
-            return [
+            candidates = [
                 {
                     "id": h.get("fields", {}).get(id_field),
                     "movie_title": h.get("fields", {}).get("title"),
@@ -428,6 +541,12 @@ def _fetch_vespa_candidates(title: str, market: str = "domestic") -> list[dict]:
                 }
                 for h in hits
             ]
+            # country only exists on the intl schema — mirrors _db_search's
+            # existing convention of only including "country" in intl dicts.
+            if market == "international":
+                for cand, h in zip(candidates, hits):
+                    cand["country"] = h.get("fields", {}).get("country")
+            return candidates
     except Exception as exc:
         logger.warning("vespa_candidate_fetch_failed title=%r error=%s", title, exc)
         return []

@@ -41,16 +41,24 @@ _LOG_PROGRESS_EVERY = 500
 # ---------------------------------------------------------------------------
 
 def _compose_embed_text(row: dict) -> str:
-    """Build the text to embed for a master row: title + year + director."""
+    """Build the text to embed for a master row: title + year + director + country.
+
+    country is only ever present on international rows (build_semantic_index_intl_task
+    is the only caller that populates it) — appending it here improves country-aware
+    ANN recall for the intl schema without affecting the domestic embed text at all.
+    """
     title = row.get("movie_title") or ""
     release_date = row.get("release_date") or ""
     year = release_date[:4] if len(release_date) >= 4 and release_date[:4].isdigit() else ""
     director = row.get("director") or ""
+    country = row.get("country") or ""
     parts = [title]
     if year and year != "0000":
         parts.append(year)
     if director:
         parts.append(director)
+    if country:
+        parts.append(country)
     return " ".join(parts)
 
 
@@ -176,27 +184,31 @@ def _embed_batch(
 # Vespa application deployment
 # ---------------------------------------------------------------------------
 
-def _deploy_vespa_app(vespa_url: str) -> bool:
+def _deploy_vespa_app(vespa_url: str, force: bool = False) -> bool:
     """
     Deploy the Vespa application package from backend/vespa/.
     Returns True if deployment succeeded (or was already deployed).
-    """
-    try:
-        from vespa.application import Vespa
-        from vespa.package import ApplicationPackage, Schema, Document, Field, FieldSet, RankProfile
-        from vespa.package import HNSW
-        import requests
 
-        # Check if already deployed by probing the schema endpoint
-        probe = requests.get(
-            f"{vespa_url}/ApplicationStatus",
-            timeout=5,
-        )
-        if probe.status_code == 200:
-            logger.info("semantic_index: Vespa app already deployed")
-            return True
-    except Exception:
-        pass
+    force=True skips the "already deployed" short-circuit below and always
+    redeploys — required after editing a .sd schema file (e.g. adding the
+    intl `country` field), since ApplicationStatus returning 200 only proves
+    *some* version of the app is running, not that it matches the schema
+    currently on disk.
+    """
+    if not force:
+        try:
+            import requests
+
+            # Check if already deployed by probing the schema endpoint
+            probe = requests.get(
+                f"{vespa_url}/ApplicationStatus",
+                timeout=5,
+            )
+            if probe.status_code == 200:
+                logger.info("semantic_index: Vespa app already deployed")
+                return True
+        except Exception:
+            pass
 
     try:
         # Deploy via config server
@@ -288,11 +300,21 @@ class VespaSemanticIndex:
         query_text: str,
         k: int = 10,
         exclude_ids: Optional[set[int]] = None,
+        country: Optional[str] = None,
     ) -> list[tuple[int, float]]:
         """
         Hybrid BM25 + ANN search.
         Returns list of (doc_id, score) sorted by score descending.
         Scores are scaled to [0, 0.6] for pipeline weight compatibility.
+
+        country, when given AND schema is the intl schema, adds an exact-match
+        filter clause scoping results to that country — never applied to the
+        domestic schema, which has no such field. The recall clause (ANN or
+        BM25) is parenthesized as a group BEFORE the filter is appended,
+        since YQL's `and` binds tighter than `or`: an unparenthesized
+        `nn or userQuery() and country contains "X"` would parse as
+        `nn or (userQuery() and country contains "X")`, leaving the ANN branch
+        country-blind.
         """
         exclude_ids = exclude_ids or set()
 
@@ -301,12 +323,17 @@ class VespaSemanticIndex:
             vec = list(map(float, query_embedding))
 
             fetch_k = k + len(exclude_ids) + 10
+            recall_clause = (
+                f"(({{targetHits:{fetch_k}}}nearestNeighbor(embedding,q_embedding)) "
+                f"or userQuery())"
+            )
+            yql = f"select {self._id_field} from {self._schema} where {recall_clause}"
+            if country and self._schema == _VESPA_SCHEMA_INTL:
+                escaped_country = country.replace('"', '\\"')
+                yql += f' and country contains "{escaped_country}"'
+
             body = {
-                "yql": (
-                    f"select {self._id_field} from {self._schema} "
-                    f"where ({{targetHits:{fetch_k}}}nearestNeighbor(embedding,q_embedding)) "
-                    f"or userQuery()"
-                ),
+                "yql": yql,
                 "query": query_text,
                 "ranking": "hybrid",
                 "input.query(q_embedding)": vec,
@@ -366,6 +393,10 @@ def _feed_rows(
             "embed_text": _compose_embed_text(row),
             "embedding": emb,
         }
+        # country only exists on the intl schema — movie_master has no such
+        # field and Vespa rejects unknown fields, so never add it for domestic.
+        if schema == _VESPA_SCHEMA_INTL and row.get("country"):
+            fields["country"] = row["country"]
         try:
             resp = app.feed_data_point(
                 schema=schema,
@@ -384,6 +415,8 @@ def build_semantic_index(
     master_rows: list[dict],
     settings,
     schema: str = _VESPA_SCHEMA,
+    force: bool = False,
+    force_deploy: bool = False,
 ) -> Optional[VespaSemanticIndex]:
     """
     Build (or reuse) the Vespa semantic index for the given schema.
@@ -397,6 +430,13 @@ def build_semantic_index(
     4. Embed and feed only the missing rows.
     5. Return a VespaSemanticIndex ready for queries.
 
+    force=True skips the ID-diff and re-embeds/re-feeds every row in
+    master_rows, overwriting existing docs by id — needed once after adding a
+    new field to a schema (e.g. intl `country`) so already-indexed docs pick
+    it up; the normal ID-diff path would otherwise never touch them again.
+    force_deploy is forwarded to _deploy_vespa_app to force a redeploy of the
+    .sd package itself (see that function's docstring).
+
     Returns None if semantic search is disabled or infrastructure is unavailable.
     """
     if not settings.SEMANTIC_SEARCH_ENABLED:
@@ -405,19 +445,27 @@ def build_semantic_index(
 
     vespa_url = settings.VESPA_URL
 
-    if not _deploy_vespa_app(vespa_url):
+    if not _deploy_vespa_app(vespa_url, force=force_deploy):
         logger.warning("semantic_index: Vespa deploy failed, skipping semantic index")
         return None
 
-    indexed_ids = _get_indexed_ids(vespa_url, schema=schema)
-    rows_to_feed = [r for r in master_rows if r["id"] not in indexed_ids]
-    logger.info(
-        "semantic_index[%s]: %d/%d rows already indexed; %d to feed",
-        schema,
-        len(indexed_ids),
-        len(master_rows),
-        len(rows_to_feed),
-    )
+    if force:
+        indexed_ids: set = set()
+        rows_to_feed = master_rows
+        logger.info(
+            "semantic_index[%s]: force=True, re-feeding all %d rows",
+            schema, len(master_rows),
+        )
+    else:
+        indexed_ids = _get_indexed_ids(vespa_url, schema=schema)
+        rows_to_feed = [r for r in master_rows if r["id"] not in indexed_ids]
+        logger.info(
+            "semantic_index[%s]: %d/%d rows already indexed; %d to feed",
+            schema,
+            len(indexed_ids),
+            len(master_rows),
+            len(rows_to_feed),
+        )
 
     if rows_to_feed:
         bedrock_client = _get_bedrock_client(settings)
@@ -438,6 +486,11 @@ def build_semantic_index(
 def build_semantic_index_intl(
     master_rows: list[dict],
     settings,
+    force: bool = False,
+    force_deploy: bool = False,
 ) -> Optional[VespaSemanticIndex]:
     """Build (or reuse) the Vespa semantic index for the international schema."""
-    return build_semantic_index(master_rows, settings, schema=_VESPA_SCHEMA_INTL)
+    return build_semantic_index(
+        master_rows, settings, schema=_VESPA_SCHEMA_INTL,
+        force=force, force_deploy=force_deploy,
+    )

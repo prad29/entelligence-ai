@@ -44,3 +44,10 @@ class TitleMatchResult:
     # instead of failing outright when the agent picks the "wrong" one of the two
     # for whichever title MovieMasterIntl.movie_title actually stores.
     alternate_movie_title: Optional[str] = None
+    # Anniversary/re-release form of the title (e.g. "Shrek 25th Anniversary"),
+    # populated only for market="international" when the anniversary rule says
+    # a dated re-release row should exist but wasn't found among the pre-fetched
+    # candidates. Tried as the FIRST id=0 DB post-lookup attempt (before
+    # suggested_movie_title/alternate_movie_title) since it's the most specific
+    # guess when it's present.
+    rerelease_lookup_title: Optional[str] = None

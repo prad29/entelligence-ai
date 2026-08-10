@@ -1,41 +1,9 @@
 from __future__ import annotations
 
 import json
-import re
-from functools import lru_cache
-from pathlib import Path
 from typing import Optional
 
 from app.config import settings
-
-# Marker inserted around the inlined intl-title-match skill content — lets
-# tests assert its presence/absence without depending on the full skill prose.
-INTL_TITLE_MATCH_SKILL_MARKER = "## intl-title-match skill"
-
-_SKILL_PATH = (
-    Path(__file__).parent / "skills" / "intl-title-match" / "SKILL.md"
-)
-
-
-@lru_cache(maxsize=1)
-def _load_intl_skill_content() -> str:
-    """Load and cache the intl-title-match skill body (frontmatter stripped).
-
-    Inlined directly into the international system prompt rather than
-    delivered via Claude Code's skill auto-discovery — a live smoke test
-    against a rebuilt claude-sandbox image confirmed the CLI's one-shot
-    `--print -` headless mode discovers a baked-in SKILL.md (it appears in
-    the session-init payload's `skills` list) but does not actually load its
-    content into the model's context, via either explicit `/intl-title-match`
-    invocation or implicit auto-discovery. SKILL.md remains the authored
-    source of truth for the prose; this just reads it in at import time.
-    """
-    text = _SKILL_PATH.read_text()
-    # Strip the YAML frontmatter block (--- ... ---) if present.
-    match = re.match(r"^---\n.*?\n---\n", text, re.DOTALL)
-    if match:
-        text = text[match.end():]
-    return text.strip()
 
 
 _SYSTEM_PROMPT = """\
@@ -137,7 +105,7 @@ what confirms this pick, why auto-accept or review>",
 - If web tools (web_search, web_fetch) fail or return errors, proceed with what you know and still
   output the JSON result. Tool failures are not a reason to skip the JSON output.
 - Return ONLY the JSON object — no markdown fences, no preamble
-{intl_skill_section}"""
+"""
 
 
 _POSTER_VISION_STEP = """\
@@ -180,10 +148,6 @@ _ALTERNATE_MOVIE_TITLE_SCHEMA_LINE = (
     '"alternate_movie_title": <string or null — OPTIONAL, see rule below>,'
 )
 
-_RERELEASE_LOOKUP_TITLE_SCHEMA_LINE = (
-    '"rerelease_lookup_title": <string or null — OPTIONAL, see intl-title-match skill below>,'
-)
-
 _DOMESTIC_SCOPE_NOTE = ""
 
 _INTL_SCOPE_NOTE_TEMPLATE = """\
@@ -216,23 +180,12 @@ def build_prompt(
         # domestic's zero-rule already asks for a single unambiguous English
         # title, so keep the domestic schema/output byte-identical to before
         # this fix by omitting the line entirely rather than emitting "null".
-        # rerelease_lookup_title is folded onto the same schema-line slot as
-        # alternate_movie_title (rather than getting its own template slot)
-        # so the domestic path's single-empty-line output stays byte-for-byte
-        # unchanged — adding a second independently-empty slot would leave a
-        # stray blank line in the domestic prompt.
-        alternate_movie_title_schema_line = (
-            f"{_ALTERNATE_MOVIE_TITLE_SCHEMA_LINE}\n      {_RERELEASE_LOOKUP_TITLE_SCHEMA_LINE}"
-        )
-        intl_skill_section = (
-            f"\n{INTL_TITLE_MATCH_SKILL_MARKER}\n\n{_load_intl_skill_content()}\n"
-        )
+        alternate_movie_title_schema_line = _ALTERNATE_MOVIE_TITLE_SCHEMA_LINE
     else:
         db_label = "Movie Master"
         master_id_zero_rule = _DOMESTIC_MASTER_ID_ZERO_RULE
         market_scope_note = _DOMESTIC_SCOPE_NOTE
         alternate_movie_title_schema_line = ""
-        intl_skill_section = ""
 
     system = _SYSTEM_PROMPT.format(
         db_label=db_label,
@@ -240,7 +193,6 @@ def build_prompt(
         poster_vision_step=poster_step,
         master_id_zero_rule=master_id_zero_rule,
         alternate_movie_title_schema_line=alternate_movie_title_schema_line,
-        intl_skill_section=intl_skill_section,
     )
     parts = [system, "---", f'Input title: "{title}"']
     if show_date:

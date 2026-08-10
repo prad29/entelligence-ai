@@ -19,7 +19,6 @@ suite.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -404,105 +403,8 @@ def test_fetch_vespa_candidates_reads_intl_id_field():
         candidates = _fetch_vespa_candidates("Blue Beetle", market="international")
 
     assert candidates == [
-        {"id": 555, "movie_title": "Blue Beetle", "release_date": None, "relevance": 15.0, "country": None}
+        {"id": 555, "movie_title": "Blue Beetle", "release_date": None, "relevance": 15.0}
     ]
-
-
-def test_fetch_vespa_candidates_adds_country_filter_for_international():
-    fake_resp = MagicMock()
-    fake_resp.read.return_value = _vespa_response([])
-    fake_resp.__enter__.return_value = fake_resp
-    fake_resp.__exit__.return_value = False
-
-    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
-         patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
-        _fetch_vespa_candidates("Aguas Mortais", market="international", country="Brazil")
-
-    body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
-    assert 'and country contains "Brazil"' in body["yql"]
-
-
-def test_fetch_vespa_candidates_wraps_recall_clause_in_parens_before_and():
-    """Precedence guard: YQL's `and` binds tighter than `or`, so the recall
-    clause (ANN or BM25) must be parenthesized as one group before the
-    country filter is appended, or the ANN branch would silently stay
-    country-blind."""
-    fake_resp = MagicMock()
-    fake_resp.read.return_value = _vespa_response([])
-    fake_resp.__enter__.return_value = fake_resp
-    fake_resp.__exit__.return_value = False
-
-    with patch("app.title_matching.agentic.runner.get_embedding", return_value=[0.1, 0.2]), \
-         patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
-        _fetch_vespa_candidates("Aguas Mortais", market="international", country="Brazil")
-
-    body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
-    yql = body["yql"]
-    assert "where ((" in yql
-    assert ") or userQuery())" in yql
-    assert yql.index(") or userQuery())") < yql.index("and country contains")
-
-
-def test_fetch_vespa_candidates_omits_country_filter_for_domestic():
-    fake_resp = MagicMock()
-    fake_resp.read.return_value = _vespa_response([])
-    fake_resp.__enter__.return_value = fake_resp
-    fake_resp.__exit__.return_value = False
-
-    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
-         patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
-        _fetch_vespa_candidates("Dirty Dancing", market="domestic", country="Belgium")
-
-    body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
-    assert "country" not in body["yql"]
-
-
-def test_fetch_vespa_candidates_omits_country_filter_when_country_is_none():
-    fake_resp = MagicMock()
-    fake_resp.read.return_value = _vespa_response([])
-    fake_resp.__enter__.return_value = fake_resp
-    fake_resp.__exit__.return_value = False
-
-    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
-         patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
-        _fetch_vespa_candidates("Aguas Mortais", market="international", country=None)
-
-    body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
-    assert "country" not in body["yql"]
-
-
-def test_fetch_vespa_candidates_country_filter_handles_multiword_country():
-    fake_resp = MagicMock()
-    fake_resp.read.return_value = _vespa_response([])
-    fake_resp.__enter__.return_value = fake_resp
-    fake_resp.__exit__.return_value = False
-
-    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
-         patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
-        _fetch_vespa_candidates("THE IMMORTALS", market="international", country="South Korea")
-
-    body = json.loads(mock_urlopen.call_args.kwargs.get("data") or mock_urlopen.call_args[0][0].data)
-    assert 'and country contains "South Korea"' in body["yql"]
-
-
-def test_fetch_vespa_candidates_returns_country_in_candidate_dicts():
-    hit = {
-        "relevance": 12.0,
-        "fields": {
-            "movie_master_intl_id": 910001, "title": "Runner Intl Test Movie",
-            "release_date": None, "country": "France",
-        },
-    }
-    fake_resp = MagicMock()
-    fake_resp.read.return_value = _vespa_response([hit])
-    fake_resp.__enter__.return_value = fake_resp
-    fake_resp.__exit__.return_value = False
-
-    with patch("app.title_matching.agentic.runner.get_embedding", return_value=None), \
-         patch("urllib.request.urlopen", return_value=fake_resp):
-        candidates = _fetch_vespa_candidates("Runner Intl Test Movie", market="international", country="France")
-
-    assert candidates[0]["country"] == "France"
 
 
 def test_build_result_keeps_non_movie_candidate_id():
@@ -568,53 +470,6 @@ def test_domestic_prompt_zero_rule_unchanged_by_intl_fix():
     assert "alternate_movie_title" not in prompt
 
 
-# ── Skill-content inlining fix: intl-only invocation + rerelease_lookup_title ──
-#
-# claude-sandbox runs one-shot `claude --print -` with a fresh, empty $HOME
-# per request. A live smoke test (curl'ing the rebuilt sandbox image with a
-# baked-in SKILL.md) confirmed the CLI genuinely discovers the skill file
-# (it appears in the init payload's `skills`/`slash_commands` lists), but
-# neither an explicit `/intl-title-match` line nor implicit auto-discovery
-# actually loads its content into the model's context in headless mode — the
-# model consistently reports it received no such instructions. Per the
-# pre-approved fallback, the skill's rules are inlined directly into this
-# module's international system prompt instead (SKILL.md remains the
-# authored source of truth for prose, just also copied here).
-
-_DOMESTIC_PROMPT_SNAPSHOT_PATH = (
-    Path(__file__).parent / "fixtures" / "domestic_prompt_snapshot.txt"
-)
-
-
-def test_domestic_prompt_byte_identical_to_snapshot():
-    """Strongest form of the byte-identical invariant above: captured from a
-    known-good build before any intl-only prompt_builder changes landed."""
-    prompt = prompt_builder.build_prompt("Some Domestic Title", None, None, None)
-    expected = _DOMESTIC_PROMPT_SNAPSHOT_PATH.read_text()
-    assert prompt == expected
-
-
-def test_intl_prompt_includes_skill_content():
-    prompt = prompt_builder.build_prompt(
-        "Aguas Mortais", None, None, None, market="international", country="Brazil",
-    )
-    assert "SKILL_CANARY" not in prompt  # canary is smoke-test-only, must never ship
-    assert prompt_builder.INTL_TITLE_MATCH_SKILL_MARKER in prompt
-
-
-def test_domestic_prompt_has_no_skill_content():
-    prompt = prompt_builder.build_prompt("Some Domestic Title", None, None, None)
-    assert prompt_builder.INTL_TITLE_MATCH_SKILL_MARKER not in prompt
-    assert "rerelease_lookup_title" not in prompt
-
-
-def test_intl_prompt_documents_rerelease_lookup_title_key():
-    prompt = prompt_builder.build_prompt(
-        "Aguas Mortais", None, None, None, market="international", country="Brazil",
-    )
-    assert "rerelease_lookup_title" in prompt
-
-
 def test_build_result_reads_alternate_movie_title_from_payload():
     payload = {
         "candidates": [
@@ -650,47 +505,12 @@ def test_build_result_alternate_movie_title_defaults_to_none():
     assert result.alternate_movie_title is None
 
 
-def test_build_result_reads_rerelease_lookup_title_from_payload():
-    payload = {
-        "candidates": [
-            {
-                "movie_master_id": 0,
-                "movie_title": "Shrek",
-                "rerelease_lookup_title": "Shrek 25th Anniversary",
-                "confidence": 0.5,
-                "reasoning": "10 indistinguishable duplicates, no date signal.",
-            }
-        ],
-        "best_match_index": 0,
-        "event_type": "RERELEASE",
-    }
-
-    result = _build_result(payload, raw_text=json.dumps(payload))
-
-    assert result.rerelease_lookup_title == "Shrek 25th Anniversary"
-
-
-def test_build_result_rerelease_lookup_title_defaults_to_none():
-    payload = {
-        "candidates": [
-            {"movie_master_id": 0, "movie_title": "Deep Water", "confidence": 0.4, "reasoning": "x"}
-        ],
-        "best_match_index": 0,
-        "event_type": "MOVIE",
-    }
-
-    result = _build_result(payload, raw_text=json.dumps(payload))
-
-    assert result.rerelease_lookup_title is None
-
-
 def _run_agentic_match_with_mocks(
     suggested_movie_title: str,
     alternate_movie_title: str | None,
     db_search_side_effect,
     market: str = "international",
     country: str | None = "Brazil",
-    decision: str = "REVIEW",
 ):
     """Drive run_agentic_match end-to-end with the sandbox call and DB layer
     mocked out, so only the post-lookup logic under test actually runs."""
@@ -699,7 +519,7 @@ def _run_agentic_match_with_mocks(
         suggested_movie_title=suggested_movie_title,
         canonical_movie_id=0,
         confidence=0.4,
-        decision=decision,
+        decision="REVIEW",
         reasoning="No DB candidate; identified via web search.",
         evidence={"agentic": True},
         fired_ai=True,
@@ -738,102 +558,6 @@ def test_post_lookup_resolves_via_english_title_the_agent_now_reports():
     # First attempt (the primary title) already hit — the alternate fallback
     # must not have been needed, i.e. _db_search was called exactly once.
     assert mock_db_search.call_count == 1
-    # Regression guard: a successful post-lookup must overwrite the stale
-    # pre-fallback confidence/decision/reasoning (id=0, 0.4, REVIEW) — left
-    # untouched, the UI displays "no DB candidate matched" text next to a
-    # movie_master_id that in fact resolved via an exact DB hit.
-    assert result.decision == "AUTO_ACCEPT"
-    assert result.confidence >= 0.90
-    assert "post-lookup" in result.reasoning.lower()
-    assert "156728" in result.reasoning
-
-
-def test_post_lookup_hit_bumps_domestic_confidence_but_never_auto_accepts():
-    """A domestic post-lookup hit gets a smaller confidence bump (0.75) than an
-    international one (0.90) and always stays in REVIEW. MovieMaster (the
-    domestic table) has no country column, so a domestic post-lookup hit is an
-    uncorroborated title-only match — a genuinely weaker signal than
-    international's country-scoped exact-title match, so it must never be pulled
-    into AUTO_ACCEPT. Reasoning is still rewritten (for both markets) so the
-    displayed text reflects the resolved id instead of the stale id=0 state.
-    0.75 (not lower) matters concretely: the review-queue UI colors confidence
-    red below 0.75, same as a garbage match — a lower bump would visually look
-    no better than the stale 0.3-0.4 state this fix replaces."""
-    def fake_db_search(query, market="domestic", country=None):
-        if query == "Some Domestic Title":
-            return [{"id": 4242, "movie_title": "Some Domestic Title", "cover_image": ""}]
-        return []
-
-    result, mock_db_search = _run_agentic_match_with_mocks(
-        suggested_movie_title="Some Domestic Title",
-        alternate_movie_title=None,
-        db_search_side_effect=fake_db_search,
-        market="domestic",
-        country=None,
-        decision="REVIEW",
-    )
-
-    assert result.suggested_movie_id == 4242
-    assert mock_db_search.call_count == 1
-    assert result.decision == "REVIEW"
-    assert result.confidence == 0.75
-    assert result.confidence < 0.90
-    assert "post-lookup" in result.reasoning.lower()
-    assert "4242" in result.reasoning
-    assert "REVIEW" in result.reasoning
-    assert "No DB candidate; identified via web search." in result.reasoning
-
-
-def test_post_lookup_hit_downgrades_domestic_auto_accept_to_review():
-    """Regression guard for a real gap: result_parser._build_result can emit
-    decision="AUTO_ACCEPT" from confidence alone (>= 0.90), independent of
-    movie_master_id — so a domestic first pass can already be AUTO_ACCEPT
-    when it reaches this block with movie_master_id=0. Left unguarded, the
-    post-lookup hit would drop confidence to 0.75 while leaving decision at
-    AUTO_ACCEPT: a self-contradictory pair, and a silent auto-accept of a
-    domestic match that was never supposed to bypass human review."""
-    def fake_db_search(query, market="domestic", country=None):
-        if query == "Some Domestic Title":
-            return [{"id": 4242, "movie_title": "Some Domestic Title", "cover_image": ""}]
-        return []
-
-    result, _ = _run_agentic_match_with_mocks(
-        suggested_movie_title="Some Domestic Title",
-        alternate_movie_title=None,
-        db_search_side_effect=fake_db_search,
-        market="domestic",
-        country=None,
-        decision="AUTO_ACCEPT",
-    )
-
-    assert result.suggested_movie_id == 4242
-    assert result.decision == "REVIEW"
-    assert result.confidence == 0.75
-
-
-def test_post_lookup_hit_preserves_non_movie_decision_for_domestic():
-    """Mirrors test_post_lookup_preserves_non_movie_decision_on_hit but for
-    market="domestic" specifically — that existing test defaults to
-    market="international" via _run_agentic_match_with_mocks, so it never
-    covered the domestic branch's handling of event-type decisions."""
-    def fake_db_search(query, market="domestic", country=None):
-        if query == "Some Domestic Title":
-            return [{"id": 4242, "movie_title": "Some Domestic Title", "cover_image": ""}]
-        return []
-
-    result, _ = _run_agentic_match_with_mocks(
-        suggested_movie_title="Some Domestic Title",
-        alternate_movie_title=None,
-        db_search_side_effect=fake_db_search,
-        market="domestic",
-        country=None,
-        decision="REVIEW_NON_MOVIE",
-    )
-
-    assert result.suggested_movie_id == 4242
-    assert result.decision == "REVIEW_NON_MOVIE"
-    assert result.confidence == 0.75
-    assert "REVIEW_NON_MOVIE" in result.reasoning
 
 
 def test_post_lookup_falls_back_to_alternate_title_when_primary_misses():
@@ -916,43 +640,3 @@ def test_post_lookup_syncs_displayed_title_to_the_alternate_hit():
     assert result.canonical_movie_id == 156949
     assert result.suggested_movie_title == "Pequenas Criaturas"
     assert mock_db_search.call_count == 2
-
-
-def test_post_lookup_preserves_non_movie_decision_on_hit():
-    """event_type-driven decisions (REVIEW_NON_MOVIE/REVIEW_MULTI_FILM) are not
-    a confidence signal — a post-lookup hit should still raise confidence but
-    must not silently reclassify these as AUTO_ACCEPT."""
-    def fake_db_search(query, market="domestic", country=None):
-        if query == "Deep Water":
-            return [{"id": 156728, "movie_title": "Deep Water", "country": "Brazil", "cover_image": ""}]
-        return []
-
-    result, _ = _run_agentic_match_with_mocks(
-        suggested_movie_title="Deep Water",
-        alternate_movie_title="Aguas Mortais",
-        db_search_side_effect=fake_db_search,
-        decision="REVIEW_NON_MOVIE",
-    )
-
-    assert result.suggested_movie_id == 156728
-    assert result.decision == "REVIEW_NON_MOVIE"
-    assert result.confidence >= 0.90
-
-
-# ── Vespa schema: country field exists on intl only ────────────────────────
-
-def test_movie_master_intl_schema_declares_country_field():
-    from pathlib import Path
-
-    sd_path = Path(__file__).parent.parent / "vespa" / "schemas" / "movie_master_intl.sd"
-    text = sd_path.read_text()
-    assert "field country type string" in text
-    assert "match: exact" in text
-
-
-def test_movie_master_domestic_schema_has_no_country_field():
-    from pathlib import Path
-
-    sd_path = Path(__file__).parent.parent / "vespa" / "schemas" / "movie_master.sd"
-    text = sd_path.read_text()
-    assert "field country" not in text

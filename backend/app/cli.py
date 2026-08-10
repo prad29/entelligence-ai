@@ -84,30 +84,5 @@ def seed_movie_master_intl(
         typer.echo(f"Warning: could not queue international semantic index build: {exc}")
 
 
-@cli.command()
-def rebuild_semantic_index_intl(
-    force_deploy: bool = typer.Option(
-        False, "--force-deploy", help="Force a Vespa app redeploy (needed after editing movie_master_intl.sd)",
-    ),
-    backfill_country: bool = typer.Option(
-        False, "--backfill-country",
-        help="Re-embed/re-feed every intl row so already-indexed docs pick up the country field",
-    ),
-) -> None:
-    """
-    Force-rebuild the international Vespa semantic index.
-
-    Run once after adding a field to movie_master_intl.sd (e.g. `country`):
-    the normal incremental build only feeds rows not yet indexed, so already-
-    indexed docs would otherwise never pick up a newly added field.
-    """
-    from app.tasks.semantic_tasks import build_semantic_index_intl_task
-
-    task = build_semantic_index_intl_task.delay(
-        force=backfill_country, force_deploy=force_deploy,
-    )
-    typer.echo(f"International semantic index rebuild queued (task: {task.id})")
-
-
 if __name__ == "__main__":
     cli()

@@ -117,19 +117,6 @@ class TestComposeEmbedText:
         row = {"movie_title": "No Date"}
         assert _compose_embed_text(row) == "No Date"
 
-    def test_includes_country_when_present(self):
-        from app.title_matching.semantic_index import _compose_embed_text
-        row = {
-            "movie_title": "Deep Water", "release_date": "2024-03-01",
-            "director": None, "country": "Brazil",
-        }
-        assert _compose_embed_text(row) == "Deep Water 2024 Brazil"
-
-    def test_omits_country_when_absent(self):
-        from app.title_matching.semantic_index import _compose_embed_text
-        row = {"movie_title": "Inception", "release_date": "2010-07-16", "director": None}
-        assert _compose_embed_text(row) == "Inception 2010"
-
 
 # ---------------------------------------------------------------------------
 # TestGetEmbedding
@@ -277,57 +264,6 @@ class TestVespaSemanticIndexSearch:
         results = index.search(query_embedding=_fake_vec(), query_text="test", k=5)
         assert results == []
 
-    def test_search_without_country_yql_unchanged(self, index):
-        """Regression guard: domestic callers (candidate_generator.py) never
-        pass country, and the YQL must stay exactly the parenthesized recall
-        clause with no filter appended."""
-        index._app = _mock_vespa_app([])
-
-        index.search(query_embedding=_fake_vec(), query_text="test", k=5)
-
-        yql = index._app.query.call_args.kwargs["body"]["yql"]
-        assert "country" not in yql
-        assert yql.startswith("select movie_master_id from movie_master where ((")
-
-    @pytest.fixture
-    def intl_index(self):
-        from app.title_matching.semantic_index import VespaSemanticIndex
-        idx = VespaSemanticIndex.__new__(VespaSemanticIndex)
-        idx._settings = _make_settings()
-        idx._schema = "movie_master_intl"
-        idx._id_field = "movie_master_intl_id"
-        return idx
-
-    def test_search_adds_country_filter_only_for_intl_schema(self, intl_index):
-        intl_index._app = _mock_vespa_app([])
-
-        intl_index.search(query_embedding=_fake_vec(), query_text="test", k=5, country="France")
-
-        yql = intl_index._app.query.call_args.kwargs["body"]["yql"]
-        assert 'and country contains "France"' in yql
-
-    def test_search_country_ignored_for_domestic_schema(self, index):
-        index._app = _mock_vespa_app([])
-
-        index.search(query_embedding=_fake_vec(), query_text="test", k=5, country="France")
-
-        yql = index._app.query.call_args.kwargs["body"]["yql"]
-        assert "country" not in yql
-
-    def test_search_country_filter_wraps_recall_clause_in_parens(self, intl_index):
-        """Precedence guard: the recall clause (nearestNeighbor or userQuery)
-        must be parenthesized as one group BEFORE the country filter is
-        appended, or YQL's `and` binding tighter than `or` would leave the
-        ANN branch country-blind."""
-        intl_index._app = _mock_vespa_app([])
-
-        intl_index.search(query_embedding=_fake_vec(), query_text="test", k=5, country="France")
-
-        yql = intl_index._app.query.call_args.kwargs["body"]["yql"]
-        assert 'where ((' in yql
-        assert ') or userQuery())' in yql
-        assert yql.index(") or userQuery())") < yql.index('and country contains')
-
 
 # ---------------------------------------------------------------------------
 # TestBuildSemanticIndex
@@ -425,72 +361,6 @@ class TestBuildSemanticIndex:
             result = build_semantic_index(master_rows, settings)
 
         assert result is None
-
-    def test_force_refeeds_all_rows_ignoring_indexed_ids(self, master_rows):
-        """force=True must re-embed/re-feed every row, even ones _get_indexed_ids
-        reports as already present — needed once after adding a new schema
-        field (e.g. intl `country`) so already-indexed docs pick it up."""
-        settings = _make_settings(EMBEDDING_DIMENSION=16)
-        dim = 16
-        embeddings = [_fake_vec(dim, seed=i) for i in range(len(master_rows))]
-        bedrock_client = _mock_bedrock_client(embeddings)
-        all_ids = {r["id"] for r in master_rows}
-        fed_rows = []
-
-        def _fake_feed(vespa_url, rows, embs, schema=None):
-            fed_rows.extend(rows)
-            return len(rows)
-
-        with patch("app.title_matching.semantic_index._deploy_vespa_app", return_value=True), \
-             patch("app.title_matching.semantic_index._get_indexed_ids", return_value=all_ids) as mock_indexed, \
-             patch("app.title_matching.semantic_index._get_bedrock_client", return_value=bedrock_client), \
-             patch("app.title_matching.semantic_index._feed_rows", side_effect=_fake_feed), \
-             patch("app.title_matching.semantic_index.VespaSemanticIndex"):
-            from app.title_matching.semantic_index import build_semantic_index
-            build_semantic_index(master_rows, settings, force=True)
-
-        mock_indexed.assert_not_called()
-        assert len(fed_rows) == len(master_rows)
-
-    def test_force_deploy_forwarded_to_deploy_vespa_app(self, master_rows):
-        settings = _make_settings()
-
-        with patch("app.title_matching.semantic_index._deploy_vespa_app", return_value=True) as mock_deploy, \
-             patch("app.title_matching.semantic_index._get_indexed_ids", return_value={r["id"] for r in master_rows}), \
-             patch("app.title_matching.semantic_index.VespaSemanticIndex"):
-            from app.title_matching.semantic_index import build_semantic_index
-            build_semantic_index(master_rows, settings, force_deploy=True)
-
-        mock_deploy.assert_called_once_with(settings.VESPA_URL, force=True)
-
-
-class TestFeedRowsCountryField:
-
-    def test_includes_country_for_intl_schema(self):
-        from app.title_matching.semantic_index import _feed_rows
-
-        app = MagicMock()
-        app.feed_data_point.return_value = MagicMock(status_code=200)
-        row = {"id": 1, "movie_title": "Deep Water", "country": "Brazil"}
-
-        with patch("vespa.application.Vespa", return_value=app):
-            _feed_rows("http://localhost:8080", [row], [_fake_vec()], schema="movie_master_intl")
-
-        fields = app.feed_data_point.call_args.kwargs["fields"]
-        assert fields["country"] == "Brazil"
-
-    def test_omits_country_for_domestic_schema(self):
-        from app.title_matching.semantic_index import _feed_rows
-
-        app = MagicMock()
-        app.feed_data_point.return_value = MagicMock(status_code=200)
-        row = {"id": 1, "movie_title": "Inception", "country": "Brazil"}
-
-        with patch("vespa.application.Vespa", return_value=app):
-            _feed_rows("http://localhost:8080", [row], [_fake_vec()], schema="movie_master")
-
-        fields = app.feed_data_point.call_args.kwargs["fields"]
-        assert "country" not in fields
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ import { MovieFormatsPage } from '@/pages/movie-formats/MovieFormatsPage'
 import { MovieReviewQueuePage } from '@/pages/movie-review/MovieReviewQueuePage'
 import { MovieTitleMatchingPage } from '@/pages/movie-title-matching/MovieTitleMatchingPage'
 import { MovieMasterSeedPage } from '@/pages/movie-title-seed/MovieMasterSeedPage'
+import { DeletedShowtimesCheck } from '@/pages/deleted-showtimes/DeletedShowtimesCheck'
 
 function AppRoutes() {
   return (
@@ -21,6 +22,7 @@ function AppRoutes() {
       <Route path="/movie-review" element={<MovieReviewQueuePage />} />
       <Route path="/movie-title-matching" element={<MovieTitleMatchingPage />} />
       <Route path="/movie-title-seed" element={<MovieMasterSeedPage />} />
+      <Route path="/deleted-showtimes" element={<DeletedShowtimesCheck />} />
       <Route path="*" element={<Navigate to="/detection" replace />} />
     </Routes>
   )

@@ -75,6 +75,19 @@ services:
       claude-sandbox:
         condition: service_healthy
 
+  celery-deleted-showtimes-worker:
+    image: ${ECR_BACKEND}:${IMAGE_TAG}
+    # Concurrency of 16 so DeletedShowtimeJob.workers (user-configurable 1-16,
+    # enforced per-job by app/deleted_showtimes/job_semaphore.py) is actually
+    # reachable — a lower worker concurrency would silently cap it below
+    # whatever the user picks in the UI.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=16 -Q deleted-showtimes
+    restart: unless-stopped
+    env_file: /app/.env.prod
+    depends_on:
+      redis:
+        condition: service_healthy
+
   frontend:
     image: ${ECR_FRONTEND}:${IMAGE_TAG}
     restart: unless-stopped

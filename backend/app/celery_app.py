@@ -11,6 +11,7 @@ celery = Celery(
         "app.tasks.agentic_intl_match_task",
         "app.tasks.prod_db_sync_task",
         "app.tasks.external_match_task",
+        "app.tasks.deleted_showtime_task",
     ],
 )
 
@@ -29,5 +30,8 @@ celery.conf.update(
         "app.tasks.agentic_match_task.finalize_batch": {"queue": "agentic"},
         "app.tasks.agentic_intl_match_task.agentic_intl_batch_row": {"queue": "agentic"},
         "app.tasks.agentic_intl_match_task.finalize_intl_batch": {"queue": "agentic"},
+        "app.tasks.deleted_showtime_task.process_batch": {"queue": "deleted-showtimes"},
+        "app.tasks.deleted_showtime_task.finalize_job": {"queue": "deleted-showtimes"},
+        "app.tasks.deleted_showtime_task.dispatch_job_task": {"queue": "deleted-showtimes"},
     },
 )

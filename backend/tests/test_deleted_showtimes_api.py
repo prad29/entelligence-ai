@@ -283,8 +283,8 @@ def test_status_completed_job_exposes_output_and_audit_urls():
     with Session(_sqlite_engine) as session:
         session.add(DeletedShowtimeJob(
             id="job-done", status="completed", total=1, processed=1,
-            output_path="deleted-showtimes/outputs/job-done_output.xlsx",
-            audit_output_path="deleted-showtimes/audit/job-done_audit.json",
+            output_path="deleted-showtimes-output/job-done_output.xlsx",
+            audit_output_path="deleted-showtimes-output/job-done_audit.json",
         ))
         session.commit()
 
@@ -299,11 +299,11 @@ def test_status_completed_job_exposes_output_and_audit_urls():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_download_after_completion_returns_200_xlsx(_stub_storage):
-    _stub_storage["deleted-showtimes/outputs/job-dl.xlsx"] = b"fake xlsx bytes"
+    _stub_storage["deleted-showtimes-output/job-dl.xlsx"] = b"fake xlsx bytes"
     with Session(_sqlite_engine) as session:
         session.add(DeletedShowtimeJob(
             id="job-dl", status="completed", total=1,
-            output_path="deleted-showtimes/outputs/job-dl.xlsx",
+            output_path="deleted-showtimes-output/job-dl.xlsx",
             ttl=datetime.utcnow() + timedelta(hours=1),
         ))
         session.commit()
@@ -317,7 +317,7 @@ def test_download_expired_job_returns_410():
     with Session(_sqlite_engine) as session:
         session.add(DeletedShowtimeJob(
             id="job-expired", status="completed", total=1,
-            output_path="deleted-showtimes/outputs/job-expired.xlsx",
+            output_path="deleted-showtimes-output/job-expired.xlsx",
             ttl=datetime.utcnow() - timedelta(hours=1),
         ))
         session.commit()
@@ -336,11 +336,11 @@ def test_download_incomplete_job_returns_400():
 
 
 def test_audit_download_after_completion_returns_200_json(_stub_storage):
-    _stub_storage["deleted-showtimes/audit/job-audit.json"] = b'{"job_id": "job-audit"}'
+    _stub_storage["deleted-showtimes-output/job-audit.json"] = b'{"job_id": "job-audit"}'
     with Session(_sqlite_engine) as session:
         session.add(DeletedShowtimeJob(
             id="job-audit", status="completed", total=1,
-            audit_output_path="deleted-showtimes/audit/job-audit.json",
+            audit_output_path="deleted-showtimes-output/job-audit.json",
             ttl=datetime.utcnow() + timedelta(hours=1),
         ))
         session.commit()

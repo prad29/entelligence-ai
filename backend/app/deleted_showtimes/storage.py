@@ -1,36 +1,39 @@
 """
 S3-backed storage for the Deleted Showtimes Check upload/output files.
 
-Reuses the same erica-datastore S3 bucket as batch_storage.py, under its own
-prefix — backend, celery-worker, and celery-agentic-worker are separate
-containers with no shared filesystem, so a file written to local /tmp by one
-is invisible to the others (the router writes the upload, but finalize_job
-runs on a different container).
+Uses its own dedicated bucket/prefixes (settings.DELETED_SHOWTIME_S3_BUCKET),
+independent of the Mode B agentic batch pipeline's bucket — backend,
+celery-worker, and the deleted-showtimes worker are separate containers with
+no shared filesystem, so a file written to local /tmp by one is invisible to
+the others (the router writes the upload, but finalize_job runs on a
+different container).
 """
 
 from __future__ import annotations
 
 from app.config import settings
 
-UPLOAD_PREFIX = "deleted-showtimes/uploads"
-OUTPUT_PREFIX = "deleted-showtimes/outputs"
-AUDIT_PREFIX = "deleted-showtimes/audit"
+UPLOAD_PREFIX = "deleted-showtimes-input"
+OUTPUT_PREFIX = "deleted-showtimes-output"
+# Audit JSON lands in the same output folder as the result workbook,
+# distinguished only by filename — there is no separate audit prefix.
+AUDIT_PREFIX = "deleted-showtimes-output"
 
 
 def _client():
     import boto3
 
-    return boto3.client("s3", region_name=settings.AGENTIC_BATCH_S3_REGION)
+    return boto3.client("s3", region_name=settings.DELETED_SHOWTIME_S3_REGION)
 
 
 def _require_bucket() -> str:
-    if not settings.AGENTIC_BATCH_S3_BUCKET:
+    if not settings.DELETED_SHOWTIME_S3_BUCKET:
         raise RuntimeError(
-            "AGENTIC_BATCH_S3_BUCKET is not configured — deleted-showtimes "
+            "DELETED_SHOWTIME_S3_BUCKET is not configured — deleted-showtimes "
             "upload/output storage requires an S3 bucket shared by all "
             "backend containers."
         )
-    return settings.AGENTIC_BATCH_S3_BUCKET
+    return settings.DELETED_SHOWTIME_S3_BUCKET
 
 
 def upload_key(job_id: str, ext: str) -> str:

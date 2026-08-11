@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # standalone showtime_serp_check.py script). Key lives in env/Secrets
     # Manager, never in source.
     SERPAPI_API_KEY: str = ""
+    # Own bucket/region setting rather than reusing AGENTIC_BATCH_S3_BUCKET —
+    # this feature has its own dedicated input/output folders provisioned in
+    # S3, independent of the Mode B agentic batch pipeline's bucket.
+    DELETED_SHOWTIME_S3_BUCKET: str = ""
+    DELETED_SHOWTIME_S3_REGION: str = "us-east-1"
     DELETED_SHOWTIME_MAX_ROWS: int = 1000
     # Result workbook + audit.json stay downloadable for 30 days — long
     # enough for the job-history list to remain useful across a month.

@@ -262,7 +262,7 @@ def test_finalize_job_noops_on_already_terminal_job(patched_task, db_engine, mon
     with Session(db_engine) as s:
         job = s.get(DeletedShowtimeJob, job_id)
         job.status = "completed"
-        job.output_path = "deleted-showtimes/outputs/already-done.xlsx"
+        job.output_path = "deleted-showtimes-output/already-done.xlsx"
         s.add(job)
         s.commit()
 
@@ -276,12 +276,12 @@ def test_finalize_job_noops_on_already_terminal_job(patched_task, db_engine, mon
     assert called["put_bytes"] is False
     job = _get_job(db_engine, job_id)
     assert job.status == "completed"
-    assert job.output_path == "deleted-showtimes/outputs/already-done.xlsx"
+    assert job.output_path == "deleted-showtimes-output/already-done.xlsx"
 
 
 def test_finalize_job_marks_failed_when_aborted(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine, total=1, aborted=True, error="Aborted: too many failures",
-                        file_path="deleted-showtimes/uploads/job-test-1.csv")
+                        file_path="deleted-showtimes-input/job-test-1.csv")
 
     import app.tasks.deleted_showtime_task as task_mod
 

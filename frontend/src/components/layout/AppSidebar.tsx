@@ -10,6 +10,7 @@ import {
   Film,
   Clapperboard,
   Database,
+  CalendarX,
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -34,6 +35,10 @@ const movieFormatGroup: NavItem[] = [
 const movieTitleMatchingGroup: NavItem[] = [
   { to: '/movie-title-matching', icon: <Clapperboard className="h-4 w-4" />, label: 'Movie Title Matching' },
   { to: '/movie-title-seed', icon: <Database className="h-4 w-4" />, label: 'Seed Movie Master' },
+]
+
+const deletedShowtimesGroup: NavItem[] = [
+  { to: '/deleted-showtimes', icon: <CalendarX className="h-4 w-4" />, label: 'Deleted Showtimes Check' },
 ]
 
 const systemGroup: NavItem[] = [
@@ -100,6 +105,7 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
         <NavGroup title="Amenities Detection" items={detectionGroup} onItemClick={onItemClick} />
         <NavGroup title="Movie Format Detection" items={movieFormatGroup} onItemClick={onItemClick} />
         <NavGroup title="Movie Title Matching" items={movieTitleMatchingGroup} onItemClick={onItemClick} />
+        <NavGroup title="Deleted Showtimes" items={deletedShowtimesGroup} onItemClick={onItemClick} />
         <NavGroup title="System" items={systemGroup} onItemClick={onItemClick} />
       </div>
 

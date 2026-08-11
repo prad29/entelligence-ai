@@ -66,6 +66,19 @@ class Settings(BaseSettings):
     # rows must survive long enough for a client to retry across a business day.
     EXTERNAL_API_JOB_TTL_HOURS: int = 72
 
+    # Deleted Showtimes Check — SerpApi-backed detector (ported from the
+    # standalone showtime_serp_check.py script). Key lives in env/Secrets
+    # Manager, never in source.
+    SERPAPI_API_KEY: str = ""
+    DELETED_SHOWTIME_MAX_ROWS: int = 1000
+    # Result workbook + audit.json stay downloadable for 30 days — long
+    # enough for the job-history list to remain useful across a month.
+    DELETED_SHOWTIME_JOB_TTL_HOURS: int = 24 * 30
+    # Kill the run after N consecutive failed theater batches (mirrors the
+    # script's --abort-after guardrail) rather than burning SerpApi credits
+    # on a run that's clearly not getting usable listings back.
+    DELETED_SHOWTIME_ABORT_AFTER: int = 5
+
     class Config:
         env_file = ".env"
         extra = "ignore"

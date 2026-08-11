@@ -93,6 +93,23 @@ services:
       claude-sandbox:
         condition: service_healthy
 
+  celery-deleted-showtimes-worker:
+    build: ./backend
+    # Concurrency of 16 so DeletedShowtimeJob.workers (user-configurable 1-16,
+    # enforced per-job by app/deleted_showtimes/job_semaphore.py) is actually
+    # reachable — a lower worker concurrency would silently cap it below
+    # whatever the user picks in the UI.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=16 -Q deleted-showtimes
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   celery-flower:
     build: ./backend
     command: celery -A app.celery_app flower --port=5555

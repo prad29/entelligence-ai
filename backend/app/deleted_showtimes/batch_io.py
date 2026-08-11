@@ -61,6 +61,12 @@ def parse_upload(contents: bytes, ext: str) -> Tuple[List[str], List[Dict[str, A
     missing = [col for col in REQUIRED_COLUMNS if col.lower() not in lower_headers]
     if missing:
         raise ValueError(f"Missing required column(s): {', '.join(missing)}")
+    if VERDICT_COL.lower() in lower_headers:
+        raise ValueError(
+            f"File already contains a {VERDICT_COL} column — this looks like a "
+            f"previous result workbook, not a fresh export. Re-upload the "
+            f"original file without that column."
+        )
 
     return headers, rows
 

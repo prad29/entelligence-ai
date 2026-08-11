@@ -169,6 +169,15 @@ def process_batch(
     ShowtimeRow needs (title, show_time_raw, show_min) as plain JSON-safe
     values — Celery task args must be serializable, so ShowtimeRow objects
     themselves are rebuilt here rather than passed directly.
+
+    This task must NEVER raise, escaped or otherwise: it is a chord header
+    task, and a chord's callback (finalize_job) only fires once ALL header
+    tasks succeed. An uncaught exception here — a semaphore acquire timeout,
+    an unexpected SerpApi response shape, a soft time limit, a Redis/DB
+    hiccup — would wedge the job at status="processing" forever with no
+    recovery path. The whole body below is therefore wrapped in a single
+    broad `except BaseException`, mirroring agentic_batch_row's identical
+    guard in agentic_match_task.py.
     """
     from app.database import engine
     from app.models import DeletedShowtimeJob
@@ -188,96 +197,124 @@ def process_batch(
         for idx, p in zip(row_indices, row_payloads)
     ]
 
-    with Session(engine) as session:
-        job = session.get(DeletedShowtimeJob, job_id)
-        if job is None:
-            logger.error("process_batch: job %s not found", job_id)
-            return
-        if job.aborted:
-            # A prior batch already tripped the abort guardrail — skip the
-            # SerpApi call for this batch, but still record + count these
-            # rows so `processed` reaches `total` and the chord can finalize.
-            for r in batch:
-                r.verdict, r.reason = UNKNOWN_, "RUN_ABORTED"
-            for idx, r in zip(row_indices, batch):
-                _store_row_result(job_id, idx, r)
-            _bump_counters(session, job_id, processed=len(batch), unknown_count=len(batch))
-            return
-
-        require_verify = job.theater_verify == "strict"
-        strict_screens = job.strict_screen_count
-        title_missing_is_deleted = job.title_missing_is_deleted
-        fallback_mode = job.fallback
-        max_concurrency = max(job.workers, 1)
-
-    client = SerpClient(settings.SERPAPI_API_KEY)
-    holder = job_semaphore.acquire(job_id, max_concurrency, timeout=120)
+    holder = None
     try:
-        try:
-            lst = _attempt(client, theater, target, today, {}, build_query(theater, "bare"),
-                           require_verify, strict_screens)
-
-            if not lst.ok and fallback_mode != "off" and lst.reason in RETRYABLE_MISSES:
-                short = short_theater_name(theater)
-                title_counts: Dict[str, int] = {}
-                for p in row_payloads:
-                    title_counts[p["title"]] = title_counts.get(p["title"], 0) + 1
-                dominant_title = max(title_counts, key=title_counts.get) if title_counts else ""
-
-                if fallback_mode == "plain":
-                    plan = [("plain", build_query(theater, "plain"))]
-                elif fallback_mode == "movie":
-                    plan = [("movie", f"{dominant_title} showtimes {theater}")]
-                else:  # auto
-                    plan = [("plain", build_query(theater, "plain"))]
-                    if short:
-                        plan += [("short", short), ("short+showtimes", f"{short} showtimes")]
-                    plan += [("movie", f"{dominant_title} showtimes {short or theater}")]
-
-                first_reason = lst.reason
-                for label, alt_q in plan[:3]:
-                    alt = _attempt(client, theater, target, today, {}, alt_q, require_verify, strict_screens)
-                    if alt.ok:
-                        alt.reason = f"VIA_FALLBACK ({label}) after {first_reason}"
-                        lst = alt
-                        break
-        except SerpAuthError as exc:
-            with Session(engine) as session:
-                _mark_aborted(session, job_id, f"SerpApi rejected the key: {exc}")
+        with Session(engine) as session:
+            job = session.get(DeletedShowtimeJob, job_id)
+            if job is None:
+                logger.error("process_batch: job %s not found", job_id)
+                return
+            if job.aborted:
+                # A prior batch already tripped the abort guardrail — skip
+                # the SerpApi call for this batch, but still record + count
+                # these rows so `processed` reaches `total` and the chord
+                # can finalize.
                 for r in batch:
                     r.verdict, r.reason = UNKNOWN_, "RUN_ABORTED"
                 for idx, r in zip(row_indices, batch):
                     _store_row_result(job_id, idx, r)
                 _bump_counters(session, job_id, processed=len(batch), unknown_count=len(batch))
-            return
+                return
+
+            require_verify = job.theater_verify == "strict"
+            strict_screens = job.strict_screen_count
+            title_missing_is_deleted = job.title_missing_is_deleted
+            fallback_mode = job.fallback
+            max_concurrency = max(job.workers, 1)
+
+        client = SerpClient(settings.SERPAPI_API_KEY)
+        holder = job_semaphore.acquire(job_id, max_concurrency, timeout=120)
+
+        lst = _attempt(client, theater, target, today, {}, build_query(theater, "bare"),
+                       require_verify, strict_screens)
+
+        if not lst.ok and fallback_mode != "off" and lst.reason in RETRYABLE_MISSES:
+            short = short_theater_name(theater)
+            title_counts: Dict[str, int] = {}
+            for p in row_payloads:
+                title_counts[p["title"]] = title_counts.get(p["title"], 0) + 1
+            dominant_title = max(title_counts, key=title_counts.get) if title_counts else ""
+
+            if fallback_mode == "plain":
+                plan = [("plain", build_query(theater, "plain"))]
+            elif fallback_mode == "movie":
+                plan = [("movie", f"{dominant_title} showtimes {theater}")]
+            else:  # auto
+                plan = [("plain", build_query(theater, "plain"))]
+                if short:
+                    plan += [("short", short), ("short+showtimes", f"{short} showtimes")]
+                plan += [("movie", f"{dominant_title} showtimes {short or theater}")]
+
+            first_reason = lst.reason
+            for label, alt_q in plan[:3]:
+                alt = _attempt(client, theater, target, today, {}, alt_q, require_verify, strict_screens)
+                if alt.ok:
+                    alt.reason = f"VIA_FALLBACK ({label}) after {first_reason}"
+                    lst = alt
+                    break
+
+        decide_rows(batch, lst, title_missing_is_deleted)
+
+        tally = {TRUE_: 0, FALSE_: 0, UNKNOWN_: 0}
+        for idx, r in zip(row_indices, batch):
+            _store_row_result(job_id, idx, r)
+            tally[r.verdict] = tally.get(r.verdict, 0) + 1
+
+        with Session(engine) as session:
+            _bump_counters(
+                session, job_id,
+                processed=len(batch),
+                true_count=tally.get(TRUE_, 0),
+                false_count=tally.get(FALSE_, 0),
+                unknown_count=tally.get(UNKNOWN_, 0),
+            )
+            if lst.ok:
+                _record_batch_success(session, job_id)
+            else:
+                crossed = _record_batch_failure(session, job_id)
+                if crossed:
+                    _mark_aborted(
+                        session, job_id,
+                        f"Aborted: {settings.DELETED_SHOWTIME_ABORT_AFTER} consecutive failed "
+                        f"theater batches (last reason: {lst.reason})",
+                    )
+    except SerpAuthError as exc:
+        with Session(engine) as session:
+            _mark_aborted(session, job_id, f"SerpApi rejected the key: {exc}")
+            for r in batch:
+                r.verdict, r.reason = UNKNOWN_, "RUN_ABORTED"
+            for idx, r in zip(row_indices, batch):
+                _store_row_result(job_id, idx, r)
+            _bump_counters(session, job_id, processed=len(batch), unknown_count=len(batch))
+    except BaseException as exc:  # noqa: BLE001
+        # Any other failure (semaphore acquire TimeoutError, SoftTimeLimitExceeded,
+        # an unexpected SerpApi response shape, a Redis/DB hiccup, or any
+        # unexpected exception) must NOT escape this task — see the docstring
+        # above. Record every row in this batch as failed/unknown and bump a
+        # consecutive-failure count, exactly as a normal SerpError miss would.
+        logger.exception("process_batch failed (non-auth) job=%s theater=%r date=%s",
+                          job_id, theater, show_date_iso)
+        try:
+            for r in batch:
+                r.verdict, r.reason = UNKNOWN_, f"BATCH_TASK_ERROR: {exc}"[:200]
+            with Session(engine) as session:
+                for idx, r in zip(row_indices, batch):
+                    _store_row_result(job_id, idx, r)
+                _bump_counters(session, job_id, processed=len(batch), unknown_count=len(batch))
+                crossed = _record_batch_failure(session, job_id)
+                if crossed:
+                    _mark_aborted(
+                        session, job_id,
+                        f"Aborted: {settings.DELETED_SHOWTIME_ABORT_AFTER} consecutive failed "
+                        f"theater batches (last reason: BATCH_TASK_ERROR)",
+                    )
+        except Exception:  # noqa: BLE001 - last-resort: never re-raise from here
+            logger.exception(
+                "process_batch: could not even record batch failure job=%s theater=%r",
+                job_id, theater,
+            )
     finally:
         job_semaphore.release(holder)
-
-    decide_rows(batch, lst, title_missing_is_deleted)
-
-    tally = {TRUE_: 0, FALSE_: 0, UNKNOWN_: 0}
-    for idx, r in zip(row_indices, batch):
-        _store_row_result(job_id, idx, r)
-        tally[r.verdict] = tally.get(r.verdict, 0) + 1
-
-    with Session(engine) as session:
-        _bump_counters(
-            session, job_id,
-            processed=len(batch),
-            true_count=tally.get(TRUE_, 0),
-            false_count=tally.get(FALSE_, 0),
-            unknown_count=tally.get(UNKNOWN_, 0),
-        )
-        if lst.ok:
-            _record_batch_success(session, job_id)
-        else:
-            crossed = _record_batch_failure(session, job_id)
-            if crossed:
-                _mark_aborted(
-                    session, job_id,
-                    f"Aborted: {settings.DELETED_SHOWTIME_ABORT_AFTER} consecutive failed "
-                    f"theater batches (last reason: {lst.reason})",
-                )
 
 
 @celery.task(name="app.tasks.deleted_showtime_task.finalize_job", queue=QUEUE)

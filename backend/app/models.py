@@ -230,6 +230,43 @@ class MovieMasterIntl(SQLModel, table=True):
     updated_on: Optional[str] = None
 
 
+class DeletedShowtimeJob(SQLModel, table=True):
+    """Batch job for the Deleted Showtimes Check feature (ported from the
+    standalone showtime_serp_check.py script).
+
+    One-table-per-feature convention, matching MovieTitleBatchJob /
+    MovieTitleIntlBatchJob above. `total`/`processed` count ROWS (not
+    theater x date batches) since that's the unit the UI progress bar
+    tracks; `consecutive_failures` is the DB-durable counter the abort
+    guardrail checks before each batch task proceeds, replacing the
+    script's in-process counter (batches now run as independent Celery
+    tasks with no shared memory).
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    status: str = Field(default="queued")  # queued|processing|completed|failed
+    total: int = Field(default=0)
+    processed: int = Field(default=0)
+    true_count: int = Field(default=0)
+    false_count: int = Field(default=0)
+    unknown_count: int = Field(default=0)
+    consecutive_failures: int = Field(default=0)
+    aborted: bool = Field(default=False)
+    error: Optional[str] = None  # top-level job failure message (not per-row)
+    # Advanced options (all default to showtime_serp_check.py's own defaults).
+    title_missing_is_deleted: bool = Field(default=False)
+    strict_screen_count: bool = Field(default=False)
+    theater_verify: str = Field(default="warn")  # off|warn|strict
+    fallback: str = Field(default="auto")  # off|auto|plain|movie
+    workers: int = Field(default=4)
+    file_path: Optional[str] = None
+    output_path: Optional[str] = None
+    audit_output_path: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    ttl: Optional[datetime] = None
+    original_filename: Optional[str] = None
+
+
 class ApiKey(SQLModel, table=True):
     """External API tenancy record. Keys are stored hashed (SHA-256) — the
     plaintext key is shown to the client once at creation and never

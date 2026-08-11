@@ -19,6 +19,7 @@ PROD_DB_DATABASE=$(echo "$PROD_DB_SECRET" | jq -r .database)
 PROD_DB_USERNAME=$(echo "$PROD_DB_SECRET" | jq -r .username)
 PROD_DB_PASSWORD=$(echo "$PROD_DB_SECRET" | jq -r .password)
 EXTERNAL_API_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/external-api-key --query SecretString --output text --region us-east-1)
+SERPAPI_API_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/serpapi-api-key --query SecretString --output text --region us-east-1)
 
 cat > /app/.env.prod <<EOF
 DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@amenity-db.critf4jd3ef7.us-east-1.rds.amazonaws.com:5432/amenitydb
@@ -57,6 +58,12 @@ PROD_DB_USERNAME=${PROD_DB_USERNAME}
 PROD_DB_PASSWORD=${PROD_DB_PASSWORD}
 EXTERNAL_API_ENABLED=true
 X_API_KEY=${EXTERNAL_API_KEY}
+SERPAPI_API_KEY=${SERPAPI_API_KEY}
+DELETED_SHOWTIME_S3_BUCKET=erica-datastore
+DELETED_SHOWTIME_S3_REGION=us-east-1
+DELETED_SHOWTIME_MAX_ROWS=1000
+DELETED_SHOWTIME_JOB_TTL_HOURS=720
+DELETED_SHOWTIME_ABORT_AFTER=5
 EOF
 
 chmod 600 /app/.env.prod

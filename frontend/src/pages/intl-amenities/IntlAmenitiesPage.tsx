@@ -1,11 +1,12 @@
-import { useState } from 'react'
-import { useAmenities, type Amenity } from '@/hooks/useAmenities'
+import { useRef, useState } from 'react'
+import { useIntlAmenities, type IntlAmenity } from '@/hooks/useIntlAmenities'
 import { DataTable, type Column } from '@/components/ui/DataTable'
 import { Badge, type BadgeVariant } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
 import { RegionToggle } from '@/components/ui/RegionToggle'
-import { AmenityFormDrawer } from './AmenityFormDrawer'
+import { IntlAmenityFormDrawer } from './IntlAmenityFormDrawer'
+import api from '@/lib/api'
 import { Plus, Pencil, Check, X, Download, Upload, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 
@@ -15,7 +16,6 @@ const tierVariantMap: Record<string, BadgeVariant> = {
   P3: 'p3',
   P4: 'p4',
   P5: 'p5',
-  P6: 'p6',
 }
 
 const statusVariantMap: Record<string, BadgeVariant> = {
@@ -32,31 +32,56 @@ const statusOptions = [
   { value: 'rejected', label: 'Rejected' },
 ]
 
+// P1-P5 only — international tiers have no P6.
 const tierOptions = [
   { value: '', label: 'All tiers' },
-  ...['P1', 'P2', 'P3', 'P4', 'P5', 'P6'].map((t) => ({ value: t, label: t })),
+  ...['P1', 'P2', 'P3', 'P4', 'P5'].map((t) => ({ value: t, label: t })),
 ]
 
-function AmenitiesPage() {
+function IntlAmenitiesPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [tierFilter, setTierFilter] = useState('')
-  const [circuitFilter, setCircuitFilter] = useState('')
   const [page, setPage] = useState(1)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [editTarget, setEditTarget] = useState<Amenity | null>(null)
+  const [editTarget, setEditTarget] = useState<IntlAmenity | null>(null)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
-  const { amenities, total, totalPages, loading, createAmenity, updateAmenity, deleteAmenity } = useAmenities({
+  const {
+    amenities,
+    total,
+    totalPages,
+    loading,
+    createAmenity,
+    updateAmenity,
+    deleteAmenity,
+    approveAmenity,
+    rejectAmenity,
+    refetch,
+  } = useIntlAmenities({
     search,
     status: statusFilter || undefined,
     tier: tierFilter || undefined,
-    circuit: circuitFilter || undefined,
     page,
   })
 
   const resetPage = () => setPage(1)
 
-  const columns: Column<Amenity>[] = [
+  const handleImportFile = async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    await api.post('/api/v1/intl-amenities/import', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    await refetch()
+  }
+
+  const handleExport = () => {
+    const base = import.meta.env.VITE_API_URL ?? ''
+    window.open(`${base}/api/v1/intl-amenities/export`, '_blank')
+  }
+
+  const columns: Column<IntlAmenity>[] = [
     {
       key: 'keyword',
       header: 'Keyword',
@@ -80,15 +105,6 @@ function AmenitiesPage() {
       header: 'Tier',
       sortable: true,
       cell: (row) => <Badge variant={tierVariantMap[row.tier] ?? 'default'}>{row.tier}</Badge>,
-    },
-    {
-      key: 'circuit',
-      header: 'Circuit',
-      cell: (row) => (
-        <span className="text-zinc-500 dark:text-zinc-400 text-xs">
-          {row.circuit ?? <span className="italic text-zinc-300 dark:text-zinc-600">Global</span>}
-        </span>
-      ),
     },
     {
       key: 'status',
@@ -117,7 +133,7 @@ function AmenitiesPage() {
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  void updateAmenity(row.id, { status: 'approved' })
+                  void approveAmenity(row.id)
                 }}
                 className="rounded-md p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
                 title="Approve"
@@ -127,7 +143,7 @@ function AmenitiesPage() {
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  void updateAmenity(row.id, { status: 'inactive' })
+                  void rejectAmenity(row.id)
                 }}
                 className="rounded-md p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
                 title="Reject"
@@ -167,7 +183,7 @@ function AmenitiesPage() {
     setDrawerOpen(true)
   }
 
-  const handleSubmit = async (data: Omit<Amenity, 'id' | 'updated_at'>) => {
+  const handleSubmit = async (data: Omit<IntlAmenity, 'id' | 'updated_at'>) => {
     if (editTarget) {
       await updateAmenity(editTarget.id, data)
     } else {
@@ -200,22 +216,24 @@ function AmenitiesPage() {
           options={tierOptions}
           triggerClassName="w-28"
         />
-        <div className="relative min-w-36">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
-          <input
-            value={circuitFilter}
-            onChange={(e) => { setCircuitFilter(e.target.value); resetPage() }}
-            placeholder="Filter by circuit…"
-            className="h-9 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 pl-9 pr-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[#4A9FD4]/30 focus:border-[#4A9FD4] transition-colors"
-          />
-        </div>
         <RegionToggle domesticPath="/amenities" intlPath="/intl-amenities" />
         <div className="flex items-center gap-1.5 ml-auto">
-          <Button variant="secondary" size="sm">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) void handleImportFile(f)
+              e.target.value = ''
+            }}
+          />
+          <Button variant="secondary" size="sm" onClick={() => importInputRef.current?.click()}>
             <Upload className="h-3.5 w-3.5" />
             Import
           </Button>
-          <Button variant="secondary" size="sm">
+          <Button variant="secondary" size="sm" onClick={handleExport}>
             <Download className="h-3.5 w-3.5" />
             Export
           </Button>
@@ -236,7 +254,7 @@ function AmenitiesPage() {
           columns={columns}
           data={amenities}
           keyExtractor={(row) => String(row.id)}
-          emptyMessage="No amenity mappings found. Add one to get started."
+          emptyMessage="No international amenity mappings found. Add one to get started."
         />
       )}
 
@@ -287,7 +305,7 @@ function AmenitiesPage() {
         </div>
       )}
 
-      <AmenityFormDrawer
+      <IntlAmenityFormDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
         amenity={editTarget}
@@ -297,4 +315,4 @@ function AmenitiesPage() {
   )
 }
 
-export { AmenitiesPage }
+export { IntlAmenitiesPage }

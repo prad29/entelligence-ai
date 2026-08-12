@@ -9,7 +9,7 @@
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)](https://react.dev)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql)](https://www.postgresql.org)
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat-square&logo=redis)](https://redis.io)
-[![AWS Bedrock](https://img.shields.io/badge/AWS_Bedrock-Mistral_Large-FF9900?style=flat-square&logo=amazonaws)](https://aws.amazon.com/bedrock)
+[![AWS Bedrock](https://img.shields.io/badge/AWS_Bedrock-Claude_Sonnet_5-FF9900?style=flat-square&logo=amazonaws)](https://aws.amazon.com/bedrock)
 
 </div>
 

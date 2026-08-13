@@ -5,16 +5,17 @@ import { IntlSingleDetector } from './IntlSingleDetector'
 import { IntlBatchUploader } from './IntlBatchUploader'
 
 function IntlDetectionPage() {
-  const [searchParams] = useSearchParams()
-  const defaultValue = searchParams.get('tab') === 'batch' ? 'batch' : 'single'
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = searchParams.get('tab') === 'batch' ? 'batch' : 'single'
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 w-full">
       <div className="flex items-center justify-end">
         <RegionToggle domesticPath="/detection" intlPath="/intl-detection" />
       </div>
       <Tabs
-        defaultValue={defaultValue}
+        value={activeTab}
+        onValueChange={(v) => setSearchParams(v === 'batch' ? { tab: 'batch' } : {}, { replace: true })}
         tabs={[
           { value: 'single', label: 'Single' },
           { value: 'batch', label: 'Batch Upload' },

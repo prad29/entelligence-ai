@@ -9,15 +9,22 @@ interface TabItem {
 }
 
 interface TabsProps {
-  defaultValue: string
+  defaultValue?: string
+  value?: string
+  onValueChange?: (value: string) => void
   tabs: TabItem[]
   children: ReactNode
   className?: string
 }
 
-function Tabs({ defaultValue, tabs, children, className }: TabsProps) {
+function Tabs({ defaultValue, value, onValueChange, tabs, children, className }: TabsProps) {
   return (
-    <TabsPrimitive.Root defaultValue={defaultValue} className={cn('flex flex-col gap-4', className)}>
+    <TabsPrimitive.Root
+      defaultValue={defaultValue}
+      value={value}
+      onValueChange={onValueChange}
+      className={cn('flex flex-col gap-4 w-full', className)}
+    >
       <TabsPrimitive.List className="inline-flex h-9 items-center gap-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/60 p-1">
         {tabs.map((tab) => (
           <TabsPrimitive.Trigger

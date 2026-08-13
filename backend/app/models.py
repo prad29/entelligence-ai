@@ -99,6 +99,41 @@ class DetectionJob(SQLModel, table=True):
     stats: Optional[str] = None
 
 
+class IntlAmenityMapping(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    amenity_keyword: str = Field(index=True)
+    screen_format: str
+    priority_tier: int
+    circuit_name: Optional[str] = Field(default=None, index=True)  # dormant — intl has no circuit data yet
+    na_default: Optional[str] = None  # dormant — carried through for future-proofing, not part of the write contract
+    status: str = Field(default="pending")  # draft|pending|approved|rejected
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    version: int = Field(default=1)
+
+
+class IntlDetectionJob(SQLModel, table=True):
+    """Batch job for the International Amenity Detection feature.
+
+    One-table-per-feature convention, matching DetectionJob above (see also
+    MovieTitleIntlBatchJob at models.py:153-159) — kept as its own table
+    rather than a shared table with a market discriminator.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    status: str = Field(default="queued")
+    total: int = Field(default=0)
+    processed: int = Field(default=0)
+    file_path: Optional[str] = None
+    output_path: Optional[str] = None
+    include_diagnostics: bool = Field(default=False)
+    audit_mode: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    ttl: Optional[datetime] = None
+    stats: Optional[str] = None
+
+
 class ReviewItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     type: str

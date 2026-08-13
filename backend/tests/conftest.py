@@ -10,6 +10,8 @@ import pytest
 from app.detection.types import ApprovedMapping
 from app.detection.normalizer import normalize_string, track_a_clean, track_b_clean, track_c_tokens
 from app.detection.engine import MappingIndex, ScreenFormatEngine
+from app.intl_detection.types import IntlApprovedMapping
+from app.intl_detection.engine import IntlMappingIndex, IntlScreenFormatEngine
 
 
 def _make_mapping(
@@ -93,3 +95,44 @@ CIRCUIT_OVERRIDES: list = []
 def engine() -> ScreenFormatEngine:
     idx = MappingIndex(mappings=ALL_MAPPINGS, aliases=CIRCUIT_ALIASES)
     return ScreenFormatEngine(idx)
+
+
+def _make_intl_mapping(keyword: str, fmt: str, tier: int) -> IntlApprovedMapping:
+    return IntlApprovedMapping(
+        amenity_keyword=keyword,
+        screen_format=fmt,
+        priority_tier=tier,
+        circuit_name=None,
+        na_default=None,
+        norm_exact=normalize_string(keyword).lower(),
+        norm_track_a=track_a_clean(keyword),
+        norm_track_b=track_b_clean(keyword),
+        norm_track_c=track_c_tokens(keyword),
+    )
+
+
+# ~15 real entries drawn from the actual International Amenities Priorities.xlsx
+INTL_MAPPINGS: list[IntlApprovedMapping] = [
+    _make_intl_mapping("MX4D", "MX4D", 1),
+    _make_intl_mapping("4DX", "4DX", 1),
+    _make_intl_mapping("4DX 3D", "4DX", 1),
+    _make_intl_mapping("4DX Voorpremière", "4DX", 1),
+    _make_intl_mapping("Dolby Cinema", "Dolby Cinema", 2),
+    _make_intl_mapping("IMAX", "IMAX", 2),
+    _make_intl_mapping("ScreenX", "ScreenX", 3),
+    _make_intl_mapping("Onyx", "Onyx", 3),
+    _make_intl_mapping("ONYX-Pathe", "ONYX - Pathe", 3),
+    _make_intl_mapping("Xplus", "Xplus", 3),
+    _make_intl_mapping("XD", "XD", 3),
+    _make_intl_mapping("XL", "XL", 3),
+    _make_intl_mapping("KinoEvolution", "KinoEvolution", 1),
+    _make_intl_mapping("KINOEVOLUTION", "KinoEvolution", 3),
+    _make_intl_mapping("LED", "LED Cinema", 4),
+    _make_intl_mapping("70MM", "Standard", 5),
+]
+
+
+@pytest.fixture(scope="module")
+def intl_engine() -> IntlScreenFormatEngine:
+    idx = IntlMappingIndex(mappings=INTL_MAPPINGS)
+    return IntlScreenFormatEngine(idx)

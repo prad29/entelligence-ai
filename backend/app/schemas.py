@@ -81,6 +81,35 @@ class ReviewDecision(BaseModel):
     reason: Optional[str] = None
 
 
+class IntlAmenityMappingCreate(BaseModel):
+    amenity_keyword: str
+    screen_format: str
+    priority_tier: int
+    notes: Optional[str] = None
+
+
+class IntlAmenityMappingRead(BaseModel):
+    id: int
+    amenity_keyword: str
+    screen_format: str
+    priority_tier: int
+    status: str
+    notes: Optional[str]
+    updated_at: datetime
+    version: int
+
+    class Config:
+        from_attributes = True
+
+
+class IntlAmenityMappingPatch(BaseModel):
+    amenity_keyword: Optional[str] = None
+    screen_format: Optional[str] = None
+    priority_tier: Optional[int] = None
+    notes: Optional[str] = None
+    status: Optional[str] = None
+
+
 
 class CircuitAliasCreate(BaseModel):
     raw_or_alias: str

@@ -5,7 +5,16 @@ import { cn } from '@/lib/utils'
 import { useState } from 'react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 
+// NOTE: title resolution below uses `startsWith` over Object.entries in
+// insertion order (first match wins), not exact-match — so a shorter key
+// that is a prefix of a longer path would shadow it if placed earlier.
+// '/intl-detection' and '/intl-amenities' do not start with any shorter
+// existing key ('/intl-detection'.startsWith('/detection') is false), so
+// their position here is safe, but keep new intl-prefixed entries above
+// any future shorter key that could collide.
 const pageTitles: Record<string, string> = {
+  '/intl-detection': 'AI Amenity Detection (International)',
+  '/intl-amenities': 'Master Amenity List (International)',
   '/detection': 'AI Amenity Detection',
   '/amenities': 'Master Amenity List',
   '/circuits': 'Circuit Mappings',

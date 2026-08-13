@@ -9,6 +9,7 @@ from app.routers import movie_detect, movie_formats, movie_review, movie_jobs
 from app.routers import movie_title_match
 from app.routers import external_title_match
 from app.routers import deleted_showtimes
+from app.routers import intl_detect, intl_amenities, intl_jobs
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -51,6 +52,9 @@ app.include_router(movie_review.router)
 app.include_router(movie_jobs.router)
 app.include_router(movie_title_match.router)
 app.include_router(deleted_showtimes.router)
+app.include_router(intl_detect.router)
+app.include_router(intl_amenities.router)
+app.include_router(intl_jobs.router)
 
 if settings.EXTERNAL_API_ENABLED:
     app.include_router(external_title_match.router)
@@ -236,6 +240,9 @@ async def startup() -> None:
         _seed_default_movie_formats(session)
         _seed_env_api_key(session)
         app.state.movie_engine = build_movie_format_engine_from_db(session)
+
+        from app.intl_detection.loader import build_intl_engine_from_db
+        app.state.intl_engine = build_intl_engine_from_db(session)
 
         from app.title_matching.loader import build_title_match_engine
         from app.models import MovieMaster

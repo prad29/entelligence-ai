@@ -115,6 +115,9 @@ docker-compose up -d        # postgres + redis + backend + frontend
 
 # 3. (Optional) Seed from your amenity spreadsheet
 docker-compose exec backend python app/cli.py seed-from-xlsx /path/to/Amenities.xlsx
+
+# 4. (Optional) Seed international amenities (separate table/command)
+docker-compose exec backend python app/cli.py seed-intl-from-xlsx /path/to/International-Amenities-Priorities.xlsx
 ```
 
 | Service | URL |
@@ -206,6 +209,25 @@ entelligence-ai/
 | `POST` | `/api/v1/movie-formats` | Add new mapping |
 | `POST` | `/api/v1/review/{id}/approve` | Approve AI suggestion |
 | `POST` | `/api/v1/movie-review/{id}/approve` | Approve movie format AI suggestion |
+
+### International Amenity Detection
+
+Sibling module for international amenity strings (`4DX`, `ScreenX`, `Onyx`, `Xplus`,
+`KinoEvolution`, etc.) with its own master list and priority tiers (P1–P5). No
+Bedrock/AI fallback and no review queue — an unmatched string returns `Standard` /
+`No Match`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/intl-detect/single` | Detect screen format for one international amenity string |
+| `POST` | `/api/v1/intl-detect/batch` | Upload CSV/XLSX → batch job (requires `amenities` or `amenities_string` column) |
+| `GET` | `/api/v1/intl-jobs/{job_id}` | Poll job status |
+| `GET` | `/api/v1/intl-jobs/{job_id}/download` | Download result XLSX |
+| `GET` | `/api/v1/intl-amenities` | List all international amenity mappings (paginated) |
+| `POST` | `/api/v1/intl-amenities` | Add new mapping |
+| `POST` | `/api/v1/intl-amenities/{id}/approve` | Approve a pending mapping |
+| `POST` | `/api/v1/intl-amenities/import` | Bulk import mappings |
+| `GET` | `/api/v1/intl-amenities/export` | Export approved mappings |
 
 **Single detect request:**
 ```json

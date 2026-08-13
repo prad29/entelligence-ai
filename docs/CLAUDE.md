@@ -104,6 +104,51 @@ which runs an actual `agentic`-queue worker subprocess to prove the chord
 callback fires exactly once after a retried member succeeds. The eager-mode
 data-flow test is `backend/tests/test_batch_e2e.py`.
 
+## International Amenity Detection
+
+Sibling module to the domestic detection engine above, built for international
+amenity strings (`4DX`, `ScreenX`, `Onyx`, `Xplus`, `KinoEvolution`, etc.), which use a
+different, messier vocabulary and a separate priority-tier list. Lives in
+`backend/app/intl_detection/` (`IntlScreenFormatEngine`, `IntlMappingIndex`) and reuses
+the domestic `app.detection.normalizer` wholesale rather than forking it. Backed by its
+own `IntlAmenityMapping` / `IntlDetectionJob` tables — no `region` column was added to
+the domestic `AmenityMapping` table, to keep zero regression risk on the
+recently-resynced domestic data.
+
+### Endpoints
+
+- `/api/v1/intl-detect` — `POST /single` (single amenity string), `POST /batch`
+  (multipart upload, returns `{ "job_id": ... }`).
+- `/api/v1/intl-amenities` — master list CRUD (`GET`, `POST`, `PATCH /{id}`,
+  `DELETE /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, `POST /import`,
+  `GET /export`).
+- `/api/v1/intl-jobs` — `GET /{job_id}` status polling, `GET /{job_id}/download`.
+
+### Batch upload columns
+
+The required upload column is **`amenities` or `amenities_string`** — there is no
+`circuit_name` requirement, unlike the domestic `/api/v1/detect/batch` endpoint. Do not
+add a circuit column to the intl upload contract; there is no circuit data in the intl
+seed source.
+
+### Seeding
+
+```bash
+cd backend && python app/cli.py seed-intl-from-xlsx /path/to/International\ Amenities\ Priorities.xlsx
+```
+
+Dedicated command, separate from `seed-from-xlsx` — the domestic seed path is
+untouched. Parses `Sheet1`, tier markers `AMENITIES_PRIORITY_1`..`_5`, and seeds all
+rows with `status="approved"`.
+
+### No AI fallback, no review queue
+
+Unlike the domestic engine's Layer 2 (AWS Bedrock Mistral Large on true no-match) and
+its human review queue, **the international engine has no Bedrock/AI fallback and no
+review queue in this build** — an unmatched intl amenity string simply returns
+`screen_format: "Standard"`, `match_source: "No Match"`, `fired_ai: false`, so do not
+go looking for an `/intl-review` route or an `IntlReviewItem` table; neither exists.
+
 ## Environment Variables
 
 See .env.example for all variables.

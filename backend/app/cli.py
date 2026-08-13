@@ -8,6 +8,7 @@ Usage:
 import typer
 
 from app.detection.seed_loader import seed_db
+from app.intl_detection.seed_loader import seed_intl_db
 from app.database import create_db_and_tables, engine as db_engine
 from sqlmodel import Session
 
@@ -28,6 +29,23 @@ def seed_from_xlsx(
     with Session(db_engine) as session:
         seed_db(session, path)
     typer.echo(f"Seeded from {path}")
+
+
+@cli.command()
+def seed_intl_from_xlsx(
+    path: str = typer.Argument(..., help="Path to International Amenities Priorities.xlsx"),
+    reset: bool = typer.Option(True, "--reset/--no-reset", help="Clear existing rows before seeding"),
+) -> None:
+    """
+    Parse the international amenities xlsx and seed intlamenitymapping.
+
+    Safe to re-run: with --reset (the default), existing rows are cleared
+    first via a SQLAlchemy delete() so re-running does not duplicate rows.
+    """
+    create_db_and_tables()
+    with Session(db_engine) as session:
+        n = seed_intl_db(session, path, reset=reset)
+    typer.echo(f"Seeded {n} international mappings from {path}")
 
 
 @cli.command()

@@ -1,10 +1,10 @@
 import { useSearchParams } from 'react-router-dom'
 import { Tabs, TabsContent } from '@/components/ui/Tabs'
 import { RegionToggle } from '@/components/ui/RegionToggle'
-import { SingleDetector } from './SingleDetector'
-import { BatchUploader } from './BatchUploader'
+import { IntlSingleDetector } from './IntlSingleDetector'
+import { IntlBatchUploader } from './IntlBatchUploader'
 
-function DetectionPage() {
+function IntlDetectionPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = searchParams.get('tab') === 'batch' ? 'batch' : 'single'
 
@@ -22,14 +22,14 @@ function DetectionPage() {
         ]}
       >
         <TabsContent value="single">
-          <SingleDetector />
+          <IntlSingleDetector />
         </TabsContent>
         <TabsContent value="batch">
-          <BatchUploader />
+          <IntlBatchUploader />
         </TabsContent>
       </Tabs>
     </div>
   )
 }
 
-export { DetectionPage }
+export { IntlDetectionPage }

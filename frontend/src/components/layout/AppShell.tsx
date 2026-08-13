@@ -8,12 +8,12 @@ interface AppShellProps {
 
 function AppShell({ children }: AppShellProps) {
   return (
-    <div className="flex min-h-screen bg-zinc-50 dark:bg-zinc-950">
+    <div className="flex min-h-screen w-full bg-zinc-50 dark:bg-zinc-950">
       <AppSidebar />
-      <div className="flex-1 flex flex-col lg:ml-60">
+      <div className="flex-1 flex flex-col lg:ml-60 min-w-0">
         <TopBar />
-        <main className="flex-1 pt-16">
-          <div className="p-4 lg:p-6">{children}</div>
+        <main className="flex-1 pt-16 w-full">
+          <div className="p-4 lg:p-6 w-full">{children}</div>
         </main>
       </div>
     </div>

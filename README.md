@@ -1,7 +1,7 @@
 <div align="center">
 
 # E.R.I.C.A
-### Enttelligence Research & Insights Cinematic Assistant
+### Enttelligence Research & Insights Cinematic Agent
 
 **Internal cinema intelligence platform that maps theater amenity strings to canonical screen formats and movie projection formats — with AI fallback, batch processing, and a full review workflow.**
 

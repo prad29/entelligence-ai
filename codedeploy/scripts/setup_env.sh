@@ -19,7 +19,25 @@ PROD_DB_DATABASE=$(echo "$PROD_DB_SECRET" | jq -r .database)
 PROD_DB_USERNAME=$(echo "$PROD_DB_SECRET" | jq -r .username)
 PROD_DB_PASSWORD=$(echo "$PROD_DB_SECRET" | jq -r .password)
 EXTERNAL_API_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/external-api-key --query SecretString --output text --region us-east-1)
-SERPAPI_API_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/serpapi-api-key --query SecretString --output text --region us-east-1)
+# Rotation pool for the Deleted Showtimes Check feature — one JSON secret
+# holding all configured SerpApi keys, keyed "1".."13" (slot 1 is the
+# legacy single key). Add more slots here (and in app/config.py) if more
+# keys are added later; a missing slot in the JSON just yields an empty
+# string, which Settings.SERPAPI_API_KEYS filters out.
+SERPAPI_KEYS_JSON=$(aws secretsmanager get-secret-value --secret-id amenity/serpapi-api-keys --query SecretString --output text --region us-east-1)
+SERPAPI_API_KEY=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."1" // ""')
+SERPAPI_API_KEY_2=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."2" // ""')
+SERPAPI_API_KEY_3=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."3" // ""')
+SERPAPI_API_KEY_4=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."4" // ""')
+SERPAPI_API_KEY_5=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."5" // ""')
+SERPAPI_API_KEY_6=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."6" // ""')
+SERPAPI_API_KEY_7=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."7" // ""')
+SERPAPI_API_KEY_8=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."8" // ""')
+SERPAPI_API_KEY_9=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."9" // ""')
+SERPAPI_API_KEY_10=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."10" // ""')
+SERPAPI_API_KEY_11=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."11" // ""')
+SERPAPI_API_KEY_12=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."12" // ""')
+SERPAPI_API_KEY_13=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."13" // ""')
 
 cat > /app/.env.prod <<EOF
 DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@amenity-db.critf4jd3ef7.us-east-1.rds.amazonaws.com:5432/amenitydb
@@ -59,6 +77,18 @@ PROD_DB_PASSWORD=${PROD_DB_PASSWORD}
 EXTERNAL_API_ENABLED=true
 X_API_KEY=${EXTERNAL_API_KEY}
 SERPAPI_API_KEY=${SERPAPI_API_KEY}
+SERPAPI_API_KEY_2=${SERPAPI_API_KEY_2}
+SERPAPI_API_KEY_3=${SERPAPI_API_KEY_3}
+SERPAPI_API_KEY_4=${SERPAPI_API_KEY_4}
+SERPAPI_API_KEY_5=${SERPAPI_API_KEY_5}
+SERPAPI_API_KEY_6=${SERPAPI_API_KEY_6}
+SERPAPI_API_KEY_7=${SERPAPI_API_KEY_7}
+SERPAPI_API_KEY_8=${SERPAPI_API_KEY_8}
+SERPAPI_API_KEY_9=${SERPAPI_API_KEY_9}
+SERPAPI_API_KEY_10=${SERPAPI_API_KEY_10}
+SERPAPI_API_KEY_11=${SERPAPI_API_KEY_11}
+SERPAPI_API_KEY_12=${SERPAPI_API_KEY_12}
+SERPAPI_API_KEY_13=${SERPAPI_API_KEY_13}
 DELETED_SHOWTIME_S3_BUCKET=erica-datastore
 DELETED_SHOWTIME_S3_REGION=us-east-1
 DELETED_SHOWTIME_MAX_ROWS=1000

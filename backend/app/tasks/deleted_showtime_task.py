@@ -50,7 +50,8 @@ from app.deleted_showtimes.core import (
     parse_theater_listing,
     short_theater_name,
 )
-from app.deleted_showtimes.serp_client import SerpAuthError, SerpClient, SerpError
+from app.deleted_showtimes.serp_client import SerpAuthError, SerpError
+from app.deleted_showtimes.serp_key_rotation import AllKeysExhaustedError, RotatingSerpClient
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,7 @@ def _mark_aborted(session: Session, job_id: str, reason: str) -> None:
     session.commit()
 
 
-def _attempt(client: SerpClient, theater: str, target: date, today: date, aliases: Dict[str, str],
+def _attempt(client: RotatingSerpClient, theater: str, target: date, today: date, aliases: Dict[str, str],
              q: str, require_theater_verify: bool, strict_screens: bool) -> Listing:
     params = {"engine": "google", "q": q, "hl": "en", "gl": "us", "device": "desktop"}
     try:
@@ -222,7 +223,7 @@ def process_batch(
             fallback_mode = job.fallback
             max_concurrency = max(job.workers, 1)
 
-        client = SerpClient(settings.SERPAPI_API_KEY)
+        client = RotatingSerpClient()
         holder = job_semaphore.acquire(job_id, max_concurrency, timeout=120)
 
         lst = _attempt(client, theater, target, today, {}, build_query(theater, "bare"),
@@ -278,6 +279,14 @@ def process_batch(
                         f"Aborted: {settings.DELETED_SHOWTIME_ABORT_AFTER} consecutive failed "
                         f"theater batches (last reason: {lst.reason})",
                     )
+    except AllKeysExhaustedError as exc:
+        with Session(engine) as session:
+            _mark_aborted(session, job_id, f"All SerpApi keys are exhausted or rate-limited: {exc}")
+            for r in batch:
+                r.verdict, r.reason = UNKNOWN_, "RUN_ABORTED"
+            for idx, r in zip(row_indices, batch):
+                _store_row_result(job_id, idx, r)
+            _bump_counters(session, job_id, processed=len(batch), unknown_count=len(batch))
     except SerpAuthError as exc:
         with Session(engine) as session:
             _mark_aborted(session, job_id, f"SerpApi rejected the key: {exc}")

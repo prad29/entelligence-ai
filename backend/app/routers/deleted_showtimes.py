@@ -58,8 +58,8 @@ async def upload_batch(
     from app.deleted_showtimes import batch_io, storage
     from app.tasks.deleted_showtime_task import dispatch_job_task
 
-    if not settings.SERPAPI_API_KEY:
-        raise HTTPException(status_code=400, detail="SERPAPI_API_KEY is not configured")
+    if len(settings.SERPAPI_API_KEYS) == 0:
+        raise HTTPException(status_code=400, detail="No SerpApi key is configured")
 
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()

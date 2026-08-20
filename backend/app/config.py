@@ -70,6 +70,27 @@ class Settings(BaseSettings):
     # standalone showtime_serp_check.py script). Key lives in env/Secrets
     # Manager, never in source.
     SERPAPI_API_KEY: str = ""
+    # Additional key slots for rotation — used when SERPAPI_API_KEY runs out
+    # of credits mid-run so the job can fail over to the next configured key
+    # instead of stalling until the primary key's quota resets.
+    SERPAPI_API_KEY_2: str = ""
+    SERPAPI_API_KEY_3: str = ""
+    SERPAPI_API_KEY_4: str = ""
+    SERPAPI_API_KEY_5: str = ""
+    SERPAPI_API_KEY_6: str = ""
+    SERPAPI_API_KEY_7: str = ""
+    SERPAPI_API_KEY_8: str = ""
+    SERPAPI_API_KEY_9: str = ""
+    SERPAPI_API_KEY_10: str = ""
+    SERPAPI_API_KEY_11: str = ""
+    SERPAPI_API_KEY_12: str = ""
+    SERPAPI_API_KEY_13: str = ""
+    # SerpApi credits reset on each key's own monthly billing date, which we
+    # don't track per key — this cooldown is an approximation: a key marked
+    # exhausted becomes eligible again this many hours after the exhaustion
+    # timestamp, so it can self-heal within about a day of its real reset
+    # rather than staying locked out of rotation for weeks.
+    SERPAPI_KEY_COOLDOWN_HOURS: int = 24
     # Own bucket/region setting rather than reusing AGENTIC_BATCH_S3_BUCKET —
     # this feature has its own dedicated input/output folders provisioned in
     # S3, independent of the Mode B agentic batch pipeline's bucket.
@@ -83,6 +104,26 @@ class Settings(BaseSettings):
     # script's --abort-after guardrail) rather than burning SerpApi credits
     # on a run that's clearly not getting usable listings back.
     DELETED_SHOWTIME_ABORT_AFTER: int = 5
+
+    @property
+    def SERPAPI_API_KEYS(self) -> list[tuple[int, str]]:
+        """Ordered (slot, key) pairs for every configured SerpApi key, slot 1 = SERPAPI_API_KEY."""
+        slots = [
+            (1, self.SERPAPI_API_KEY),
+            (2, self.SERPAPI_API_KEY_2),
+            (3, self.SERPAPI_API_KEY_3),
+            (4, self.SERPAPI_API_KEY_4),
+            (5, self.SERPAPI_API_KEY_5),
+            (6, self.SERPAPI_API_KEY_6),
+            (7, self.SERPAPI_API_KEY_7),
+            (8, self.SERPAPI_API_KEY_8),
+            (9, self.SERPAPI_API_KEY_9),
+            (10, self.SERPAPI_API_KEY_10),
+            (11, self.SERPAPI_API_KEY_11),
+            (12, self.SERPAPI_API_KEY_12),
+            (13, self.SERPAPI_API_KEY_13),
+        ]
+        return [(slot, key) for slot, key in slots if key]
 
     class Config:
         env_file = ".env"

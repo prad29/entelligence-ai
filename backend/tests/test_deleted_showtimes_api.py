@@ -207,7 +207,21 @@ def test_upload_without_serpapi_key_configured_returns_400(monkeypatch):
         files={"file": ("showtimes.csv", _valid_csv(), "text/csv")},
     )
     assert resp.status_code == 400
-    assert "SERPAPI_API_KEY" in resp.json()["detail"]
+    assert "SerpApi key" in resp.json()["detail"]
+
+
+def test_upload_with_only_secondary_key_configured_returns_200(monkeypatch):
+    """No SERPAPI_API_KEY (slot 1), but a rotation slot (SERPAPI_API_KEY_2) is
+    configured -> upload must still be accepted (settings.SERPAPI_API_KEYS
+    counts every configured slot, not just the legacy single-key field)."""
+    monkeypatch.setattr(settings, "SERPAPI_API_KEY", "")
+    monkeypatch.setattr(settings, "SERPAPI_API_KEY_2", "key-2-only")
+    resp = client.post(
+        "/api/v1/deleted-showtimes/batch",
+        files={"file": ("showtimes.csv", _valid_csv(), "text/csv")},
+    )
+    assert resp.status_code == 200
+    assert "job_id" in resp.json()
 
 
 def test_upload_exceeding_row_cap_returns_400(monkeypatch):

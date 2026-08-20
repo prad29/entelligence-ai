@@ -302,6 +302,22 @@ class DeletedShowtimeJob(SQLModel, table=True):
     original_filename: Optional[str] = None
 
 
+class SerpApiKeySlot(SQLModel, table=True):
+    """Rotation state for SerpApi keys used by the Deleted Showtimes Check
+    feature. One row per configured key slot (see Settings.SERPAPI_API_KEYS).
+    `key_fingerprint` detects when the physical key in a slot's env var has
+    been swapped for a different key, so stale exhaustion state doesn't leak
+    onto a replacement key. Absence of a row (or a fingerprint mismatch) means
+    "available" — rows are written only on exhaustion, never lazily seeded,
+    to avoid a race between concurrent Celery workers inserting the same PK."""
+
+    slot: int = Field(primary_key=True)
+    key_fingerprint: str
+    exhausted_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    failure_count: int = Field(default=0)
+
+
 class ApiKey(SQLModel, table=True):
     """External API tenancy record. Keys are stored hashed (SHA-256) — the
     plaintext key is shown to the client once at creation and never

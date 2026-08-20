@@ -279,6 +279,84 @@ def test_finalize_job_noops_on_already_terminal_job(patched_task, db_engine, mon
     assert job.output_path == "deleted-showtimes-output/already-done.xlsx"
 
 
+# ---------------------------------------------------------------------------
+# (g) SerpApi key rotation: key 1 exhausted, key 2 succeeds -> batch completes
+# normally, rows get real verdicts (not RUN_ABORTED).
+# ---------------------------------------------------------------------------
+def test_key_rotation_falls_back_to_second_key_and_completes_normally(
+    patched_task, db_engine, fake_hash, monkeypatch
+):
+    from app.config import settings
+    from app.deleted_showtimes.serp_client import SerpQuotaError
+    import app.deleted_showtimes.serp_key_rotation as rotation_mod
+
+    monkeypatch.setattr(settings, "SERPAPI_API_KEY", "key-1")
+    monkeypatch.setattr(settings, "SERPAPI_API_KEY_2", "key-2")
+
+    class FakeUnderlyingSerpClient:
+        """Stands in for serp_client.SerpClient inside RotatingSerpClient:
+        key-1 always reports quota exhaustion, key-2 always succeeds."""
+
+        def __init__(self, api_key, retries=3, timeout=45):
+            self.api_key = api_key
+
+        def search(self, params):
+            if self.api_key == "key-1":
+                raise SerpQuotaError("account has run out of searches")
+            return {"ok": True, "api_key_used": self.api_key}
+
+    monkeypatch.setattr(rotation_mod, "SerpClient", FakeUnderlyingSerpClient)
+
+    import app.tasks.deleted_showtime_task as task_mod
+
+    ok_listing = Listing(ok=True, query="q", theater_verified=True,
+                          by_title={"dune": [(19 * 60, "7:00 PM", "Standard")]},
+                          titles_seen=["Dune"], total_times=1)
+    monkeypatch.setattr(task_mod, "parse_theater_listing", lambda *a, **k: ok_listing)
+
+    job_id = _make_job(db_engine)
+    task_mod.process_batch.run(job_id, "AMC Wayne 14", "2026-08-06", [0, 1], _row_payloads())
+
+    job = _get_job(db_engine, job_id)
+    assert not job.aborted
+    assert job.error is None
+    assert job.processed == 2
+
+    for idx in ("0", "1"):
+        stored = json.loads(fake_hash[idx])
+        assert stored["reason"] != "RUN_ABORTED"
+
+
+# ---------------------------------------------------------------------------
+# (h) All configured SerpApi keys exhausted -> job aborted (not RUN_ABORTED
+# from a bare SerpAuthError, but from AllKeysExhaustedError), every row in the
+# batch recorded UNKNOWN_/RUN_ABORTED.
+# ---------------------------------------------------------------------------
+def test_all_keys_exhausted_aborts_job_without_raising(patched_task, db_engine, fake_hash, monkeypatch):
+    import app.tasks.deleted_showtime_task as task_mod
+    from app.deleted_showtimes.serp_key_rotation import AllKeysExhaustedError
+    from unittest.mock import patch
+
+    job_id = _make_job(db_engine)
+
+    exc = AllKeysExhaustedError(
+        "tried 2 of 2 configured key(s); most recent failure: account has run out of searches"
+    )
+    with patch.object(task_mod, "_attempt", side_effect=exc):
+        task_mod.process_batch.run(job_id, "AMC Wayne 14", "2026-08-06", [0, 1], _row_payloads())
+
+    job = _get_job(db_engine, job_id)
+    assert job.aborted
+    assert job.error
+    assert "exhaust" in job.error.lower()
+    assert job.processed == 2
+    assert job.unknown_count == 2
+    for idx in ("0", "1"):
+        stored = json.loads(fake_hash[idx])
+        assert stored["verdict"] == UNKNOWN_
+        assert stored["reason"] == "RUN_ABORTED"
+
+
 def test_finalize_job_marks_failed_when_aborted(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine, total=1, aborted=True, error="Aborted: too many failures",
                         file_path="deleted-showtimes-input/job-test-1.csv")

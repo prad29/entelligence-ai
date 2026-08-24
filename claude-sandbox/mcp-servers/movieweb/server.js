@@ -21,6 +21,29 @@ const MAX_RETRIES = 3
 const RETRY_BASE_DELAY_MS = 1_000
 const MAX_FETCH_TEXT_CHARS = 8_000
 
+// Per-run Serper call log, written into this request's ephemeral $HOME (set
+// by claude-sandbox/server.js's runClaude() before spawning `claude`, and
+// inherited by this MCP server as its child process). claude-sandbox/server.js
+// reads this file back after the CLI process exits — but before it deletes
+// the ephemeral home dir — and folds it into the /run response as
+// `serper_calls`, which runner.py then turns into SerperCallLog rows
+// (spec §7). Appended, not written once, so every call in a multi-tool-call
+// session is captured, not just the last one.
+const CALL_LOG_PATH = process.env.HOME ? `${process.env.HOME}/serper-calls.jsonl` : null
+
+function logSerperCall(callType, success, latencyMs) {
+  if (!CALL_LOG_PATH) return
+  try {
+    const fs = require('fs')
+    fs.appendFileSync(
+      CALL_LOG_PATH,
+      JSON.stringify({ call_type: callType, success, latency_ms: latencyMs }) + '\n'
+    )
+  } catch {
+    // Never let call-log bookkeeping break the actual tool call (spec §7).
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -91,8 +114,10 @@ server.registerTool(
     },
   },
   async ({ query, num }) => {
+    const started = Date.now()
     try {
       const data = await postJson(SEARCH_URL, { q: query, num: num || 8 })
+      logSerperCall('search', true, Date.now() - started)
       const organic = Array.isArray(data.organic) ? data.organic : []
       const results = organic.slice(0, num || 8).map((r) => ({
         title: r.title || '',
@@ -109,6 +134,7 @@ server.registerTool(
       }
       return toolText(payload)
     } catch (err) {
+      logSerperCall('search', false, Date.now() - started)
       return toolError(err.message || String(err))
     }
   }
@@ -127,8 +153,10 @@ server.registerTool(
     },
   },
   async ({ url }) => {
+    const started = Date.now()
     try {
       const data = await postJson(SCRAPE_URL, { url })
+      logSerperCall('scrape', true, Date.now() - started)
       const text = typeof data.text === 'string' ? data.text : ''
       const truncated = text.length > MAX_FETCH_TEXT_CHARS
       return toolText({
@@ -138,6 +166,7 @@ server.registerTool(
         truncated,
       })
     } catch (err) {
+      logSerperCall('scrape', false, Date.now() - started)
       return toolError(err.message || String(err))
     }
   }

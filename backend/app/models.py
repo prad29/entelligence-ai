@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel, Field
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Index, UniqueConstraint
 from typing import Optional
 from datetime import datetime
 import uuid
@@ -391,4 +391,156 @@ class ApiTitleMatchRow(SQLModel, table=True):
     attempts: int = Field(default=0)
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class LlmCallLog(SQLModel, table=True):
+    """One row per LLM call — the atomic fact table for usage observability
+    (spec §5/§6). Every field except cost_usd is captured directly at the call
+    site; cost_usd is computed once at write time via
+    app.observability.cost.estimate_cost_usd so no query ever has to
+    recompute it.
+
+    Cache-hit skips (the existing in-memory/Redis dedup cache in
+    batch_worker.py / movie_batch_worker.py) also write a row here, with
+    cache_hit=True and all token/cost fields zero — so the dedupe rate is a
+    plain count query and no separate counter table is needed.
+
+    Retention: 30 days of raw rows, pruned daily only after they have been
+    rolled up into LlmUsageRollupHourly (spec §8).
+    """
+
+    __table_args__ = (
+        # Composite index matching the dominant access pattern of both the
+        # hourly rollup scan and the API layer's date-range+task filters.
+        Index("ix_llmcalllog_ts_task_type", "ts", "task_type"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=datetime.utcnow, index=True)
+    task_type: str = Field(index=True)   # see app.observability.constants.TASK_TYPES
+    call_path: str                       # bedrock_direct | agentic_cli
+    model_id: str = Field(index=True)
+    caller_type: str = Field(default="portal", index=True)  # portal | external_api
+    api_key_id: Optional[str] = Field(default=None, index=True)  # set only for external_api
+    job_id: Optional[str] = Field(default=None, index=True)  # soft ref, deliberately not a FK
+    job_type: Optional[str] = None       # originating job table name, e.g. "MovieTitleBatchJob"
+    market: Optional[str] = Field(default=None, index=True)  # domestic | international
+    country: Optional[str] = None        # international mapping only
+    decision: Optional[str] = None       # AUTO_ACCEPT | REVIEW | REVIEW_NON_MOVIE | ...
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
+    cache_read_tokens: int = Field(default=0)
+    cache_write_tokens: int = Field(default=0)
+    cost_usd: float = Field(default=0.0)
+    latency_ms: int = Field(default=0)
+    status: str = Field(default="success")  # success | failure | timeout
+    error_type: Optional[str] = None
+    retry_count: int = Field(default=0)
+    cache_hit: bool = Field(default=False)
+
+
+class SerpApiCallLog(SQLModel, table=True):
+    """One row per SerpApi search attempt against one key slot (spec §6).
+    Persists SerpClient.calls_made, which the rotation pool has always
+    incremented and never read. Not pruned — SerpApi volume is bounded by
+    search calls, not LLM tokens (spec §6)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=datetime.utcnow, index=True)
+    job_id: Optional[str] = Field(default=None, index=True)  # DeletedShowtimeJob.id
+    slot: int = Field(index=True)        # SerpApiKeySlot.slot the attempt used
+    success: bool = Field(default=True)
+    calls_made: int = Field(default=0)   # billed searches SerpApi actually served
+    latency_ms: int = Field(default=0)
+    error_type: Optional[str] = None     # exception class name, e.g. "SerpQuotaError"
+
+
+class SerpApiCreditSnapshot(SQLModel, table=True):
+    """Hourly snapshot per key from SerpApi's documented /account endpoint
+    (spec §6/§7). `error` is populated instead of the counts when the endpoint
+    is unreachable, so a failed poll is visible rather than silently absent."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=datetime.utcnow, index=True)
+    slot: int = Field(index=True)
+    key_fingerprint: str                 # same 16-char sha256 prefix as SerpApiKeySlot
+    plan_searches_left: Optional[int] = None
+    extra_credits: Optional[int] = None
+    total_searches_left: Optional[int] = None
+    this_month_usage: Optional[int] = None
+    account_email: Optional[str] = None
+    error: Optional[str] = None
+
+
+class SerperCallLog(SQLModel, table=True):
+    """One row per Serper call made by the movieweb MCP server inside
+    claude-sandbox (spec §6/§7). Written by runner.py from the `serper_calls`
+    field the sandbox's /run response now carries, tagged with the originating
+    job's identity so attribution is per-job (spec §3). Not pruned."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=datetime.utcnow, index=True)
+    job_id: Optional[str] = Field(default=None, index=True)
+    job_type: Optional[str] = None
+    task_type: Optional[str] = Field(default=None, index=True)
+    market: Optional[str] = None
+    call_type: str = Field(default="search")  # search | scrape
+    success: bool = Field(default=True)
+    latency_ms: int = Field(default=0)
+    error_type: Optional[str] = None
+
+
+class LlmUsageRollupHourly(SQLModel, table=True):
+    """Pre-aggregated LlmCallLog sums by (hour, task_type, model_id,
+    caller_type, api_key_id, market) — a real table, not a view, so aggregates
+    outlive the 30-day raw retention window (spec §6/§8).
+
+    api_key_id and market are NOT NULL with a '' sentinel rather than
+    nullable: Postgres treats NULLs as distinct inside a unique index, so an
+    `ON CONFLICT (…dims…) DO UPDATE` would never match a NULL-dimension row
+    and the rollup would insert a duplicate on every run, breaking the
+    idempotency guarantee in spec §8.
+    """
+
+    __table_args__ = (
+        UniqueConstraint(
+            "bucket_hour", "task_type", "model_id", "caller_type", "api_key_id", "market",
+            name="uq_llm_rollup_hourly_dims",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    bucket_hour: datetime = Field(index=True)  # UTC hour, minutes/seconds truncated to 0
+    task_type: str
+    model_id: str
+    caller_type: str
+    api_key_id: str = Field(default="")
+    market: str = Field(default="")
+    request_count: int = Field(default=0)
+    cache_hit_count: int = Field(default=0)
+    failure_count: int = Field(default=0)   # status != 'success'
+    retry_count_sum: int = Field(default=0)
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
+    cache_read_tokens: int = Field(default=0)
+    cache_write_tokens: int = Field(default=0)
+    cost_usd: float = Field(default=0.0)
+    latency_ms_sum: int = Field(default=0)  # /request_count gives mean latency
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class LlmUsageRollupWatermark(SQLModel, table=True):
+    """Single-row watermark for the hourly rollup (spec §8). `last_rolled_id`
+    is the highest LlmCallLog.id already folded into LlmUsageRollupHourly;
+    `last_rolled_hour` is the newest bucket_hour touched, which the daily
+    prune uses as its safety ceiling so no un-rolled raw row is ever deleted.
+
+    Row is upserted by name, never lazily inserted from two places at once —
+    same rationale as SerpApiKeySlot's docstring above (concurrent Celery
+    workers racing on the same PK)."""
+
+    name: str = Field(default="hourly", primary_key=True)
+    last_rolled_id: int = Field(default=0)
+    last_rolled_hour: Optional[datetime] = None
     updated_at: datetime = Field(default_factory=datetime.utcnow)

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { AlertCircle, RotateCcw } from 'lucide-react'
+import { RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useUsageFilterState } from '@/hooks/useUsageFilterState'
 import {
@@ -21,15 +21,6 @@ import { UsageFilterBar } from './UsageFilterBar'
 import { useUsageFilterOptions } from './useUsageFilterOptions'
 import { UsageDetailTable } from './UsageDetailTable'
 import { ReportDownloadButtons } from './ReportDownloadButtons'
-
-function InlineError({ message }: { message: string }) {
-  return (
-    <div className="rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 px-4 py-3 flex items-center gap-2 text-sm text-red-700 dark:text-red-400">
-      <AlertCircle className="h-4 w-4 shrink-0" />
-      {message}
-    </div>
-  )
-}
 
 /** Whole-day span, inclusive of both endpoints — matches the backend's
  *  widening of a bare `end` date to the whole day (routers/usage.py). Used
@@ -152,4 +143,4 @@ function ObservabilityPage() {
   )
 }
 
-export { ObservabilityPage, InlineError }
+export { ObservabilityPage }

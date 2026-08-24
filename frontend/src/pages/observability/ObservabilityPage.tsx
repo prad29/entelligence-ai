@@ -9,6 +9,7 @@ import {
   useUsageDedupe,
   useUsageSummary,
   useUsageTimeseries,
+  type BreakdownDimension,
   type Granularity,
   type UsageFilterState,
 } from '@/hooks/useUsage'
@@ -18,6 +19,8 @@ import { BreakdownDonutChart } from './BreakdownDonutChart'
 import { BreakdownBarChart } from './BreakdownBarChart'
 import { UsageFilterBar } from './UsageFilterBar'
 import { useUsageFilterOptions } from './useUsageFilterOptions'
+import { UsageDetailTable } from './UsageDetailTable'
+import { ReportDownloadButtons } from './ReportDownloadButtons'
 
 function InlineError({ message }: { message: string }) {
   return (
@@ -69,6 +72,13 @@ function ObservabilityPage() {
   const byCallerType = useUsageBreakdown('caller_type', queryFilters)
   const byModel = useUsageBreakdown('model_id', queryFilters)
 
+  const [tableDimension, setTableDimension] = useState<BreakdownDimension>('task_type')
+  // Fetched independently of byTaskType/byCallerType/byModel above — when
+  // tableDimension === 'task_type' this duplicates the donut's request.
+  // That's a cheap aggregate query; the duplication keeps each component's
+  // data flow independent, so no request cache is added for it.
+  const detail = useUsageBreakdown(tableDimension, queryFilters)
+
   const reloadAll = () => {
     summary.reload()
     dedupe.reload()
@@ -78,6 +88,7 @@ function ObservabilityPage() {
     byTaskType.reload()
     byCallerType.reload()
     byModel.reload()
+    detail.reload()
   }
 
   return (
@@ -90,10 +101,13 @@ function ObservabilityPage() {
         modelOptions={modelOptions}
         apiKeyOptions={apiKeyOptions}
         actions={
-          <Button variant="secondary" size="sm" onClick={reloadAll}>
-            <RotateCcw className="h-3.5 w-3.5" />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <ReportDownloadButtons filters={queryFilters} disabled={!!rangeError} />
+            <Button variant="secondary" size="sm" onClick={reloadAll}>
+              <RotateCcw className="h-3.5 w-3.5" />
+              Refresh
+            </Button>
+          </div>
         }
       />
 
@@ -127,6 +141,12 @@ function ObservabilityPage() {
         description="Top models by spend in this range."
         dimension="model_id"
         resource={byModel}
+      />
+
+      <UsageDetailTable
+        dimension={tableDimension}
+        onDimensionChange={setTableDimension}
+        resource={detail}
       />
     </div>
   )

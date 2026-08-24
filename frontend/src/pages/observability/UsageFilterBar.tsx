@@ -206,14 +206,13 @@ function UsageFilterBar({
             }}
           />
           <div className="flex flex-col gap-1">
-            <div className={cn(apiKeyDisabled && 'pointer-events-none opacity-50')}>
-              <Select
-                label={DIMENSION_LABELS.api_key_id}
-                options={withSentinel(apiKeyOptions)}
-                value={toSelectValue(filters.apiKeyId)}
-                onValueChange={(v) => onChange({ apiKeyId: fromSelectValue(v) })}
-              />
-            </div>
+            <Select
+              label={DIMENSION_LABELS.api_key_id}
+              options={withSentinel(apiKeyOptions)}
+              value={toSelectValue(filters.apiKeyId)}
+              onValueChange={(v) => onChange({ apiKeyId: fromSelectValue(v) })}
+              disabled={apiKeyDisabled}
+            />
             {apiKeyDisabled && (
               <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
                 Portal calls carry no API key.

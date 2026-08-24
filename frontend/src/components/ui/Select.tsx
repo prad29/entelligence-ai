@@ -29,18 +29,20 @@ interface SelectProps {
   label?: string
   className?: string
   triggerClassName?: string
+  disabled?: boolean
 }
 
-function Select({ value, onValueChange, options, placeholder = 'Select…', label, className, triggerClassName }: SelectProps) {
+function Select({ value, onValueChange, options, placeholder = 'Select…', label, className, triggerClassName, disabled }: SelectProps) {
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
       {label && <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">{label}</span>}
-      <Root value={value} onValueChange={onValueChange}>
+      <Root value={value} onValueChange={onValueChange} disabled={disabled}>
         <Trigger
           className={cn(
             'flex h-9 w-full items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100',
             'focus:outline-none focus:ring-2 focus:ring-[#4A9FD4]/30 focus:border-[#4A9FD4]',
             'data-[placeholder]:text-zinc-400 dark:data-[placeholder]:text-zinc-500',
+            'data-[disabled]:opacity-50 data-[disabled]:cursor-not-allowed',
             'transition-colors duration-150',
             triggerClassName
           )}

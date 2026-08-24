@@ -110,6 +110,23 @@ services:
       redis:
         condition: service_healthy
 
+  celery-beat:
+    build: ./backend
+    # Exactly one replica, always: beat only *dispatches* scheduled tasks, and
+    # a second scheduler would double-fire every beat_schedule entry. The
+    # tasks themselves execute on celery-worker, which consumes the default
+    # "celery" queue that beat tasks are deliberately left routed to.
+    command: celery -A app.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   celery-flower:
     build: ./backend
     command: celery -A app.celery_app flower --port=5555

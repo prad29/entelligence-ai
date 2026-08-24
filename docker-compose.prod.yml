@@ -88,6 +88,16 @@ services:
       redis:
         condition: service_healthy
 
+  celery-beat:
+    image: ${ECR_BACKEND}:${IMAGE_TAG}
+    # Exactly one replica, always — see docker-compose.yml for why.
+    command: celery -A app.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    restart: unless-stopped
+    env_file: /app/.env.prod
+    depends_on:
+      redis:
+        condition: service_healthy
+
   frontend:
     image: ${ECR_FRONTEND}:${IMAGE_TAG}
     restart: unless-stopped

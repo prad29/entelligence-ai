@@ -1,4 +1,6 @@
 from celery import Celery
+from celery.schedules import crontab
+
 from app.config import settings
 
 celery = Celery(
@@ -12,6 +14,7 @@ celery = Celery(
         "app.tasks.prod_db_sync_task",
         "app.tasks.external_match_task",
         "app.tasks.deleted_showtime_task",
+        "app.tasks.serpapi_credit_task",
     ],
 )
 
@@ -33,5 +36,22 @@ celery.conf.update(
         "app.tasks.deleted_showtime_task.process_batch": {"queue": "deleted-showtimes"},
         "app.tasks.deleted_showtime_task.finalize_job": {"queue": "deleted-showtimes"},
         "app.tasks.deleted_showtime_task.dispatch_job_task": {"queue": "deleted-showtimes"},
+    },
+    # Periodic tasks, run by the single-replica `celery-beat` service in
+    # docker-compose. Two conventions hold for every entry here:
+    #
+    #  1. No task_routes entry. Beat tasks land on the default "celery" queue,
+    #     which celery-worker already consumes — so a new scheduled task needs
+    #     no new worker service.
+    #  2. Off-the-hour minutes. Each entry gets its own minute so the hourly
+    #     jobs don't all contend for the same worker slot at :00.
+    #
+    # Further observability entries (the hourly usage rollup and the daily raw
+    # log prune) are added to this same dict.
+    beat_schedule={
+        "serpapi-credit-snapshot-hourly": {
+            "task": "app.tasks.serpapi_credit_task.snapshot_serpapi_credits",
+            "schedule": crontab(minute=7),
+        },
     },
 )

@@ -41,7 +41,7 @@ def _counter_client():
     return redis.Redis.from_url(settings.REDIS_URL)
 
 
-def _fake_run_agentic_match(title, show_date, theater, ticketing_url, use_poster_vision):
+def _fake_run_agentic_match(title, show_date, theater, ticketing_url, use_poster_vision, market="domestic", country=None, usage_ctx=None):
     """Deterministic stand-in for the real sandbox runner.
 
     * ``RETRY_TITLE`` -> AgenticTimeoutError on first call, success on retry.

@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
+import time
 import urllib.parse
 import urllib.request
 from typing import Optional
 from urllib.error import URLError
 
 from app.config import settings
+from app.observability.agentic_usage import extract_agentic_usage
+from app.observability.constants import (
+    CALLER_PORTAL,
+    PATH_AGENTIC_CLI,
+    STATUS_FAILURE,
+    STATUS_SUCCESS,
+    STATUS_TIMEOUT,
+    TASK_DOMESTIC_MAPPING,
+    TASK_INTL_MAPPING,
+)
+from app.observability.context import LlmCallContext
+from app.observability.llm_logging import log_llm_call
+from app.observability.serp_logging import log_serper_calls
 from app.title_matching.types import TitleMatchResult
 from app.title_matching.agentic import (
     AgenticConfigError,
@@ -24,6 +39,68 @@ from app.title_matching.semantic_index import get_embedding
 logger = logging.getLogger(__name__)
 
 
+def _default_usage_ctx(market: str, country: Optional[str]) -> LlmCallContext:
+    """Attribution for a caller that didn't supply one — the portal's
+    single-match path (app/title_matching/engine.py), which has no job to
+    attribute to."""
+    return LlmCallContext(
+        task_type=TASK_DOMESTIC_MAPPING if market == "domestic" else TASK_INTL_MAPPING,
+        call_path=PATH_AGENTIC_CLI,
+        caller_type=CALLER_PORTAL,
+        market=market,
+        country=country,
+    )
+
+
+def _log_sandbox_call(
+    ctx: LlmCallContext,
+    stdout: str,
+    started: float,
+    *,
+    retry_count: int,
+    decision: Optional[str] = None,
+    status: str = STATUS_SUCCESS,
+    error_type: Optional[str] = None,
+) -> None:
+    """Write one LlmCallLog row for one sandbox invocation. Never raises.
+
+    Called once per _call_sandbox(), including the parse-failure retry: that
+    retry is a second real CLI invocation billing real tokens, so it gets its
+    own row (retry_count=1) rather than being folded into the first.
+    """
+    latency_ms = int((time.monotonic() - started) * 1000)
+    try:
+        parsed = extract_agentic_usage(stdout)
+        log_llm_call(
+            ctx,
+            model_id=settings.AGENTIC_CLAUDE_MODEL,
+            usage=parsed.usage,
+            latency_ms=latency_ms,
+            status=status,
+            error_type=error_type,
+            retry_count=retry_count,
+            decision=decision,
+            # The CLI's own total_cost_usd wins when present; None falls back
+            # to litellm token pricing inside log_llm_call.
+            cost_usd=parsed.cost_usd,
+        )
+        serper_calls = getattr(_call_sandbox, "last_serper_calls", None)
+        if serper_calls:
+            log_serper_calls(
+                serper_calls,
+                job_id=ctx.job_id,
+                job_type=ctx.job_type,
+                task_type=ctx.task_type,
+                market=ctx.market,
+            )
+    except Exception as log_exc:  # noqa: BLE001 — spec §7
+        logger.warning("agentic_usage_log_failed error=%s", log_exc)
+
+
+def _status_for(exc: BaseException) -> str:
+    return STATUS_TIMEOUT if isinstance(exc, AgenticTimeoutError) else STATUS_FAILURE
+
+
 def run_agentic_match(
     title: str,
     show_date: Optional[str] = None,
@@ -32,6 +109,7 @@ def run_agentic_match(
     use_poster_vision: bool = False,
     market: str = "domestic",
     country: Optional[str] = None,
+    usage_ctx: Optional[LlmCallContext] = None,
 ) -> TitleMatchResult:
     _check_sandbox_reachable()
 
@@ -66,10 +144,33 @@ def run_agentic_match(
         len(db_candidates), len(vespa_candidates), use_poster_vision,
     )
 
-    stdout = _call_sandbox(prompt, tools)
+    # Attribution for every sandbox call below. A caller-supplied context wins,
+    # but market/country are backfilled from this function's own arguments —
+    # the runner is the single source of truth for those, so a call site can
+    # never drift them out of sync with the prompt it actually built.
+    ctx = usage_ctx or _default_usage_ctx(market, country)
+    if usage_ctx is not None:
+        ctx = dataclasses.replace(
+            ctx,
+            market=ctx.market or market,
+            country=ctx.country or country,
+        )
+
+    started = time.monotonic()
+    try:
+        stdout = _call_sandbox(prompt, tools)
+    except BaseException as exc:
+        _log_sandbox_call(
+            ctx, "", started,
+            retry_count=0,
+            status=_status_for(exc),
+            error_type=type(exc).__name__,
+        )
+        raise
 
     logger.debug("agentic_match_raw_output length=%d", len(stdout))
     result = parse_agent_output(stdout)
+    _log_sandbox_call(ctx, stdout, started, retry_count=0, decision=result.decision)
 
     # Retry once if parse produced a fallback (model stopped before outputting JSON)
     if result.suggested_movie_id == 0 and result.evidence.get("parse_error"):
@@ -83,11 +184,21 @@ def run_agentic_match(
             "You MUST respond with ONLY the JSON object and nothing else. "
             "No explanations, no tool calls — just the raw JSON."
         )
+        retry_started = time.monotonic()
         try:
             stdout2 = _call_sandbox(retry_prompt, tools)
             result = parse_agent_output(stdout2)
+            _log_sandbox_call(
+                ctx, stdout2, retry_started, retry_count=1, decision=result.decision
+            )
             logger.info("agentic_retry_success title=%r id=%d", title, result.suggested_movie_id)
         except Exception as retry_exc:
+            _log_sandbox_call(
+                ctx, "", retry_started,
+                retry_count=1,
+                status=_status_for(retry_exc),
+                error_type=type(retry_exc).__name__,
+            )
             logger.warning("agentic_retry_failed title=%r error=%s", title, retry_exc)
 
     # If Claude identified the movie but couldn't match a DB id (id=0),
@@ -159,7 +270,17 @@ def run_agentic_match(
 
 
 def _call_sandbox(prompt: str, tools: str) -> str:
-    """POST to the claude-sandbox sidecar and return raw stdout."""
+    """POST to the claude-sandbox sidecar and return raw stdout.
+
+    Side channel: also stashes the response's `serper_calls` list (spec §7 —
+    the movieweb MCP server's web_search/web_fetch call log for this
+    invocation) onto `_call_sandbox.last_serper_calls`, read by the caller
+    right after this returns. This keeps the return type unchanged (still
+    `str`) so existing callers/mocks (e.g. tests that patch this function to
+    return a plain string) are unaffected.
+    """
+    _call_sandbox.last_serper_calls = []
+
     payload = json.dumps({
         "prompt": prompt,
         "model": settings.AGENTIC_CLAUDE_MODEL,
@@ -189,6 +310,9 @@ def _call_sandbox(prompt: str, tools: str) -> str:
     timed_out = body.get("timed_out", False)
     stderr = body.get("stderr", "")
     stdout = body.get("stdout", "")
+    serper_calls = body.get("serper_calls", [])
+    if isinstance(serper_calls, list):
+        _call_sandbox.last_serper_calls = serper_calls
 
     if timed_out:
         raise AgenticTimeoutError(
@@ -448,8 +572,9 @@ async def run_agentic_match_async(
     use_poster_vision: bool = False,
     market: str = "domestic",
     country: Optional[str] = None,
+    usage_ctx: Optional[LlmCallContext] = None,
 ) -> TitleMatchResult:
     return await asyncio.to_thread(
         run_agentic_match, title, show_date, theater, ticketing_url, use_poster_vision,
-        market, country,
+        market, country, usage_ctx,
     )

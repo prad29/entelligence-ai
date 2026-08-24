@@ -92,7 +92,7 @@ def _synthetic_result(title: str) -> TitleMatchResult:
     raise AssertionError(f"unexpected title in synthetic runner: {title!r}")
 
 
-def _fake_run_agentic_match(title, show_date, theater, ticketing_url, use_poster_vision):
+def _fake_run_agentic_match(title, show_date, theater, ticketing_url, use_poster_vision, market="domestic", country=None, usage_ctx=None):
     # theater is always None in the batch path.
     assert theater is None
     if title == _FAILED_TITLE:

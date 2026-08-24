@@ -104,14 +104,41 @@ function runClaude({ prompt, model, tools, timeoutMs }) {
       try { require('fs').rmSync(ephemeralHome, { recursive: true, force: true }) } catch {}
     }
 
+    // The movieweb MCP server (spawned by `claude` as a child process, and
+    // inheriting this same ephemeralHome as its $HOME) appends one JSON line
+    // per web_search/web_fetch call to this file. Read before cleanup() deletes
+    // the ephemeral home dir; missing/unreadable/malformed is a clean [], never
+    // a thrown error (spec §7) — a run with no Serper calls has no such file.
+    function readSerperCalls() {
+      try {
+        const fs = require('fs')
+        const raw = fs.readFileSync(`${ephemeralHome}/serper-calls.jsonl`, 'utf8')
+        return raw
+          .split('\n')
+          .filter((line) => line.trim())
+          .map((line) => {
+            try {
+              return JSON.parse(line)
+            } catch {
+              return null
+            }
+          })
+          .filter(Boolean)
+      } catch {
+        return []
+      }
+    }
+
     proc.on('close', (code) => {
       clearTimeout(timer)
+      const serperCalls = readSerperCalls()
       cleanup()
       resolve({
         stdout,
         stderr,
         exit_code: timedOut ? -1 : (code ?? -1),
         timed_out: timedOut,
+        serper_calls: serperCalls,
       })
     })
 
@@ -123,6 +150,7 @@ function runClaude({ prompt, model, tools, timeoutMs }) {
         stderr: err.message,
         exit_code: -1,
         timed_out: false,
+        serper_calls: [],
       })
     })
   })

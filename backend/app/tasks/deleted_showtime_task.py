@@ -223,7 +223,7 @@ def process_batch(
             fallback_mode = job.fallback
             max_concurrency = max(job.workers, 1)
 
-        client = RotatingSerpClient()
+        client = RotatingSerpClient(job_id=job_id)
         holder = job_semaphore.acquire(job_id, max_concurrency, timeout=120)
 
         lst = _attempt(client, theater, target, today, {}, build_query(theater, "bare"),

@@ -24,6 +24,7 @@ from app.observability.constants import (
 )
 from app.observability.context import LlmCallContext
 from app.observability.llm_logging import log_llm_call
+from app.observability.serp_logging import log_serper_calls
 from app.title_matching.types import TitleMatchResult
 from app.title_matching.agentic import (
     AgenticConfigError,
@@ -83,6 +84,15 @@ def _log_sandbox_call(
             # to litellm token pricing inside log_llm_call.
             cost_usd=parsed.cost_usd,
         )
+        serper_calls = getattr(_call_sandbox, "last_serper_calls", None)
+        if serper_calls:
+            log_serper_calls(
+                serper_calls,
+                job_id=ctx.job_id,
+                job_type=ctx.job_type,
+                task_type=ctx.task_type,
+                market=ctx.market,
+            )
     except Exception as log_exc:  # noqa: BLE001 — spec §7
         logger.warning("agentic_usage_log_failed error=%s", log_exc)
 
@@ -260,7 +270,17 @@ def run_agentic_match(
 
 
 def _call_sandbox(prompt: str, tools: str) -> str:
-    """POST to the claude-sandbox sidecar and return raw stdout."""
+    """POST to the claude-sandbox sidecar and return raw stdout.
+
+    Side channel: also stashes the response's `serper_calls` list (spec §7 —
+    the movieweb MCP server's web_search/web_fetch call log for this
+    invocation) onto `_call_sandbox.last_serper_calls`, read by the caller
+    right after this returns. This keeps the return type unchanged (still
+    `str`) so existing callers/mocks (e.g. tests that patch this function to
+    return a plain string) are unaffected.
+    """
+    _call_sandbox.last_serper_calls = []
+
     payload = json.dumps({
         "prompt": prompt,
         "model": settings.AGENTIC_CLAUDE_MODEL,
@@ -290,6 +310,9 @@ def _call_sandbox(prompt: str, tools: str) -> str:
     timed_out = body.get("timed_out", False)
     stderr = body.get("stderr", "")
     stdout = body.get("stdout", "")
+    serper_calls = body.get("serper_calls", [])
+    if isinstance(serper_calls, list):
+        _call_sandbox.last_serper_calls = serper_calls
 
     if timed_out:
         raise AgenticTimeoutError(

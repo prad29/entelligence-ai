@@ -10,6 +10,7 @@ from app.routers import movie_title_match
 from app.routers import external_title_match
 from app.routers import deleted_showtimes
 from app.routers import intl_detect, intl_amenities, intl_jobs
+from app.routers import usage
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -55,6 +56,7 @@ app.include_router(deleted_showtimes.router)
 app.include_router(intl_detect.router)
 app.include_router(intl_amenities.router)
 app.include_router(intl_jobs.router)
+app.include_router(usage.router)
 
 if settings.EXTERNAL_API_ENABLED:
     app.include_router(external_title_match.router)

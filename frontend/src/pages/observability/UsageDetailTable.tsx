@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/Badge'
 import { formatUsd, formatInt, formatCompact, formatMs } from '@/lib/format'
 import type { BreakdownDimension, UsageBreakdownResponse, UsageResource } from '@/hooks/useUsage'
 import { DIMENSION_LABELS, dimensionValueLabel } from './labels'
-import { InlineError } from './ObservabilityPage'
+import { InlineError } from '@/components/ui/InlineError'
 
 interface UsageDetailTableProps {
   dimension: BreakdownDimension

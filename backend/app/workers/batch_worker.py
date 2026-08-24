@@ -23,6 +23,13 @@ from sqlmodel import Session
 
 from app.database import engine as db_engine
 from app.models import DetectionJob, ReviewItem
+from app.observability.constants import (
+    CALLER_PORTAL,
+    PATH_BEDROCK_DIRECT,
+    TASK_AMENITY_DETECTION,
+)
+from app.observability.context import LlmCallContext
+from app.observability.llm_logging import log_cache_hit
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +191,17 @@ def _process_job(
     else:
         known_formats = []
 
+    # Attribution for every Bedrock call and every avoided call this job makes
+    # (spec §3). Built once per job so the cost of a batch is attributable to
+    # the batch, not just to "amenity detection" in aggregate.
+    usage_ctx = LlmCallContext(
+        task_type=TASK_AMENITY_DETECTION,
+        call_path=PATH_BEDROCK_DIRECT,
+        caller_type=CALLER_PORTAL,
+        job_id=job_id,
+        job_type="DetectionJob",
+    )
+
     # --- Deduplication cache for Bedrock calls ---
     # Backed by Redis for cross-job persistence. Falls back to in-memory-only
     # if Redis is unavailable (non-fatal).
@@ -288,7 +306,9 @@ def _process_job(
         def _classify_with_semaphore(amenity: str, circuit: str):
             """Call Bedrock under semaphore; returns BedrockSuggestion or None."""
             with semaphore:
-                return bedrock_client.classify_single(amenity, circuit, known_formats)
+                return bedrock_client.classify_single(
+                    amenity, circuit, known_formats, usage_ctx=usage_ctx
+                )
 
         # Build futures only for cache misses
         # future_map: future -> list of ai_pending indices that share this key
@@ -329,6 +349,22 @@ def _process_job(
                 circuit = ai_pending[first_pending_idx][2]
                 future = executor.submit(_classify_with_semaphore, amenity, circuit)
                 futures[future] = cache_key
+
+            # Cache-hit accounting (spec §6). Total AI-firing rows is
+            # len(ai_pending); real Bedrock calls is len(futures) — one future
+            # per distinct dedup key that wasn't already resolved. The
+            # difference is therefore exactly the calls the cache avoided, and
+            # covers both sources at once: Redis pre-population above and
+            # duplicate keys inside this job. Recorded as ordinary zero-cost
+            # LlmCallLog rows so the dedupe rate is a count over one table.
+            try:
+                log_cache_hit(
+                    usage_ctx,
+                    model_id=settings.BEDROCK_MODEL_ID,
+                    count=len(ai_pending) - len(futures),
+                )
+            except Exception as log_exc:  # noqa: BLE001 — spec §7
+                logger.warning("cache_hit_log_failed job=%s error=%s", job_id, log_exc)
 
             # Collect results as they complete
             completed_count = 0

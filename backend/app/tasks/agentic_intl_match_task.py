@@ -92,6 +92,12 @@ def agentic_intl_batch_row(
     from celery.exceptions import Retry
 
     from app.database import engine
+    from app.observability.constants import (
+        CALLER_PORTAL,
+        PATH_AGENTIC_CLI,
+        TASK_INTL_MAPPING,
+    )
+    from app.observability.context import LlmCallContext
     from app.title_matching import batch_io
     from app.title_matching.agentic import AgenticError
     from app.title_matching.agentic.runner import run_agentic_match
@@ -109,6 +115,13 @@ def agentic_intl_batch_row(
                 use_poster_vision,
                 market="international",
                 country=country,
+                usage_ctx=LlmCallContext(
+                    task_type=TASK_INTL_MAPPING,
+                    call_path=PATH_AGENTIC_CLI,
+                    caller_type=CALLER_PORTAL,
+                    job_id=job_id,
+                    job_type="MovieTitleIntlBatchJob",
+                ),
             )
         except AgenticError as exc:
             if self.request.retries < self.max_retries:

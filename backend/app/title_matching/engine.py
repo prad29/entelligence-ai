@@ -28,6 +28,9 @@ class TitleMatchEngine:
         market: str = "domestic",
         country: Optional[str] = None,
     ) -> TitleMatchResult:
+        # No usage_ctx here on purpose: the portal's single-match path has no
+        # job_id and no API key, so runner._default_usage_ctx already builds
+        # the correct portal attribution from `market` alone.
         if settings.AGENTIC_TITLE_MATCH_ENABLED:
             from app.title_matching.agentic.runner import run_agentic_match
             return run_agentic_match(

@@ -230,6 +230,13 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
 
     from app.database import engine
     from app.models import ApiTitleMatchJob, ApiTitleMatchRow
+    from app.observability.constants import (
+        CALLER_EXTERNAL_API,
+        PATH_AGENTIC_CLI,
+        TASK_DOMESTIC_MAPPING,
+        TASK_INTL_MAPPING,
+    )
+    from app.observability.context import LlmCallContext
     from app.title_matching import batch_io
     from app.title_matching.agentic import AgenticError
     from app.title_matching.agentic.runner import run_agentic_match
@@ -242,6 +249,9 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
             return
         job = session.get(ApiTitleMatchJob, job_id)
         market = job.market if job is not None else "domestic"
+        # Read inside the existing session block — the only place this job row
+        # is loaded, so per-key cost attribution (spec §3) costs no extra query.
+        api_key_id = job.api_key_id if job is not None else None
         input_data = json.loads(row.input_json)
         # attempts > 0 means a prior attempt already counted this row into
         # rows_processed (and, on failure, rows_failed) — this run must
@@ -267,6 +277,16 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
                 ticketing_url,
                 market=market,
                 country=country,
+                usage_ctx=LlmCallContext(
+                    task_type=(
+                        TASK_DOMESTIC_MAPPING if market == "domestic" else TASK_INTL_MAPPING
+                    ),
+                    call_path=PATH_AGENTIC_CLI,
+                    caller_type=CALLER_EXTERNAL_API,
+                    api_key_id=api_key_id,
+                    job_id=job_id,
+                    job_type="ApiTitleMatchJob",
+                ),
             )
         except AgenticError as exc:
             if self.request.retries < self.max_retries:

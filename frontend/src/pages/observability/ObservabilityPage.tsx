@@ -1,8 +1,21 @@
+import { useState } from 'react'
 import { AlertCircle, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useUsageFilterState } from '@/hooks/useUsageFilterState'
-import { useSerpApiCredits, useSerperUsage, useUsageDedupe, useUsageSummary } from '@/hooks/useUsage'
+import {
+  useSerpApiCredits,
+  useSerperUsage,
+  useUsageBreakdown,
+  useUsageDedupe,
+  useUsageSummary,
+  useUsageTimeseries,
+  type Granularity,
+  type UsageFilterState,
+} from '@/hooks/useUsage'
 import { KpiTiles } from './KpiTiles'
+import { UsageTimeSeriesChart, type TimeseriesMetric } from './UsageTimeSeriesChart'
+import { BreakdownDonutChart } from './BreakdownDonutChart'
+import { BreakdownBarChart } from './BreakdownBarChart'
 
 function InlineError({ message }: { message: string }) {
   return (
@@ -13,6 +26,18 @@ function InlineError({ message }: { message: string }) {
   )
 }
 
+/** Whole-day span, inclusive of both endpoints — matches the backend's
+ *  widening of a bare `end` date to the whole day (routers/usage.py). Used
+ *  only to pick a sensible initial granularity. */
+function rangeSpanDays(filters: UsageFilterState): number {
+  const start = Date.parse(`${filters.start}T00:00:00Z`)
+  const end = Date.parse(`${filters.end}T00:00:00Z`)
+  if (Number.isNaN(start) || Number.isNaN(end)) return DEFAULT_SPAN_DAYS
+  return (end - start) / 86_400_000 + 1
+}
+
+const DEFAULT_SPAN_DAYS = 7
+
 function ObservabilityPage() {
   const { filters, rangeError } = useUsageFilterState()
 
@@ -21,11 +46,25 @@ function ObservabilityPage() {
   const serpapi = useSerpApiCredits(24)
   const serper = useSerperUsage()
 
+  const [metric, setMetric] = useState<TimeseriesMetric>('cost')
+  const [granularity, setGranularity] = useState<Granularity>(
+    () => (rangeSpanDays(filters) <= 3 ? 'hour' : 'day'),
+  )
+
+  const timeseries = useUsageTimeseries(filters, granularity)
+  const byTaskType = useUsageBreakdown('task_type', filters)
+  const byCallerType = useUsageBreakdown('caller_type', filters)
+  const byModel = useUsageBreakdown('model_id', filters)
+
   const reloadAll = () => {
     summary.reload()
     dedupe.reload()
     serpapi.reload()
     serper.reload()
+    timeseries.reload()
+    byTaskType.reload()
+    byCallerType.reload()
+    byModel.reload()
   }
 
   return (
@@ -51,6 +90,36 @@ function ObservabilityPage() {
       {rangeError && <InlineError message={rangeError} />}
 
       <KpiTiles summary={summary} dedupe={dedupe} serpapi={serpapi} serper={serper} />
+
+      <UsageTimeSeriesChart
+        resource={timeseries}
+        metric={metric}
+        onMetricChange={setMetric}
+        granularity={granularity}
+        onGranularityChange={setGranularity}
+      />
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <BreakdownDonutChart
+          title="Cost by task type"
+          description="Share of spend across the four instrumented Bedrock tasks."
+          dimension="task_type"
+          resource={byTaskType}
+        />
+        <BreakdownDonutChart
+          title="Cost by caller"
+          description="Portal is a single unattributed bucket; external API calls carry an API key."
+          dimension="caller_type"
+          resource={byCallerType}
+        />
+      </div>
+
+      <BreakdownBarChart
+        title="Cost by model"
+        description="Top models by spend in this range."
+        dimension="model_id"
+        resource={byModel}
+      />
     </div>
   )
 }

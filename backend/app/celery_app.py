@@ -39,24 +39,34 @@ celery.conf.update(
         "app.tasks.deleted_showtime_task.dispatch_job_task": {"queue": "deleted-showtimes"},
     },
     # Periodic tasks, run by the single-replica `celery-beat` service in
-    # docker-compose. Two conventions hold for every entry here:
+    # docker-compose.
     #
-    #  1. No task_routes entry. Beat tasks land on the default "celery" queue,
-    #     which celery-worker already consumes — so a new scheduled task needs
-    #     no new worker service.
-    #  2. Off-the-hour minutes. Each entry gets its own minute so the hourly
-    #     jobs don't all contend for the same worker slot at :00.
+    # No task_routes entry for any of them: beat tasks land on the default
+    # "celery" queue, which celery-worker already consumes — so a new
+    # scheduled task needs no new worker service.
     #
-    # Further observability entries (the hourly usage rollup and the daily raw
-    # log prune) are added to this same dict.
+    # The SerpApi credit snapshot and usage rollup run every 30 seconds — a
+    # further revision from the design doc's original "hourly is fine" call,
+    # tightened first to 5 minutes and then to 30 seconds for fast feedback
+    # while actively testing the observability platform locally.
+    #
+    # Sub-minute cadence needs a plain seconds-based schedule; crontab() is
+    # minute-granularity and cannot express "every 30 seconds" at all.
+    #
+    # OPERATIONAL NOTE: 30s means ~2 polls/minute x 13 configured SerpApi keys
+    # = ~26 real HTTP requests/minute to SerpApi's own /account endpoint,
+    # continuously. That is aggressive purely for a credit-balance check and
+    # risks SerpApi-side rate limiting on that endpoint. Dial this back
+    # (5 minutes or hourly) before any shared/production deployment — see
+    # local-docs/2026-08-24-observability-platform-design.md §3.
     beat_schedule={
-        "serpapi-credit-snapshot-hourly": {
+        "serpapi-credit-snapshot": {
             "task": "app.tasks.serpapi_credit_task.snapshot_serpapi_credits",
-            "schedule": crontab(minute=7),
+            "schedule": 30.0,
         },
-        "usage-rollup-hourly": {
+        "usage-rollup": {
             "task": "app.tasks.usage_rollup_task.rollup_llm_usage_hourly",
-            "schedule": crontab(minute=10),
+            "schedule": 30.0,
         },
         "usage-prune-daily": {
             "task": "app.tasks.usage_rollup_task.prune_llm_call_logs",

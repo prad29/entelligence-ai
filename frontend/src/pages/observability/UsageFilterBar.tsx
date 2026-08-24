@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import type { UsageFilterState } from '@/hooks/useUsage'
-import { presetRange } from '@/hooks/useUsageFilterState'
+import { presetRange, todayIst } from '@/hooks/useUsageFilterState'
 import {
   CALLER_TYPE_OPTIONS,
   DIMENSION_LABELS,
@@ -57,10 +57,6 @@ function withSentinel(options: FilterOption[]): FilterOption[] {
   return options.map((o) => (o.value === '' ? { ...o, value: ALL_SENTINEL } : o))
 }
 
-function todayUtc(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
 function UsageFilterBar({
   filters,
   onChange,
@@ -70,7 +66,7 @@ function UsageFilterBar({
   apiKeyOptions,
   actions,
 }: UsageFilterBarProps) {
-  const max = todayUtc()
+  const max = todayIst()
 
   const activePresetDays = useMemo(() => {
     const match = RANGE_PRESETS.find((p) => {
@@ -129,15 +125,6 @@ function UsageFilterBar({
   return (
     <Card>
       <CardContent className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1">
-          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            {filters.start} → {filters.end} (UTC)
-          </p>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Aggregates refresh hourly; the current partial hour is read live from raw call logs.
-          </p>
-        </div>
-
         {/* Row 1 — range presets + custom dates */}
         <div className="flex flex-wrap items-end gap-3">
           <div

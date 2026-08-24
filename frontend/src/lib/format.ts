@@ -34,9 +34,17 @@ export function formatMs(ms?: number | null): string {
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`
 }
 
-/** Backend buckets are naive-UTC ISO strings with no offset. Appending 'Z'
+/** Display timezone for the whole dashboard. The backend always stores and
+ *  returns naive UTC (`datetime.utcnow()` throughout `app/models.py`); IST is
+ *  purely a rendering choice on top of that, made here in one place so it
+ *  can change again without touching every call site. */
+export const DISPLAY_TIME_ZONE = 'Asia/Kolkata'
+
+/** Backend timestamps are naive-UTC ISO strings with no offset. Appending 'Z'
  *  before parsing stops the browser reading them as local time and shifting
- *  every point by the UTC offset. */
+ *  every point by the browser's own offset — this is about correctly
+ *  identifying the *source* timezone (always UTC), independent of which
+ *  timezone it's later displayed in. */
 export function parseUtcIso(iso: string): Date {
   return new Date(/[Z+]|-\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`)
 }
@@ -44,11 +52,13 @@ export function parseUtcIso(iso: string): Date {
 export function formatBucketLabel(iso: string, granularity: 'hour' | 'day'): string {
   const d = parseUtcIso(iso)
   return granularity === 'hour'
-    ? d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', hour12: false, timeZone: 'UTC' })
-    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+    ? d.toLocaleString('en-US', {
+        month: 'short', day: 'numeric', hour: '2-digit', hour12: false, timeZone: DISPLAY_TIME_ZONE,
+      })
+    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: DISPLAY_TIME_ZONE })
 }
 
 export function formatTimestamp(iso?: string | null): string {
   if (!iso) return EM_DASH
-  return parseUtcIso(iso).toLocaleString('en-US', { timeZone: 'UTC' }) + ' UTC'
+  return parseUtcIso(iso).toLocaleString('en-US', { timeZone: DISPLAY_TIME_ZONE }) + ' IST'
 }

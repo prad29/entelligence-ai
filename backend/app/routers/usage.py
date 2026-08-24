@@ -32,14 +32,15 @@ flattened; a naive one is taken as UTC as-is.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlmodel import Session
 
 from app.config import settings
 from app.database import get_session
-from app.observability import queries
+from app.observability import queries, report as report_mod
 from app.observability.constants import CALLER_TYPES, TASK_TYPES
 from app.observability.queries import UsageFilters
 from app.observability.serper_quota import serper_quota_status
@@ -196,3 +197,29 @@ def get_serper_usage(session: Session = Depends(get_session)) -> dict:
     rows since SERPER_QUOTA_PERIOD_START (spec §7 — Serper has no
     remaining-credits API)."""
     return serper_quota_status(session)
+
+
+@router.get("/report")
+def get_report(
+    format: Literal["csv", "pdf"] = Query("csv", description="csv or pdf"),
+    filters: UsageFilters = Depends(usage_filters),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Download a full usage/cost report for the same range/filters the
+    dashboard endpoints above use — collect_report() calls the exact same
+    queries.* functions, so the numbers here can never drift from the
+    screen this was generated from."""
+    data = report_mod.collect_report(session, filters)
+    stem = f"usage-report-{filters.start.date().isoformat()}-to-{filters.end.date().isoformat()}"
+
+    if format == "csv":
+        return Response(
+            content=report_mod.build_csv(data),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{stem}.csv"'},
+        )
+    return Response(
+        content=report_mod.build_pdf(data),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{stem}.pdf"'},
+    )

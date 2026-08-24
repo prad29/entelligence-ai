@@ -95,7 +95,7 @@ def test_successful_row_bumps_matched_and_stores_result(patched_task, db_engine,
         s.add(MovieMaster(id=42, movie_title="The Matrix"))
         s.commit()
 
-    def fake_run(title, show_date, theater, ticketing_url, use_poster_vision):
+    def fake_run(title, show_date, theater, ticketing_url, use_poster_vision, market="domestic", country=None, usage_ctx=None):
         assert theater is None  # batch path always passes None
         return _Result(42, 42, "The Matrix", 0.97)
 
@@ -123,7 +123,7 @@ def test_successful_row_bumps_matched_and_stores_result(patched_task, db_engine,
 def test_successful_row_no_match_when_id_absent(patched_task, db_engine, fake_hash):
     job_id = _make_job(db_engine)
 
-    def fake_run(title, show_date, theater, ticketing_url, use_poster_vision):
+    def fake_run(title, show_date, theater, ticketing_url, use_poster_vision, market="domestic", country=None, usage_ctx=None):
         # id > 0 but not present in MovieMaster -> No
         return _Result(999, 999, "Ghost Movie", 0.5)
 
@@ -233,7 +233,7 @@ def test_db_error_in_success_path_does_not_escape_task(patched_task, db_engine, 
     failed row rather than aborting the batch."""
     job_id = _make_job(db_engine)
 
-    def fake_run(title, show_date, theater, ticketing_url, use_poster_vision):
+    def fake_run(title, show_date, theater, ticketing_url, use_poster_vision, market="domestic", country=None, usage_ctx=None):
         return _Result(42, 42, "The Matrix", 0.97)
 
     import app.title_matching.agentic.runner as runner_mod

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,6 +36,7 @@ from sqlmodel import Session, select
 
 from app.config import settings
 from app.deleted_showtimes.serp_client import SerpAuthError, SerpClient, SerpQuotaError
+from app.observability.serp_logging import log_serpapi_call
 
 logger = logging.getLogger(__name__)
 
@@ -206,9 +208,39 @@ class RotatingSerpClient:
     rotation always reflects current config.
     """
 
-    def __init__(self, retries: int = 3, timeout: int = 45):
+    def __init__(self, retries: int = 3, timeout: int = 45, job_id: Optional[str] = None):
         self.retries = retries
         self.timeout = timeout
+        # Optional trailing kwarg so existing zero-arg construction still
+        # works; supplied by deleted_showtime_task.process_batch so usage is
+        # attributable per job (spec §3).
+        self.job_id = job_id
+
+    def _log_attempt(
+        self,
+        slot: int,
+        client: Any,
+        started: float,
+        *,
+        success: bool,
+        error_type: Optional[str] = None,
+    ) -> None:
+        """Record one attempt. Never raises — log_serpapi_call is already
+        total, and this second guard keeps a future change to it from ever
+        being able to break a search (spec §7)."""
+        try:
+            log_serpapi_call(
+                job_id=self.job_id,
+                slot=slot,
+                success=success,
+                # getattr, not client.calls_made: a future substitute client
+                # missing the counter must degrade to 0 rather than raise.
+                calls_made=getattr(client, "calls_made", 0),
+                latency_ms=int((time.monotonic() - started) * 1000),
+                error_type=error_type,
+            )
+        except Exception as log_exc:  # noqa: BLE001 — spec §7
+            logger.warning("serpapi_call_log_failed slot=%d error=%s", slot, log_exc)
 
     def search(self, params: Dict[str, str]) -> Dict[str, Any]:
         keys = settings.SERPAPI_API_KEYS
@@ -234,16 +266,31 @@ class RotatingSerpClient:
         for slot, key in candidates:
             attempted += 1
             client = SerpClient(key, retries=self.retries, timeout=self.timeout)
+            started = time.monotonic()
             try:
-                return client.search(params)
+                data = client.search(params)
             except (SerpQuotaError, SerpAuthError) as exc:
                 last_reason = str(exc)
+                # A rejected attempt still consumed a request against that key,
+                # so it gets its own row — per-slot failure visibility is the
+                # reason a 13-key pool exists (spec §6).
+                self._log_attempt(slot, client, started, success=False,
+                                  error_type=type(exc).__name__)
                 logger.warning(
                     "serp_key_rotation: slot %d rejected (%s: %s) — rotating to next key",
                     slot, type(exc).__name__, exc,
                 )
                 mark_exhausted(slot, key, last_reason)
                 continue
+            except BaseException as exc:
+                # Everything else (plain SerpError, timeouts) propagates
+                # unchanged, exactly as before — but the attempt is recorded
+                # first so a slot failing this way is still visible.
+                self._log_attempt(slot, client, started, success=False,
+                                  error_type=type(exc).__name__)
+                raise
+            self._log_attempt(slot, client, started, success=True)
+            return data
 
         logger.warning(
             "serp_key_rotation: all %d available key(s) exhausted this call (%d of %d "

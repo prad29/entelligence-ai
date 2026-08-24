@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import api from '@/lib/api'
+import { istDayEndIso, istDayStartIso } from './useUsageFilterState'
 
 // ---- filter state -----------------------------------------------------------
 
 export interface UsageFilterState {
-  start: string      // YYYY-MM-DD (UTC)
-  end: string        // YYYY-MM-DD (UTC), inclusive of that whole day server-side
+  start: string      // YYYY-MM-DD, an IST calendar date
+  end: string        // YYYY-MM-DD, an IST calendar date, inclusive of that whole IST day
   taskType: string   // '' = all
   modelId: string
   callerType: string
@@ -14,9 +15,17 @@ export interface UsageFilterState {
 }
 
 /** Maps camelCase UI state onto the backend's snake_case query params,
- *  omitting empties so "all" is expressed by absence, not by a sentinel. */
+ *  omitting empties so "all" is expressed by absence, not by a sentinel.
+ *
+ *  start/end are IST calendar dates selected in the UI; they're converted to
+ *  explicit +05:30-offset instants here (not sent as bare YYYY-MM-DD) so the
+ *  backend — which treats a bare date as a UTC calendar day — resolves them
+ *  against the IST day the user actually picked, not its UTC equivalent. */
 export function buildUsageParams(f: UsageFilterState): Record<string, string> {
-  const params: Record<string, string> = { start: f.start, end: f.end }
+  const params: Record<string, string> = {
+    start: istDayStartIso(f.start),
+    end: istDayEndIso(f.end),
+  }
   if (f.taskType) params.task_type = f.taskType
   if (f.modelId) params.model_id = f.modelId
   if (f.callerType) params.caller_type = f.callerType

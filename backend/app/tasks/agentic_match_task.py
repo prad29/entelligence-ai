@@ -105,6 +105,12 @@ def agentic_batch_row(
     from celery.exceptions import Retry
 
     from app.database import engine
+    from app.observability.constants import (
+        CALLER_PORTAL,
+        PATH_AGENTIC_CLI,
+        TASK_DOMESTIC_MAPPING,
+    )
+    from app.observability.context import LlmCallContext
     from app.title_matching import batch_io
     from app.title_matching.agentic import AgenticError
     from app.title_matching.agentic.runner import run_agentic_match
@@ -120,6 +126,13 @@ def agentic_batch_row(
                 None,  # theater: always None in the batch path
                 ticketing_url,
                 use_poster_vision,
+                usage_ctx=LlmCallContext(
+                    task_type=TASK_DOMESTIC_MAPPING,
+                    call_path=PATH_AGENTIC_CLI,
+                    caller_type=CALLER_PORTAL,
+                    job_id=job_id,
+                    job_type="MovieTitleBatchJob",
+                ),
             )
         except AgenticError as exc:
             # Retry once; on the final attempt fall through to the failed-row path.

@@ -15,6 +15,7 @@ celery = Celery(
         "app.tasks.external_match_task",
         "app.tasks.deleted_showtime_task",
         "app.tasks.serpapi_credit_task",
+        "app.tasks.usage_rollup_task",
     ],
 )
 
@@ -52,6 +53,14 @@ celery.conf.update(
         "serpapi-credit-snapshot-hourly": {
             "task": "app.tasks.serpapi_credit_task.snapshot_serpapi_credits",
             "schedule": crontab(minute=7),
+        },
+        "usage-rollup-hourly": {
+            "task": "app.tasks.usage_rollup_task.rollup_llm_usage_hourly",
+            "schedule": crontab(minute=10),
+        },
+        "usage-prune-daily": {
+            "task": "app.tasks.usage_rollup_task.prune_llm_call_logs",
+            "schedule": crontab(hour=3, minute=20),
         },
     },
 )

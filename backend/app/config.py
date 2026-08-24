@@ -105,6 +105,36 @@ class Settings(BaseSettings):
     # on a run that's clearly not getting usable listings back.
     DELETED_SHOWTIME_ABORT_AFTER: int = 5
 
+    # ── LLM/API usage observability (see local-docs/2026-08-24-observability-platform-design.md)
+    # Single kill switch: every instrumentation site checks this before doing
+    # any work, so the feature can be disabled in production without a deploy
+    # of changed call-site code.
+    USAGE_TRACKING_ENABLED: bool = True
+    # Raw LlmCallLog retention (spec §8). Rollups are kept indefinitely;
+    # SerpApiCallLog/SerperCallLog/SerpApiCreditSnapshot are never pruned.
+    USAGE_RAW_RETENTION_DAYS: int = 30
+    # Max raw rows one hourly rollup run folds in. At the stated 100k+
+    # calls/day (~4.2k/hour) this leaves ~12x headroom for a backlog after an
+    # outage while still bounding a single beat tick's memory/runtime.
+    USAGE_ROLLUP_BATCH_SIZE: int = 50000
+    # Hard bound on a report's date range (spec §9/§11) so a hand-crafted
+    # query can't ask for a decade of CSV/PDF.
+    USAGE_REPORT_MAX_DAYS: int = 366
+    # SerpApi's documented account endpoint — the only third-party
+    # remaining-credit API available to us (Serper has none, see below).
+    SERPAPI_ACCOUNT_URL: str = "https://serpapi.com/account"
+    # Serper has NO remaining-credits API (spec §7) — only a web dashboard.
+    # Credits left is therefore self-tracked as SERPER_QUOTA_TOTAL minus the
+    # count of SerperCallLog rows since SERPER_QUOTA_PERIOD_START.
+    # OPERATIONAL NOTE: topping up or changing the Serper plan REQUIRES
+    # bumping SERPER_QUOTA_TOTAL (and usually SERPER_QUOTA_PERIOD_START) here
+    # or the reported balance silently drifts. 0 means "quota unknown" and the
+    # API reports used-count only, with quota_total/remaining as null.
+    SERPER_QUOTA_TOTAL: int = 0
+    # ISO date (YYYY-MM-DD) the current quota period began. Empty means
+    # "count all SerperCallLog rows ever".
+    SERPER_QUOTA_PERIOD_START: str = ""
+
     @property
     def SERPAPI_API_KEYS(self) -> list[tuple[int, str]]:
         """Ordered (slot, key) pairs for every configured SerpApi key, slot 1 = SERPAPI_API_KEY."""

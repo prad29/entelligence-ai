@@ -14,6 +14,11 @@ from app.models import IntlDetectionJob
 
 logger = logging.getLogger(__name__)
 
+# No usage instrumentation in this worker, deliberately: international
+# amenity detection is dictionary-only — it makes no Bedrock (or any other
+# LLM) call and keeps no dedup cache — so there is nothing to attribute and
+# no cache hit to record. See the observability design doc §7.
+
 _OUTPUT_DIR = "/tmp/intl_amenity_outputs"
 
 # Update job.processed every N rows so the frontend progress bar moves,

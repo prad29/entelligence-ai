@@ -14,6 +14,13 @@ from sqlmodel import Session
 
 from app.database import engine as db_engine
 from app.models import MovieFormatJob, MovieFormatReviewItem
+from app.observability.constants import (
+    CALLER_PORTAL,
+    PATH_BEDROCK_DIRECT,
+    TASK_MOVIE_FORMAT_DETECTION,
+)
+from app.observability.context import LlmCallContext
+from app.observability.llm_logging import log_cache_hit
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +172,17 @@ def _process_job(
     if ai_enabled:
         from app.detection.bedrock_client import bedrock_client
 
+    # Movie-format classification shares bedrock_client with amenity detection
+    # but is a separate cost bucket (spec §2/§3), so it must supply its own
+    # context rather than inherit bedrock_client.DEFAULT_USAGE_CONTEXT.
+    usage_ctx = LlmCallContext(
+        task_type=TASK_MOVIE_FORMAT_DETECTION,
+        call_path=PATH_BEDROCK_DIRECT,
+        caller_type=CALLER_PORTAL,
+        job_id=job_id,
+        job_type="MovieFormatJob",
+    )
+
     dedup_cache: dict[str, Optional[Any]] = {}
     try:
         from app.cache import get_redis, movie_format_cache_key as _mck
@@ -248,7 +266,9 @@ def _process_job(
 
         def _classify_with_semaphore(amenity: str):
             with semaphore:
-                return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
+                return bedrock_client.classify_single(
+                    amenity, "", _KNOWN_FORMATS, usage_ctx=usage_ctx
+                )
 
         key_to_pending_indices: dict[str, list[int]] = {}
         for pending_idx, (row_idx_0, amenity, result, _uf, _circ) in enumerate(ai_pending):
@@ -280,6 +300,17 @@ def _process_job(
                 amenity = ai_pending[first_pending_idx][1]
                 future = executor.submit(_classify_with_semaphore, amenity)
                 futures[future] = cache_key
+
+            # Cache-hit accounting (spec §6) — see batch_worker.py for the
+            # derivation of len(ai_pending) - len(futures).
+            try:
+                log_cache_hit(
+                    usage_ctx,
+                    model_id=settings.BEDROCK_MODEL_ID,
+                    count=len(ai_pending) - len(futures),
+                )
+            except Exception as log_exc:  # noqa: BLE001 — spec §7
+                logger.warning("cache_hit_log_failed job=%s error=%s", job_id, log_exc)
 
             completed_count = 0
             for future in as_completed(futures):
@@ -335,7 +366,9 @@ def _process_job(
 
         def _classify_sample(amenity: str):
             with semaphore_s:
-                return bedrock_client.classify_single(amenity, "", _KNOWN_FORMATS)
+                return bedrock_client.classify_single(
+                    amenity, "", _KNOWN_FORMATS, usage_ctx=usage_ctx
+                )
 
         key_to_pending_indices: dict[str, list[int]] = {}
         for pending_idx, (row_idx_0, amenity, result, _uf, _circ) in enumerate(ai_pending):
@@ -351,6 +384,19 @@ def _process_job(
                 for ck, idxs in sampled_keys.items()
                 if ck not in dedup_cache
             }
+            # Sample mode deliberately never attempts the keys beyond
+            # sample_limit, so those rows are NOT cache hits — the denominator
+            # here is the sampled rows only, not len(ai_pending).
+            _sampled_rows = sum(len(idxs) for idxs in sampled_keys.values())
+            try:
+                log_cache_hit(
+                    usage_ctx,
+                    model_id=settings.BEDROCK_MODEL_ID,
+                    count=_sampled_rows - len(futures_s),
+                )
+            except Exception as log_exc:  # noqa: BLE001 — spec §7
+                logger.warning("cache_hit_log_failed job=%s error=%s", job_id, log_exc)
+
             for future_s in as_completed(futures_s):
                 ck = futures_s[future_s]
                 try:

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { AlertCircle, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useUsageFilterState } from '@/hooks/useUsageFilterState'
@@ -16,6 +16,8 @@ import { KpiTiles } from './KpiTiles'
 import { UsageTimeSeriesChart, type TimeseriesMetric } from './UsageTimeSeriesChart'
 import { BreakdownDonutChart } from './BreakdownDonutChart'
 import { BreakdownBarChart } from './BreakdownBarChart'
+import { UsageFilterBar } from './UsageFilterBar'
+import { useUsageFilterOptions } from './useUsageFilterOptions'
 
 function InlineError({ message }: { message: string }) {
   return (
@@ -39,22 +41,33 @@ function rangeSpanDays(filters: UsageFilterState): number {
 const DEFAULT_SPAN_DAYS = 7
 
 function ObservabilityPage() {
-  const { filters, rangeError } = useUsageFilterState()
+  const { filters, setFilters, resetFilters, rangeError } = useUsageFilterState()
 
-  const summary = useUsageSummary(filters)
-  const dedupe = useUsageDedupe(filters)
+  // Freeze the last range/filters that passed client-side validation so an
+  // in-progress invalid edit (e.g. start > end while the user is still
+  // typing) never fires a request — the filter bar itself stays bound to
+  // the live `filters` so the date inputs and inline error reflect exactly
+  // what the user typed. A ref write during render is safe here because
+  // it's an idempotent cache of the last good value.
+  const lastValid = useRef(filters)
+  if (!rangeError) lastValid.current = filters
+  const queryFilters = rangeError ? lastValid.current : filters
+
+  const summary = useUsageSummary(queryFilters)
+  const dedupe = useUsageDedupe(queryFilters)
   const serpapi = useSerpApiCredits(24)
   const serper = useSerperUsage()
+  const { modelOptions, apiKeyOptions } = useUsageFilterOptions(queryFilters)
 
   const [metric, setMetric] = useState<TimeseriesMetric>('cost')
   const [granularity, setGranularity] = useState<Granularity>(
     () => (rangeSpanDays(filters) <= 3 ? 'hour' : 'day'),
   )
 
-  const timeseries = useUsageTimeseries(filters, granularity)
-  const byTaskType = useUsageBreakdown('task_type', filters)
-  const byCallerType = useUsageBreakdown('caller_type', filters)
-  const byModel = useUsageBreakdown('model_id', filters)
+  const timeseries = useUsageTimeseries(queryFilters, granularity)
+  const byTaskType = useUsageBreakdown('task_type', queryFilters)
+  const byCallerType = useUsageBreakdown('caller_type', queryFilters)
+  const byModel = useUsageBreakdown('model_id', queryFilters)
 
   const reloadAll = () => {
     summary.reload()
@@ -69,25 +82,20 @@ function ObservabilityPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* header row: range caption on the left, Refresh on the right.
-          Phase 4 replaces the caption with <UsageFilterBar/>; Phase 5 adds
-          the report buttons next to Refresh. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            {filters.start} → {filters.end} (UTC)
-          </p>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Aggregates refresh hourly; the current partial hour is read live from raw call logs.
-          </p>
-        </div>
-        <Button variant="secondary" size="sm" onClick={reloadAll}>
-          <RotateCcw className="h-3.5 w-3.5" />
-          Refresh
-        </Button>
-      </div>
-
-      {rangeError && <InlineError message={rangeError} />}
+      <UsageFilterBar
+        filters={filters}
+        onChange={setFilters}
+        onReset={resetFilters}
+        rangeError={rangeError}
+        modelOptions={modelOptions}
+        apiKeyOptions={apiKeyOptions}
+        actions={
+          <Button variant="secondary" size="sm" onClick={reloadAll}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            Refresh
+          </Button>
+        }
+      />
 
       <KpiTiles summary={summary} dedupe={dedupe} serpapi={serpapi} serper={serper} />
 

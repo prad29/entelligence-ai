@@ -85,7 +85,7 @@ function KpiTiles({ summary, dedupe, serpapi, serper }: KpiTilesProps) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
       <KpiTile
-        label="Total cost"
+        label="Cost"
         value={formatUsd(totals?.cost_usd)}
         sub={`${formatUsd(derived?.cost_per_request)} / request`}
         loading={summary.loading}
@@ -109,7 +109,7 @@ function KpiTiles({ summary, dedupe, serpapi, serper }: KpiTilesProps) {
         title={summary.error ?? undefined}
       />
       <KpiTile
-        label="SerpApi credits"
+        label="SerpApi"
         value={formatInt(totalSearchesLeft)}
         sub={serpapiSub}
         tone={serpapiTone}
@@ -117,7 +117,7 @@ function KpiTiles({ summary, dedupe, serpapi, serper }: KpiTilesProps) {
         title={serpapi.error ?? undefined}
       />
       <KpiTile
-        label="Serper usage"
+        label="Serper"
         value={serperValue}
         sub={serperSub}
         tone={!quotaConfigured ? 'warning' : 'default'}
@@ -125,7 +125,7 @@ function KpiTiles({ summary, dedupe, serpapi, serper }: KpiTilesProps) {
         title={serper.error ?? serper.data?.warning ?? undefined}
       />
       <KpiTile
-        label="Dedupe rate"
+        label="Dedupe"
         value={formatPct(overall?.dedupe_rate)}
         sub={`saved ~${formatUsd(overall?.estimated_savings_usd)}`}
         loading={dedupe.loading}

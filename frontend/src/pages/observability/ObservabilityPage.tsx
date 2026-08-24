@@ -21,6 +21,7 @@ import { UsageFilterBar } from './UsageFilterBar'
 import { useUsageFilterOptions } from './useUsageFilterOptions'
 import { UsageDetailTable } from './UsageDetailTable'
 import { ReportDownloadButtons } from './ReportDownloadButtons'
+import { SearchApiPanel } from './SearchApiPanel'
 
 /** Whole-day span, inclusive of both endpoints — matches the backend's
  *  widening of a bare `end` date to the whole day (routers/usage.py). Used
@@ -139,6 +140,8 @@ function ObservabilityPage() {
         onDimensionChange={setTableDimension}
         resource={detail}
       />
+
+      <SearchApiPanel serpapi={serpapi} serper={serper} />
     </div>
   )
 }

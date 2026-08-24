@@ -141,7 +141,7 @@ function ObservabilityPage() {
         resource={detail}
       />
 
-      <SearchApiPanel serpapi={serpapi} serper={serper} />
+      <SearchApiPanel serpapi={serpapi} />
     </div>
   )
 }

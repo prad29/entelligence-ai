@@ -356,6 +356,7 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
                 _bump_job_counters(session, job_id, rows_failed=-1, **{outcome_col: 1})
             else:
                 _bump_job_counters(session, job_id, rows_processed=1, **{outcome_col: 1})
+        _after_row_terminal(job_id)
     except Retry:
         # celery's self.retry() control-flow signal — MUST propagate so the
         # row is rescheduled. Not a failure of this row.
@@ -408,9 +409,79 @@ def _record_failed_row(job_id: str, row_id: int, message: str, *, is_retry: bool
         # A retried row was already counted into rows_processed/rows_failed
         # on its prior failed attempt — failing again must not double-count
         # either counter.
-        if is_retry:
-            return
-        _bump_job_counters(session, job_id, rows_processed=1, rows_failed=1)
+        if not is_retry:
+            _bump_job_counters(session, job_id, rows_processed=1, rows_failed=1)
+    _after_row_terminal(job_id)
+
+
+def _remaining_row_count(session: Session, job_id: str) -> int:
+    """Count of this job's rows not yet in a terminal state.
+
+    External's completion predicate is genuinely NOT "processed == total"
+    (finding #3 in the plan): ``external_match_row`` deliberately does not
+    re-increment ``rows_processed`` on a retried row, so on a ``/retry`` run
+    ``rows_processed == rows_total`` can already be true before the retried
+    rows even finish. Completion here means "no row left non-terminal",
+    checked directly against ``ApiTitleMatchRow.status`` rather than any
+    counter.
+    """
+    from sqlalchemy import func
+
+    from app.models import ApiTitleMatchRow
+
+    return session.exec(
+        select(func.count())
+        .select_from(ApiTitleMatchRow)
+        .where(ApiTitleMatchRow.job_id == job_id)
+        .where(ApiTitleMatchRow.status.notin_(("completed", "failed")))
+    ).one()
+
+
+def _after_row_terminal(job_id: str) -> None:
+    """Counter-based completion trigger.
+
+    Call this at the end of every TERMINAL row outcome (success or a
+    recorded failure) — NEVER on the Celery-retry path.
+
+    Unlike the domestic/international pipelines, this is NOT a counter
+    equality check (finding #3) — it claims finalize only when zero rows
+    remain in a non-terminal state, re-checked atomically inside the same
+    conditional UPDATE that performs the claim (never a separate
+    read-then-decide step, which could race a concurrently-finishing row).
+
+    Never raises: the chord (still the active dispatch/completion mechanism
+    this phase) is the backstop if this trigger is ever missed.
+    """
+    from sqlalchemy import exists
+
+    from app.database import engine
+    from app.models import ApiTitleMatchJob, ApiTitleMatchRow
+    from app.title_matching.dispatch_window import claim_finalize
+
+    try:
+        with Session(engine) as session:
+            # Cheap pre-check to skip the UPDATE attempt when rows are
+            # obviously still outstanding. The atomicity guarantee itself
+            # comes from the NOT EXISTS predicate embedded in the UPDATE
+            # below (re-evaluated by the DB at claim time), not from this
+            # check.
+            if _remaining_row_count(session, job_id) > 0:
+                return
+
+            no_rows_outstanding = ~exists().where(
+                ApiTitleMatchRow.job_id == job_id,
+                ApiTitleMatchRow.status.notin_(("completed", "failed")),
+            )
+            won = claim_finalize(
+                session,
+                ApiTitleMatchJob,
+                job_id,
+                completion_predicate=no_rows_outstanding,
+            )
+        if won:
+            external_finalize_job.apply_async(args=[None, job_id])
+    except Exception:  # noqa: BLE001 - must never escape into the row task
+        logger.exception("_after_row_terminal failed job=%s", job_id)
 
 
 @celery.task(
@@ -482,8 +553,16 @@ def external_retry_rows_task(job_id: str, row_uuids: list[str]) -> None:
             session.add(row)
             row_ids.append(row.id)
 
+        # Clear finalize_claimed_at in the SAME transaction that flips these
+        # rows back to 'pending': the job may have already finalized once
+        # (claiming finalize_claimed_at) before this retry ran, and without
+        # clearing it here, _after_row_terminal's conditional-UPDATE claim
+        # would find finalize_claimed_at already set and refuse to ever
+        # finalize this job again, even once the retried rows complete.
         session.execute(
-            update(ApiTitleMatchJob).where(ApiTitleMatchJob.id == job_id).values(phase="processing")
+            update(ApiTitleMatchJob)
+            .where(ApiTitleMatchJob.id == job_id)
+            .values(phase="processing", finalize_claimed_at=None)
         )
         session.commit()
 

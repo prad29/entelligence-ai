@@ -279,6 +279,10 @@ def test_slow_throttle_failure_skips_retry_no_sleep(monkeypatch):
     from app.config import settings
 
     monkeypatch.setattr(settings, "AGENTIC_THROTTLE_MAX_RETRIES", 1)
+    # Pin the timeout explicitly rather than relying on the ambient default —
+    # this repo's local compose env overrides AGENTIC_TIMEOUT_SECONDS (e.g. to
+    # 300), which would silently flip what counts as a "fast fail" here.
+    monkeypatch.setattr(settings, "AGENTIC_TIMEOUT_SECONDS", 90)
     # elapsed = 50s >= 90/2 = 45s -> NOT a fast fail.
     monotonic_values = [0.0, 50.0]
     sleep_calls = []

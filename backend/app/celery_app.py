@@ -16,6 +16,7 @@ celery = Celery(
         "app.tasks.deleted_showtime_task",
         "app.tasks.serpapi_credit_task",
         "app.tasks.usage_rollup_task",
+        "app.tasks.agentic_scheduler_task",
     ],
 )
 
@@ -71,6 +72,17 @@ celery.conf.update(
         "usage-prune-daily": {
             "task": "app.tasks.usage_rollup_task.prune_llm_call_logs",
             "schedule": crontab(hour=3, minute=20),
+        },
+        # Phase 2 pool observability (see local-docs/2026-08-25-agentic-batch-
+        # concurrency-design.md §4.3): samples "agentic" queue depth + live
+        # semaphore-holder count + active-job count every 30s. Deliberately
+        # NOT in task_routes above — it must land on the default "celery"
+        # queue that celery-worker/celery-beat already consume, never on
+        # "agentic", where it would consume a scarce sandbox-call worker
+        # slot for a task that does no sandbox work at all.
+        "agentic-pool-sample": {
+            "task": "app.tasks.agentic_scheduler_task.sample_agentic_pool",
+            "schedule": 30.0,
         },
     },
 )

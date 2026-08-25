@@ -34,7 +34,47 @@ class Settings(BaseSettings):
     AGENTIC_USE_BEDROCK: bool = True
     # Claude sandbox sidecar URL (set via CLAUDE_SANDBOX_URL env var)
     CLAUDE_SANDBOX_URL: str = "http://claude-sandbox:3100"
-    AGENTIC_BATCH_MAX_CONCURRENCY: int = 2
+    AGENTIC_BATCH_MAX_CONCURRENCY: int = 4
+    # Bedrock-throttle retry/backoff on the sandbox call path (runner.py's
+    # _call_sandbox). AGENTIC_THROTTLE_MAX_RETRIES is IN-PROCESS fast-fail
+    # retries within a single _call_sandbox() invocation (never retried if
+    # the failed attempt was slow — see runner.py — because a slow failure
+    # means the claude CLI already spent its own internal retry budget and
+    # an immediate retry from here wouldn't help). AGENTIC_THROTTLE_BACKOFF_
+    # BASE_SECONDS is the base for that in-process exponential-backoff sleep.
+    # AGENTIC_THROTTLE_CELERY_BACKOFF_SECONDS is a SEPARATE, larger base for
+    # the Celery-level self.retry(countdown=...) once AgenticThrottleError
+    # is finally raised (limits.throttle_retry_countdown) — that backoff
+    # releases the sandbox semaphore slot for the whole wait, so it can
+    # afford to be much longer than the in-process one.
+    AGENTIC_THROTTLE_MAX_RETRIES: int = 1
+    AGENTIC_THROTTLE_BACKOFF_BASE_SECONDS: float = 2.0
+    AGENTIC_THROTTLE_CELERY_BACKOFF_SECONDS: int = 30
+    # Phase 5 (windowed dispatch + round-robin top-up — the fairness fix, see
+    # local-docs/2026-08-25-agentic-batch-concurrency-design.md §4.4). 0 means
+    # "auto-derive as 2 * AGENTIC_BATCH_MAX_CONCURRENCY" (dispatch_window.
+    # target_queue_depth) so the shared queue stays proportionally short as
+    # concurrency is raised in later phases without a manual bump here.
+    AGENTIC_QUEUE_TARGET_DEPTH: int = 0
+    # Floor on a single job's standing dispatch window (dispatch_window.
+    # compute_job_window) so a job is never starved to zero just because many
+    # other jobs are active at once.
+    AGENTIC_JOB_WINDOW_MIN: int = 2
+    # Rows published per job per rotation pass in topup_agentic_queue's
+    # round-robin top-up, and the chunk self-refill (_after_row_terminal)
+    # requests after each terminal row. Deliberately small (not "give one job
+    # its whole deficit"): the broker is strict FIFO, so publish order is
+    # execution order, and a large per-job chunk before rotating to the next
+    # job would reconstruct the exact head-of-line blocking this phase exists
+    # to remove.
+    AGENTIC_ROUNDROBIN_CHUNK: int = 1
+    # Beat tick interval for topup_agentic_queue. Sub-minute cadence needs a
+    # plain seconds-based schedule (see celery_app.py's beat_schedule).
+    AGENTIC_SCHED_TICK_SECONDS: float = 10.0
+    # Log-only stall detection (no alerting -- explicitly out of scope for
+    # this phase): a job fully dispatched but not yet fully processed for
+    # longer than this is logged as a warning by topup_agentic_queue.
+    AGENTIC_STALL_WARN_SECONDS: int = 900
     # S3 bucket backing batch upload/output storage — required because backend,
     # celery-worker, and celery-agentic-worker are separate containers with no
     # shared filesystem; a local /tmp path written by one is invisible to another.

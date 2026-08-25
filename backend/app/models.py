@@ -62,6 +62,15 @@ class MovieTitleBatchJob(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ttl: Optional[datetime] = None
     stats: Optional[str] = None  # JSON string
+    # Phase 4/5 (agentic batch fairness project): `dispatched` is the
+    # windowed-dispatch cursor — unused/unwritten until Phase 5's round-robin
+    # dispatcher, but added now so its migration backfill (dispatched=total
+    # for jobs already `processing`) ships ahead of that dispatcher, per
+    # finding #4 in the plan. `finalize_claimed_at` is the counter-based
+    # finalize claim (see title_matching/dispatch_window.claim_finalize) —
+    # active starting Phase 4, running alongside the still-active chord.
+    dispatched: int = Field(default=0)
+    finalize_claimed_at: Optional[datetime] = None
 
 
 class AmenityMapping(SQLModel, table=True):
@@ -207,6 +216,10 @@ class MovieTitleIntlBatchJob(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ttl: Optional[datetime] = None
     stats: Optional[str] = None  # JSON string
+    # See MovieTitleBatchJob's identical fields above — same Phase 4/5
+    # rationale, kept symmetrical across the domestic/international split.
+    dispatched: int = Field(default=0)
+    finalize_claimed_at: Optional[datetime] = None
 
 
 class MovieMasterSyncJob(SQLModel, table=True):
@@ -366,6 +379,11 @@ class ApiTitleMatchJob(SQLModel, table=True):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     ttl: Optional[datetime] = None
+    # Phase 4 counter-based finalize claim (see
+    # title_matching/dispatch_window.claim_finalize). No `dispatched` cursor
+    # here — external already has per-row ApiTitleMatchRow.status as its
+    # dispatch state, so there's nothing for a cursor to duplicate.
+    finalize_claimed_at: Optional[datetime] = None
 
 
 class ApiTitleMatchRow(SQLModel, table=True):
@@ -383,7 +401,13 @@ class ApiTitleMatchRow(SQLModel, table=True):
     job_id: str = Field(foreign_key="apititlematchjob.id", index=True)
     row_uuid: str = Field(index=True)
     input_json: str  # the submitted row as received, including metadata
-    status: str = Field(default="pending")  # pending|processing|completed|failed
+    # pending|dispatched|completed|failed. `dispatched` (Phase 5 — windowed
+    # dispatch/round-robin fairness) means "claimed and published to
+    # external_match_row, not yet terminal" -- external's per-row dispatch
+    # cursor, mirroring domestic/international's integer `dispatched` column
+    # on the job itself. Never surfaced externally: GET .../results only
+    # returns rows with status in (completed, failed).
+    status: str = Field(default="pending")
     mapped_title: Optional[str] = None
     confidence: Optional[float] = None
     reasoning: Optional[str] = None

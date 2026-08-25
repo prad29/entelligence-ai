@@ -17,10 +17,10 @@ best-effort early ``DEL`` for the happy path; correctness does not depend on
 it ever running.
 
 The Redis semaphore is only a *soft* backstop. The primary concurrency bound
-is the dedicated ``agentic`` Celery queue running at worker concurrency 2. If
-Redis is unreachable we therefore FAIL OPEN (return a sentinel holder id and
-log a warning): the queue-level concurrency of 2 still bounds in-flight
-sandbox calls.
+is the dedicated ``agentic`` Celery queue running at worker concurrency
+``settings.AGENTIC_BATCH_MAX_CONCURRENCY``. If Redis is unreachable we
+therefore FAIL OPEN (return a sentinel holder id and log a warning): the
+queue-level concurrency still bounds in-flight sandbox calls.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ import uuid
 from typing import Optional
 
 from app.config import settings
+from app.title_matching.agentic import limits
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,12 @@ def _get_redis():
 
 
 def _ttl_seconds() -> int:
-    return settings.AGENTIC_TIMEOUT_SECONDS + 60
+    """Delegates to limits.holder_ttl_seconds() — the single source of truth
+    for every timeout/TTL derived from AGENTIC_TIMEOUT_SECONDS, so this value
+    can never drift out of lockstep with the row task's own soft/hard time
+    limits (see title_matching/agentic/limits.py's module docstring for why
+    that drift was a real bug)."""
+    return limits.holder_ttl_seconds()
 
 
 def acquire(timeout: float, *, ttl: Optional[int] = None, redis_client=None) -> str:
@@ -98,8 +104,9 @@ def acquire(timeout: float, *, ttl: Optional[int] = None, redis_client=None) -> 
     :class:`TimeoutError` if a slot never frees within ``timeout``.
 
     If Redis is unreachable, logs a warning and immediately returns
-    ``FAIL_OPEN_HOLDER`` (the ``agentic`` queue concurrency of 2 still bounds
-    real concurrency in that case).
+    ``FAIL_OPEN_HOLDER`` (the ``agentic`` queue's worker concurrency, i.e.
+    ``settings.AGENTIC_BATCH_MAX_CONCURRENCY``, still bounds real
+    concurrency in that case).
 
     ``ttl`` / ``redis_client`` are injection points for tests.
     """
@@ -150,3 +157,41 @@ def release(holder_id: Optional[str], *, redis_client=None) -> None:
         client.delete(holder_id)
     except Exception as exc:  # noqa: BLE001 - release must never break the caller
         logger.warning("sandbox_semaphore release failed for %s: %s", holder_id, exc)
+
+
+def holder_count(*, redis_client=None) -> Optional[int]:
+    """Read-only sample of the LIVE number of held semaphore slots right now.
+
+    Not used by anything yet in Phase 1 — it's added now because it lives
+    naturally next to the rest of the semaphore code, ahead of Phase 2's
+    queue-depth/pool-utilization observability sampler, which is the first
+    real caller.
+
+    Deliberately does NOT reuse ``_ACQUIRE_LUA``: that script early-exits
+    (``return 0``) the moment its running count reaches the cap, so it would
+    under-report whenever the pool is fully saturated — exactly the moment an
+    accurate holder count matters most for observability. This does a plain
+    SCAN to completion instead.
+
+    Returns ``None`` (never raises) if Redis is unreachable — "unknown", not
+    "zero". A sampler that can't tell "no holders" apart from "couldn't
+    check" would silently misreport a healthy-looking pool during a Redis
+    outage.
+    """
+    client = redis_client if redis_client is not None else _get_redis()
+    if client is None:
+        return None
+
+    pattern = f"{HOLDER_PREFIX}*"
+    try:
+        count = 0
+        cursor = 0
+        while True:
+            cursor, keys = client.scan(cursor=cursor, match=pattern, count=100)
+            count += len(keys)
+            if cursor == 0:
+                break
+        return count
+    except Exception as exc:  # noqa: BLE001 - sampler must never raise
+        logger.warning("sandbox_semaphore holder_count scan failed: %s", exc)
+        return None

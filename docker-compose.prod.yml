@@ -63,10 +63,13 @@ services:
 
   celery-agentic-worker:
     image: ${ECR_BACKEND}:${IMAGE_TAG}
-    # Concurrency must stay equal to settings.AGENTIC_BATCH_MAX_CONCURRENCY
-    # (backend/app/config.py) — these two numbers are coupled and drifting
-    # them apart weakens the concurrency cap on in-flight sandbox calls.
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q agentic
+    # Concurrency is driven from AGENTIC_BATCH_MAX_CONCURRENCY (backend/app/config.py,
+    # default below matches) so the worker's actual --concurrency flag and the
+    # semaphore cap can never drift apart. Compose interpolation here reads
+    # .env.compose (see start_containers.sh), NOT /app/.env.prod used by env_file
+    # below — start_containers.sh forwards AGENTIC_BATCH_MAX_CONCURRENCY from
+    # .env.prod into .env.compose specifically so this line picks it up.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=${AGENTIC_BATCH_MAX_CONCURRENCY:-4} -Q agentic
     restart: unless-stopped
     env_file: /app/.env.prod
     depends_on:

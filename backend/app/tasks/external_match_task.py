@@ -2,13 +2,22 @@
 Celery tasks for the external singletitle/batchtitle API
 (app/routers/external_title_match.py).
 
-Mirrors the existing agentic_match_task.py dispatch/row/finalize chord
-pattern, but with durable Postgres row storage (ApiTitleMatchRow, keyed by
+Mirrors the existing agentic_match_task.py windowed-dispatch/row/finalize
+pattern (Phase 5 — the chord is gone; see enqueue_next_window/scheduler_state
+below), but with durable Postgres row storage (ApiTitleMatchRow, keyed by
 client-supplied row_uuid) instead of xlsx output + an ephemeral Redis hash —
 this surface needs individually addressable rows for partial retrieval and
 row-scoped retry across a job that can run for over an hour. Both this
 module and agentic_match_task.py call the same run_agentic_match core, so
 matching logic itself never forks.
+
+Unlike domestic/international, ApiTitleMatchRow has no integer `dispatched`
+cursor -- its per-row `status` column IS the dispatch state, with a
+`dispatched` value (distinct from `pending`/`completed`/`failed`) added in
+Phase 5 for exactly this purpose. `dispatched` never leaks into the public
+API: the /results endpoint only ever returns rows with status in
+(completed, failed), so a row sitting at `pending` or `dispatched` is simply
+omitted, same as today.
 
 Runs on the SAME "agentic" queue and sandbox_semaphore as the internal batch
 pipeline (a deliberate choice — no dedicated capacity pool for external
@@ -26,10 +35,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import update
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from app.celery_app import celery
 from app.config import settings
+from app.title_matching.agentic import limits
 
 logger = logging.getLogger(__name__)
 
@@ -150,17 +160,114 @@ def _run_sync_inline(market: str) -> None:
             raise RuntimeError(f"master DB sync failed: {sync_job.error}")
 
 
-def external_dispatch_job(job_id: str) -> None:
-    """Build and apply the chord of per-row tasks + finalize callback for an
-    ApiTitleMatchJob, optionally preceded by a blocking master-DB sync.
+def enqueue_next_window(job_id: str, limit: int) -> int:
+    """Claim up to ``limit`` of this job's ``pending`` rows and publish them
+    to :func:`external_match_row`. Returns how many were actually published.
 
-    On any failure before the chord is dispatched, marks the job failed so
-    polling clients see it — mirrors dispatch_batch's except block.
+    External has no dispatch cursor (Phase 4 deliberately didn't add one --
+    ``ApiTitleMatchRow.status`` already tracks dispatch state per row), so
+    this claims via a per-row guarded ``UPDATE ... WHERE id=:row_id AND
+    status='pending'`` -- one statement per candidate row, keeping only
+    rowcount==1 winners -- rather than a single cursor CAS. ``limit`` is
+    single digits and tests run on SQLite, so per-row guards are correct on
+    both without needing ``FOR UPDATE SKIP LOCKED``.
+
+    Only dispatches while the job is in the ``processing`` phase -- rows
+    exist (status='pending') from submission time onward, but must NOT be
+    published while a ``db_update=true`` job is still ``syncing``.
     """
-    from celery import chord, group
-
     from app.database import engine
     from app.models import ApiTitleMatchJob, ApiTitleMatchRow
+
+    if limit <= 0:
+        return 0
+
+    with Session(engine) as session:
+        job = session.get(ApiTitleMatchJob, job_id)
+        if job is None or job.phase != "processing":
+            return 0
+
+        candidate_ids = session.exec(
+            select(ApiTitleMatchRow.id)
+            .where(ApiTitleMatchRow.job_id == job_id)
+            .where(ApiTitleMatchRow.status == "pending")
+            .limit(limit)
+        ).all()
+
+        won_ids = []
+        for row_id in candidate_ids:
+            result = session.execute(
+                update(ApiTitleMatchRow)
+                .where(ApiTitleMatchRow.id == row_id)
+                .where(ApiTitleMatchRow.status == "pending")
+                .values(status="dispatched", updated_at=datetime.utcnow())
+            )
+            if result.rowcount == 1:
+                won_ids.append(row_id)
+        session.commit()
+
+    for row_id in won_ids:
+        external_match_row.apply_async(args=[job_id, row_id], queue=AGENTIC_QUEUE)
+    return len(won_ids)
+
+
+def scheduler_state() -> list:
+    """One :class:`app.title_matching.dispatch_window.JobDispatchState` per
+    external job currently ``processing`` with outstanding/remaining rows.
+
+    ``outstanding`` = count of rows with ``status='dispatched'``;
+    ``remaining`` = count of rows with ``status='pending'`` -- external's
+    per-row ``status`` IS its dispatch state, unlike domestic/international's
+    integer cursor.
+    """
+    from app.database import engine
+    from app.models import ApiTitleMatchJob, ApiTitleMatchRow
+    from app.title_matching.dispatch_window import JobDispatchState
+
+    states = []
+    with Session(engine) as session:
+        jobs = session.exec(
+            select(ApiTitleMatchJob).where(ApiTitleMatchJob.phase == "processing")
+        ).all()
+        for job in jobs:
+            outstanding = session.exec(
+                select(func.count())
+                .select_from(ApiTitleMatchRow)
+                .where(ApiTitleMatchRow.job_id == job.id)
+                .where(ApiTitleMatchRow.status == "dispatched")
+            ).one()
+            remaining = session.exec(
+                select(func.count())
+                .select_from(ApiTitleMatchRow)
+                .where(ApiTitleMatchRow.job_id == job.id)
+                .where(ApiTitleMatchRow.status == "pending")
+            ).one()
+            if outstanding == 0 and remaining == 0:
+                continue
+            states.append(
+                JobDispatchState(
+                    kind="external", job_id=job.id, outstanding=int(outstanding), remaining=int(remaining)
+                )
+            )
+    return states
+
+
+def external_dispatch_job(job_id: str) -> None:
+    """Parse/sync the job, then publish an initial bounded window of rows
+    (Phase 5 — see ``app.title_matching.dispatch_window``), optionally
+    preceded by a blocking master-DB sync.
+
+    Replaces the old "build the whole chord" dispatch: only an initial
+    window of rows is published here; the rest arrive via self-refill
+    (``_after_row_terminal``) and the beat-scheduled round-robin top-up
+    (``topup_agentic_queue``).
+
+    On any failure before dispatch completes, marks the job failed so
+    polling clients see it — mirrors dispatch_batch's except block.
+    """
+    from app.database import engine
+    from app.models import ApiTitleMatchJob, ApiTitleMatchRow
+    from app.title_matching import dispatch_window
 
     try:
         with Session(engine) as session:
@@ -181,12 +288,12 @@ def external_dispatch_job(job_id: str) -> None:
             _wait_for_index_ready(market)
 
         with Session(engine) as session:
-            rows = session.exec(
-                select(ApiTitleMatchRow)
+            total_pending = session.exec(
+                select(func.count())
+                .select_from(ApiTitleMatchRow)
                 .where(ApiTitleMatchRow.job_id == job_id)
                 .where(ApiTitleMatchRow.status == "pending")
-            ).all()
-            row_ids = [r.id for r in rows]
+            ).one()
 
             session.execute(
                 update(ApiTitleMatchJob)
@@ -195,8 +302,20 @@ def external_dispatch_job(job_id: str) -> None:
             )
             session.commit()
 
-        row_sigs = [external_match_row.s(job_id, row_id) for row_id in row_ids]
-        chord(group(row_sigs))(external_finalize_job.s(job_id))
+        if total_pending == 0:
+            # Finding #2's external-shaped equivalent: a submission with no
+            # pending rows never lands a terminal row for
+            # _after_row_terminal's NOT EXISTS predicate to notice
+            # organically -- finalize directly.
+            external_finalize_job.apply_async(args=[None, job_id])
+            return
+
+        limit = (
+            int(total_pending)
+            if celery.conf.task_always_eager
+            else dispatch_window.read_job_window()
+        )
+        enqueue_next_window(job_id, limit)
 
     except Exception as exc:
         logger.exception("external_dispatch_job failed for job %s", job_id)
@@ -217,9 +336,19 @@ def external_dispatch_job(job_id: str) -> None:
     bind=True,
     name="app.tasks.external_match_task.external_match_row",
     queue=AGENTIC_QUEUE,
+    # NOT raised in Phase 1 (unlike the two internal-batch row tasks) — this
+    # is deliberately still tied to EXTERNAL_API_ROW_MAX_ATTEMPTS, which also
+    # governs the /retry endpoint's own attempt-cap predicate
+    # (external_retry_rows_task's `attempts < EXTERNAL_API_ROW_MAX_ATTEMPTS`
+    # filter) and the is_retry/attempts counter bookkeeping below (finding
+    # #3 in the plan) — decoupling this number without touching that whole
+    # bookkeeping scheme is explicitly out of scope for this phase. A
+    # throttle retry (see the AgenticThrottleError branch below) does NOT
+    # touch row.attempts either way, so it doesn't change is_retry semantics
+    # even while sharing this smaller retry budget.
     max_retries=settings.EXTERNAL_API_ROW_MAX_ATTEMPTS - 1,
-    soft_time_limit=settings.AGENTIC_TIMEOUT_SECONDS + 30,
-    time_limit=settings.AGENTIC_TIMEOUT_SECONDS + 90,
+    soft_time_limit=limits.row_soft_time_limit(),
+    time_limit=limits.row_time_limit(),
 )
 def external_match_row(self, job_id: str, row_id: int) -> None:
     """Process a single ApiTitleMatchRow. theater is always None — the
@@ -238,7 +367,7 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
     )
     from app.observability.context import LlmCallContext
     from app.title_matching import batch_io
-    from app.title_matching.agentic import AgenticError
+    from app.title_matching.agentic import AgenticError, AgenticThrottleError
     from app.title_matching.agentic.runner import run_agentic_match
     from app.title_matching import sandbox_semaphore
 
@@ -268,7 +397,7 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
 
     holder = None
     try:
-        holder = sandbox_semaphore.acquire(timeout=settings.AGENTIC_TIMEOUT_SECONDS + 30)
+        holder = sandbox_semaphore.acquire(timeout=limits.slot_wait_timeout())
         try:
             result = run_agentic_match(
                 title,
@@ -288,6 +417,26 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
                     job_type="ApiTitleMatchJob",
                 ),
             )
+        except AgenticThrottleError as exc:
+            # MUST be checked before the generic `except AgenticError` below
+            # — same ordering rationale as the internal batch row tasks.
+            # Does NOT touch row.attempts/is_retry bookkeeping (see the
+            # decorator comment above) — self.retry() here is pure Celery
+            # control flow, not a recorded row attempt.
+            if self.request.retries < self.max_retries:
+                countdown = limits.throttle_retry_countdown(self.request.retries)
+                logger.warning(
+                    "external_match_row throttled, retrying job=%s row=%s title=%r "
+                    "countdown=%s err=%s",
+                    job_id, row_id, title, countdown, exc,
+                )
+                raise self.retry(exc=exc, countdown=countdown)
+            logger.error(
+                "external_match_row throttle retries exhausted job=%s row=%s title=%r err=%s",
+                job_id, row_id, title, exc,
+            )
+            _record_failed_row(job_id, row_id, str(exc), is_retry=is_retry)
+            return
         except AgenticError as exc:
             if self.request.retries < self.max_retries:
                 logger.warning(
@@ -325,16 +474,17 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
                 _bump_job_counters(session, job_id, rows_failed=-1, **{outcome_col: 1})
             else:
                 _bump_job_counters(session, job_id, rows_processed=1, **{outcome_col: 1})
+        _after_row_terminal(job_id)
     except Retry:
         # celery's self.retry() control-flow signal — MUST propagate so the
         # row is rescheduled. Not a failure of this row.
         raise
     except BaseException as exc:  # noqa: BLE001
-        # Any other failure must NOT escape the task: an uncaught exception
-        # fails this chord header task, and the chord's callback only fires
-        # when ALL header tasks succeed — so a single escaping error would
-        # leave external_finalize_job un-run and wedge the whole job at
-        # 'processing' forever. Same rationale as agentic_batch_row.
+        # Any other failure must NOT escape the task: this row would never
+        # reach a terminal status, so _after_row_terminal's "zero rows left
+        # non-terminal" predicate would never be satisfied and
+        # external_finalize_job would never be claimed, wedging the whole
+        # job at 'processing' forever. Same rationale as agentic_batch_row.
         logger.exception(
             "external_match_row failed (non-agentic) job=%s row=%s title=%r",
             job_id, row_id, title,
@@ -377,9 +527,81 @@ def _record_failed_row(job_id: str, row_id: int, message: str, *, is_retry: bool
         # A retried row was already counted into rows_processed/rows_failed
         # on its prior failed attempt — failing again must not double-count
         # either counter.
-        if is_retry:
+        if not is_retry:
+            _bump_job_counters(session, job_id, rows_processed=1, rows_failed=1)
+    _after_row_terminal(job_id)
+
+
+def _remaining_row_count(session: Session, job_id: str) -> int:
+    """Count of this job's rows not yet in a terminal state.
+
+    External's completion predicate is genuinely NOT "processed == total"
+    (finding #3 in the plan): ``external_match_row`` deliberately does not
+    re-increment ``rows_processed`` on a retried row, so on a ``/retry`` run
+    ``rows_processed == rows_total`` can already be true before the retried
+    rows even finish. Completion here means "no row left non-terminal",
+    checked directly against ``ApiTitleMatchRow.status`` rather than any
+    counter.
+    """
+    from sqlalchemy import func
+
+    from app.models import ApiTitleMatchRow
+
+    return session.exec(
+        select(func.count())
+        .select_from(ApiTitleMatchRow)
+        .where(ApiTitleMatchRow.job_id == job_id)
+        .where(ApiTitleMatchRow.status.notin_(("completed", "failed")))
+    ).one()
+
+
+def _after_row_terminal(job_id: str) -> None:
+    """Counter-based completion trigger.
+
+    Call this at the end of every TERMINAL row outcome (success or a
+    recorded failure) — NEVER on the Celery-retry path.
+
+    Unlike the domestic/international pipelines, this is NOT a counter
+    equality check (finding #3) — it claims finalize only when zero rows
+    remain in a non-terminal state, re-checked atomically inside the same
+    conditional UPDATE that performs the claim (never a separate
+    read-then-decide step, which could race a concurrently-finishing row).
+
+    Never raises. If this row didn't complete the job (or the claim lost a
+    race to a concurrently-finishing row), self-refill this job's dispatch
+    window rather than waiting for the next beat tick.
+    """
+    from sqlalchemy import exists
+
+    from app.database import engine
+    from app.models import ApiTitleMatchJob, ApiTitleMatchRow
+    from app.title_matching.dispatch_window import claim_finalize
+
+    try:
+        won = False
+        with Session(engine) as session:
+            # Cheap pre-check to skip the UPDATE attempt when rows are
+            # obviously still outstanding. The atomicity guarantee itself
+            # comes from the NOT EXISTS predicate embedded in the UPDATE
+            # below (re-evaluated by the DB at claim time), not from this
+            # check.
+            if _remaining_row_count(session, job_id) == 0:
+                no_rows_outstanding = ~exists().where(
+                    ApiTitleMatchRow.job_id == job_id,
+                    ApiTitleMatchRow.status.notin_(("completed", "failed")),
+                )
+                won = claim_finalize(
+                    session,
+                    ApiTitleMatchJob,
+                    job_id,
+                    completion_predicate=no_rows_outstanding,
+                )
+        if won:
+            external_finalize_job.apply_async(args=[None, job_id])
             return
-        _bump_job_counters(session, job_id, rows_processed=1, rows_failed=1)
+        enqueue_next_window(job_id, settings.AGENTIC_ROUNDROBIN_CHUNK)
+    except Exception:  # noqa: BLE001 - must never escape into the row task
+        logger.exception("_after_row_terminal failed job=%s", job_id)
 
 
 @celery.task(
@@ -387,9 +609,11 @@ def _record_failed_row(job_id: str, row_id: int, message: str, *, is_retry: bool
     queue=AGENTIC_QUEUE,
 )
 def external_finalize_job(_row_results, job_id: str) -> None:
-    """Chord callback: recompute the job's terminal phase from current row
-    counts and stamp completed_at/ttl. Idempotent — a no-op if the job is
-    already in a terminal phase.
+    """Completion callback -- see agentic_match_task.finalize_batch's
+    identical docstring re: no longer a Celery chord callback. Recomputes
+    the job's terminal phase from current row counts and stamps
+    completed_at/ttl. Idempotent — a no-op if the job is already in a
+    terminal phase.
 
     Per product decision: a row that exhausts its retries is marked failed
     and the job moves on — job phase reflects current row state
@@ -424,12 +648,13 @@ def external_retry_rows_task(job_id: str, row_uuids: list[str]) -> None:
     """Re-run only the named failed rows within an existing job.
 
     Rows already at the attempt cap (EXTERNAL_API_ROW_MAX_ATTEMPTS) are left
-    'failed' and skipped rather than retried again.
+    'failed' and skipped rather than retried again. Publishes the flipped
+    rows via :func:`enqueue_next_window` (Phase 5) instead of building a new
+    chord.
     """
-    from celery import chord, group
-
     from app.database import engine
     from app.models import ApiTitleMatchJob, ApiTitleMatchRow
+    from app.title_matching import dispatch_window
 
     with Session(engine) as session:
         candidates = session.exec(
@@ -444,17 +669,27 @@ def external_retry_rows_task(job_id: str, row_uuids: list[str]) -> None:
             logger.info("external_retry_rows_task: no retryable rows for job %s", job_id)
             return
 
-        row_ids = []
         for row in candidates:
             row.status = "pending"
             row.updated_at = datetime.utcnow()
             session.add(row)
-            row_ids.append(row.id)
 
+        # Clear finalize_claimed_at in the SAME transaction that flips these
+        # rows back to 'pending': the job may have already finalized once
+        # (claiming finalize_claimed_at) before this retry ran, and without
+        # clearing it here, _after_row_terminal's conditional-UPDATE claim
+        # would find finalize_claimed_at already set and refuse to ever
+        # finalize this job again, even once the retried rows complete.
         session.execute(
-            update(ApiTitleMatchJob).where(ApiTitleMatchJob.id == job_id).values(phase="processing")
+            update(ApiTitleMatchJob)
+            .where(ApiTitleMatchJob.id == job_id)
+            .values(phase="processing", finalize_claimed_at=None)
         )
         session.commit()
 
-    row_sigs = [external_match_row.s(job_id, row_id) for row_id in row_ids]
-    chord(group(row_sigs))(external_finalize_job.s(job_id))
+    limit = (
+        len(candidates)
+        if celery.conf.task_always_eager
+        else dispatch_window.read_job_window()
+    )
+    enqueue_next_window(job_id, limit)

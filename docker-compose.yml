@@ -75,10 +75,12 @@ services:
 
   celery-agentic-worker:
     build: ./backend
-    # Concurrency must stay equal to settings.AGENTIC_BATCH_MAX_CONCURRENCY
-    # (backend/app/config.py) — these two numbers are coupled and drifting
-    # them apart weakens the concurrency cap on in-flight sandbox calls.
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q agentic
+    # Concurrency is driven from AGENTIC_BATCH_MAX_CONCURRENCY (backend/app/config.py,
+    # default below matches) so the worker's actual --concurrency flag and the
+    # semaphore cap can never drift apart. Override by setting
+    # AGENTIC_BATCH_MAX_CONCURRENCY in .env — compose interpolation reads it from
+    # the shell/.env used for `docker compose` itself, same as env_file below.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=${AGENTIC_BATCH_MAX_CONCURRENCY:-4} -Q agentic
     env_file: .env
     environment:
       DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb

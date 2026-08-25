@@ -156,6 +156,9 @@ def _clean_state(monkeypatch):
         import json
 
         store.setdefault(job_id, {})[str(row_index)] = json.dumps(row_result)
+        # New HSETNX-based contract: True means "this call was the first
+        # writer" -- this stub always writes, so it's always the first.
+        return True
 
     monkeypatch.setattr(task_mod, "_store_row_result", _fake_store)
 

@@ -60,8 +60,20 @@ def patched_task(monkeypatch, db_engine, fake_hash):
 
     def _store(job_id, row_index, row_result):
         fake_hash[str(row_index)] = json.dumps(row_result)
+        # New HSETNX-based contract: return True (first writer) so the
+        # caller's counter bump still fires -- this stub always writes, so
+        # it is always the first writer.
+        return True
 
     monkeypatch.setattr(task_mod, "_store_row_result", _store)
+
+    # Prevent _after_row_terminal's finalize trigger from touching the real
+    # broker in unit tests -- it calls finalize_batch.apply_async(...) when
+    # it wins the claim. Tests that care about the trigger firing assert on
+    # this mock directly (see the _after_row_terminal section below).
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(task_mod.finalize_batch, "apply_async", MagicMock())
     return task_mod
 
 
@@ -503,3 +515,130 @@ def test_limits_ordering_regression_guard():
         > limits.row_soft_time_limit()
         > limits.slot_wait_timeout()
     )
+
+
+# ---------------------------------------------------------------------------
+# (g) Phase 4 -- counter-based finalize trigger (_after_row_terminal), still
+#     running alongside the active Celery chord. finalize_batch.apply_async
+#     is mocked by the patched_task fixture; these tests assert on it.
+# ---------------------------------------------------------------------------
+def _fake_run_ok(title, show_date, theater, ticketing_url, use_poster_vision, market="domestic", country=None, usage_ctx=None):
+    return _Result(42, 42, title, 0.9)
+
+
+def test_finalize_claimed_exactly_once_when_last_row_succeeds(patched_task, db_engine, fake_hash):
+    """total=3: after 2 rows, no claim yet; the 3rd row's success both wins
+    the claim and enqueues finalize_batch exactly once."""
+    job_id = _make_job(db_engine, total=3)
+    with Session(db_engine) as s:
+        s.add(MovieMaster(id=42, movie_title="Whatever"))
+        s.commit()
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch
+
+    with patch.object(runner_mod, "run_agentic_match", side_effect=_fake_run_ok), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"):
+        patched_task.agentic_batch_row.run(job_id, 0, "Row0", None, None, False)
+        patched_task.agentic_batch_row.run(job_id, 1, "Row1", None, None, False)
+
+        job = _get_job(db_engine, job_id)
+        assert job.finalize_claimed_at is None
+        patched_task.finalize_batch.apply_async.assert_not_called()
+
+        patched_task.agentic_batch_row.run(job_id, 2, "Row2", None, None, False)
+
+    job = _get_job(db_engine, job_id)
+    assert job.processed == 3
+    assert job.finalize_claimed_at is not None
+    patched_task.finalize_batch.apply_async.assert_called_once_with(args=[None, job_id])
+
+
+def test_finalize_claimed_exactly_once_when_last_row_fails(patched_task, db_engine, fake_hash):
+    """Same, but the row that brings processed to total goes through the
+    failed-row path, not success -- claim_finalize doesn't care which
+    counter moved processed, only that processed >= total."""
+    job_id = _make_job(db_engine, total=2)
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch, MagicMock
+    from celery.exceptions import Retry as CeleryRetry
+
+    with patch.object(runner_mod, "run_agentic_match", side_effect=_fake_run_ok), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"):
+        patched_task.agentic_batch_row.run(job_id, 0, "Row0", None, None, False)
+        patched_task.finalize_batch.apply_async.assert_not_called()
+
+        # Row 1 exhausts retries -> failed-row path.
+        raw_fn = patched_task.agentic_batch_row.run.__func__
+
+        def always_fail(*a, **k):
+            raise AgenticError("boom")
+
+        with patch.object(runner_mod, "run_agentic_match", side_effect=always_fail):
+            fake_self = MagicMock()
+            fake_self.request.retries = 4
+            fake_self.max_retries = 4
+            raw_fn(fake_self, job_id, 1, "Row1", None, None, False)
+
+    job = _get_job(db_engine, job_id)
+    assert job.processed == 2
+    assert job.failed == 1
+    assert job.finalize_claimed_at is not None
+    patched_task.finalize_batch.apply_async.assert_called_once_with(args=[None, job_id])
+
+
+def test_after_row_terminal_second_claim_attempt_is_a_noop(patched_task, db_engine, fake_hash):
+    """Calling the trigger again after the claim already won must not
+    re-enqueue finalize a second time."""
+    job_id = _make_job(db_engine, total=1)
+    with Session(db_engine) as s:
+        s.add(MovieMaster(id=42, movie_title="Whatever"))
+        s.commit()
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch
+
+    with patch.object(runner_mod, "run_agentic_match", side_effect=_fake_run_ok), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"):
+        patched_task.agentic_batch_row.run(job_id, 0, "Row0", None, None, False)
+
+    patched_task.finalize_batch.apply_async.assert_called_once_with(args=[None, job_id])
+
+    # Directly re-invoke the trigger (simulating a second row task somehow
+    # calling it again for the same job) -- must be a no-op.
+    patched_task._after_row_terminal(job_id)
+    patched_task.finalize_batch.apply_async.assert_called_once()
+
+
+def test_hsetnx_duplicate_row_execution_does_not_double_bump(db_engine):
+    """Real local Redis: running the success path twice for the same
+    job_id/row_index must only write the results hash once and only bump
+    processed once. The second call logs a warning and skips the bump."""
+    import redis
+
+    try:
+        r = redis.Redis.from_url("redis://localhost:6379/0")
+        r.ping()
+    except Exception:
+        pytest.skip("local redis not reachable at localhost:6379 for HSETNX test")
+
+    import app.tasks.agentic_match_task as task_mod
+
+    job_id = "job-hsetnx-1"
+    r.delete(task_mod._results_key(job_id))
+
+    try:
+        first = task_mod._store_row_result(job_id, 0, {"present_in_db": "Yes"})
+        second = task_mod._store_row_result(job_id, 0, {"present_in_db": "Yes"})
+        assert first is True
+        assert second is False
+        assert r.hlen(task_mod._results_key(job_id)) == 1
+    finally:
+        r.delete(task_mod._results_key(job_id))

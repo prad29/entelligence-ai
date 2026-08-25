@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import random
 import re
 import time
 import urllib.parse
@@ -29,6 +30,7 @@ from app.title_matching.types import TitleMatchResult
 from app.title_matching.agentic import (
     AgenticConfigError,
     AgenticSubprocessError,
+    AgenticThrottleError,
     AgenticTimeoutError,
 )
 from app.title_matching.agentic.prompt_builder import build_prompt
@@ -192,6 +194,26 @@ def run_agentic_match(
                 ctx, stdout2, retry_started, retry_count=1, decision=result.decision
             )
             logger.info("agentic_retry_success title=%r id=%d", title, result.suggested_movie_id)
+        except AgenticThrottleError as retry_exc:
+            # A genuine throttle here has ALREADY been through _call_sandbox's
+            # own in-process fast-fail retry (and its backoff sleep) before
+            # raising — swallowing it into the generic `except Exception`
+            # branch below would silently keep this function's ORIGINAL
+            # parse-failure fallback result (a low-confidence REVIEW) and
+            # hide the real cause from the caller entirely. The Celery row
+            # task needs to see AgenticThrottleError specifically so it can
+            # back off and re-queue the whole row (releasing the sandbox
+            # semaphore slot) instead of accepting a degraded result — so
+            # this must propagate, not be logged-and-ignored like an ordinary
+            # parse-retry failure.
+            _log_sandbox_call(
+                ctx, "", retry_started,
+                retry_count=1,
+                status=_status_for(retry_exc),
+                error_type=type(retry_exc).__name__,
+            )
+            logger.warning("agentic_retry_throttled title=%r error=%s", title, retry_exc)
+            raise
         except Exception as retry_exc:
             _log_sandbox_call(
                 ctx, "", retry_started,
@@ -269,18 +291,140 @@ def run_agentic_match(
     return result
 
 
-def _call_sandbox(prompt: str, tools: str) -> str:
-    """POST to the claude-sandbox sidecar and return raw stdout.
+# ---------------------------------------------------------------------------
+# Bedrock-throttle detection
+# ---------------------------------------------------------------------------
+#
+# THROTTLE SIGNATURE — WHAT WAS VERIFIED EMPIRICALLY VS. INFERRED
+# ================================================================
+# Verified live (2026-08-25): built the actual `entelligence-ai-claude-sandbox`
+# image, pointed it at a local HTTP stub bound at ANTHROPIC_BEDROCK_BASE_URL
+# (confirmed via `grep` on the installed `claude` CLI binary to be the real
+# env var name it reads, alongside CLAUDE_CODE_USE_BEDROCK=1, which
+# docker-compose.yml already sets) that unconditionally returns HTTP 429 with
+# an AWS-shaped body (`{"__type":"ThrottlingException","message":"..."}`),
+# then POSTed to the sandbox's real /run endpoint.
+#
+# Result, reproduced across two separate runs (25s and 180s
+# timeout_seconds): the `claude` CLI does NOT surface the raw AWS
+# ThrottlingException text at all. It has its OWN internal retry loop
+# (up to 10 attempts, exponential backoff observed at roughly
+# 0.5s/1s/2s/4s/9s/17s/36s/36s/38s/34s between attempts) and emits one
+# `stream-json` line per attempt to STDOUT shaped like:
+#   {"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,
+#    "retry_delay_ms":612,"error_status":429,"error":"rate_limit",
+#    "session_id":"...","uuid":"..."}
+# In EVERY run captured, the CLI's own backoff schedule outlasted the
+# sandbox wrapper's timeout (server.js's runClaude() SIGKILLs the subprocess
+# once `timeoutMs` elapses) well before the CLI exhausted its 10-attempt
+# budget or produced a final answer — so the observed outcome was always
+# `exit_code: -1, timed_out: true, stderr: ""`, with the api_retry lines
+# sitting in stdout. This directly confirms the plan's warning: a throttle
+# that persists for the CLI's own retry window manifests as a TIMEOUT, not a
+# distinguishable non-zero exit — and must never be reclassified as a
+# throttle just because throttle wording is present (see the `timed_out`
+# check below, which is checked and dispatched on BEFORE any throttle
+# detection, unconditionally).
+#
+# NOT verified live (inferred from server.js's runClaude() + the CLI's
+# documented stream-json event shapes, which this codebase already parses
+# elsewhere — see agentic_usage.py's `type: "result"` handling and
+# result_parser.py's `type: "assistant"` handling): a throttle burst SHORT
+# enough for the CLI to either (a) give up on its own before our timeout and
+# report a non-zero exit / a terminal `type: "result", is_error: true` event
+# with throttle wording in `result`/`error` fields, or (b) succeed
+# transparently after 1-2 internal retries (exit_code 0, valid final
+# answer) while its stdout still contains one or more `api_retry` lines.
+# Case (b) is NOT a throttle from this module's point of view — the call
+# genuinely succeeded — which is why `_error_text` below explicitly excludes
+# `system`/`api_retry` events (informational, not terminal) from what it
+# scans: including them would misclassify a call that self-healed via the
+# CLI's own retry as throttled, and (being the least "fast fail" case, since
+# elapsed time includes the internal retry delay) potentially discard a
+# perfectly good result. Case (a)'s terminal-error-event shape is inferred,
+# not observed — a human reviewer should treat `_looks_throttled`'s
+# stdout-side detection as best-effort/defense-in-depth, and the `stderr`
+# side (checked unconditionally, raw substring) as the higher-confidence
+# path for whatever non-timeout throttle shape shows up in production.
+_THROTTLE_RE = re.compile(
+    r"throttl|too\s+many\s+requests|rate[\s_-]?limit|\b429\b|"
+    r"service\s*unavailable|overloaded",
+    re.IGNORECASE,
+)
 
-    Side channel: also stashes the response's `serper_calls` list (spec §7 —
-    the movieweb MCP server's web_search/web_fetch call log for this
-    invocation) onto `_call_sandbox.last_serper_calls`, read by the caller
-    right after this returns. This keeps the return type unchanged (still
-    `str`) so existing callers/mocks (e.g. tests that patch this function to
-    return a plain string) are unaffected.
+# An event's own `subtype` counts as "error-ish" if it contains one of these
+# substrings, or exactly matches one of these words. Deliberately excludes
+# "retry" ("api_retry" is informational, not terminal — see docstring above).
+_ERROR_ISH_SUBTYPE_MARKERS = ("error", "abort", "max_turns", "denied")
+
+
+def _error_text(stdout: str, stderr: str) -> str:
+    """Build the text surface `_looks_throttled` searches.
+
+    stderr is always included verbatim — subprocess/CLI-crash-level failures
+    land there as plain text, not JSON.
+
+    stdout is scanned line-by-line for parseable stream-json events; ONLY
+    events that are structurally error/terminal-failure-shaped are included
+    (an `is_error` flag, `type == "error"`, or an error-ish `subtype`) —
+    ordinary `type: "assistant"` text/reasoning content is never included,
+    because a movie title or the model's own reasoning could innocently
+    contain "429" or "rate limit" (e.g. discussing a theatrical re-release
+    date) and must not trip throttle detection. `system`/`api_retry` events
+    are explicitly excluded too — see the module-level docstring above:
+    those are the CLI transparently handling a transient 429 internally and
+    can precede a fully successful result.
     """
-    _call_sandbox.last_serper_calls = []
+    parts = [stderr or ""]
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
 
+        event_type = event.get("type")
+        subtype = event.get("subtype")
+
+        if event_type == "system" and subtype == "api_retry":
+            continue  # informational CLI-internal retry telemetry, not terminal
+
+        is_error = bool(event.get("is_error"))
+        error_ish_subtype = isinstance(subtype, str) and any(
+            marker in subtype.lower() for marker in _ERROR_ISH_SUBTYPE_MARKERS
+        )
+        if is_error or event_type == "error" or error_ish_subtype:
+            parts.append(line)
+
+    return "\n".join(parts)
+
+
+def _looks_throttled(stdout: str, stderr: str) -> bool:
+    """True if the error-shaped surface of this response reads as a Bedrock
+    throttle (429 / ThrottlingException / rate limit wording)."""
+    return bool(_THROTTLE_RE.search(_error_text(stdout, stderr)))
+
+
+def _throttle_backoff_seconds(attempt: int) -> float:
+    """Exponential backoff (seconds) before an in-process retry of a
+    throttled sandbox call, with +/-50% jitter so multiple rows throttled by
+    the same Bedrock quota exhaustion don't all wake up and retry in the same
+    instant — same thundering-herd rationale as sandbox_semaphore.py's own
+    jittered acquire-retry loop."""
+    base = settings.AGENTIC_THROTTLE_BACKOFF_BASE_SECONDS
+    return base * (2**attempt) * random.uniform(0.5, 1.5)
+
+
+def _post_sandbox(prompt: str, tools: str) -> dict:
+    """POST to the claude-sandbox sidecar and return the parsed response
+    body dict (stdout/stderr/exit_code/timed_out/serper_calls). Raw HTTP-call
+    plumbing only — no throttle/error interpretation lives here; that's
+    `_call_sandbox`'s job, so it can retry this call in a loop.
+    """
     payload = json.dumps({
         "prompt": prompt,
         "model": settings.AGENTIC_CLAUDE_MODEL,
@@ -298,7 +442,7 @@ def _call_sandbox(prompt: str, tools: str) -> str:
 
     try:
         with urllib.request.urlopen(req, timeout=settings.AGENTIC_TIMEOUT_SECONDS + 10) as resp:
-            body = json.loads(resp.read())
+            return json.loads(resp.read())
     except URLError as exc:
         raise AgenticConfigError(
             f"Claude sandbox unreachable at {url}. "
@@ -306,28 +450,90 @@ def _call_sandbox(prompt: str, tools: str) -> str:
             f"Error: {exc}"
         )
 
-    exit_code = body.get("exit_code", -1)
-    timed_out = body.get("timed_out", False)
-    stderr = body.get("stderr", "")
-    stdout = body.get("stdout", "")
-    serper_calls = body.get("serper_calls", [])
-    if isinstance(serper_calls, list):
-        _call_sandbox.last_serper_calls = serper_calls
 
-    if timed_out:
-        raise AgenticTimeoutError(
-            f"Agent timed out after {settings.AGENTIC_TIMEOUT_SECONDS}s for title. "
-            "Increase AGENTIC_TIMEOUT_SECONDS or check claude-sandbox logs."
-        )
+def _call_sandbox(prompt: str, tools: str) -> str:
+    """POST to the claude-sandbox sidecar and return raw stdout, retrying
+    in-process on a detected Bedrock throttle.
 
-    if exit_code != 0:
-        excerpt = stderr[:500] if stderr else "(no stderr)"
-        raise AgenticSubprocessError(
-            f"Claude exited with code {exit_code}. "
-            f"Check CLAUDE_CODE_USE_BEDROCK and AWS credentials. stderr: {excerpt}"
-        )
+    Side channel: also stashes the response's `serper_calls` list (spec §7 —
+    the movieweb MCP server's web_search/web_fetch call log for this
+    invocation) onto `_call_sandbox.last_serper_calls`, read by the caller
+    right after this returns. This keeps the return type unchanged (still
+    `str`) so existing callers/mocks (e.g. tests that patch this function to
+    return a plain string) are unaffected. Reset per ATTEMPT (not just once
+    per call) so a retried attempt's serper_calls can never merge with or
+    leak from a prior throttled attempt's partial data.
 
-    return stdout
+    Retry policy (up to `settings.AGENTIC_THROTTLE_MAX_RETRIES + 1` total
+    attempts):
+      - `timed_out: true` NEVER counts as a throttle, even if throttle
+        wording happens to appear in stdout/stderr (see the module docstring
+        above — in every empirical capture, sustained throttling manifested
+        as exactly this: the CLI's own internal retry budget outlasting our
+        timeout). Raises AgenticTimeoutError immediately, no retry here.
+      - A throttled response gets ONE more in-process attempt only if the
+        failed attempt was a "fast fail" (elapsed less than half of
+        AGENTIC_TIMEOUT_SECONDS) — a slow failure means the CLI already
+        burned its own internal retry budget on this attempt, so retrying
+        immediately from here would just repeat that same expensive dance.
+        Otherwise (or once retries are exhausted) raises
+        AgenticThrottleError so the caller can back off at the Celery level
+        instead (releasing the sandbox semaphore slot for the whole wait).
+      - A non-throttled non-zero exit raises AgenticSubprocessError, as
+        before.
+      - Otherwise returns stdout, as before.
+    """
+    max_attempts = settings.AGENTIC_THROTTLE_MAX_RETRIES + 1
+
+    for attempt in range(max_attempts):
+        _call_sandbox.last_serper_calls = []
+
+        attempt_started = time.monotonic()
+        body = _post_sandbox(prompt, tools)
+        elapsed = time.monotonic() - attempt_started
+
+        exit_code = body.get("exit_code", -1)
+        timed_out = body.get("timed_out", False)
+        stderr = body.get("stderr", "")
+        stdout = body.get("stdout", "")
+        serper_calls = body.get("serper_calls", [])
+        if isinstance(serper_calls, list):
+            _call_sandbox.last_serper_calls = serper_calls
+
+        if timed_out:
+            raise AgenticTimeoutError(
+                f"Agent timed out after {settings.AGENTIC_TIMEOUT_SECONDS}s for title. "
+                "Increase AGENTIC_TIMEOUT_SECONDS or check claude-sandbox logs."
+            )
+
+        if _looks_throttled(stdout, stderr):
+            fast_fail = elapsed < (settings.AGENTIC_TIMEOUT_SECONDS / 2)
+            attempts_remaining = attempt < max_attempts - 1
+            logger.warning(
+                "agentic_sandbox_throttled attempt=%d/%d elapsed=%.1fs fast_fail=%s",
+                attempt + 1, max_attempts, elapsed, fast_fail,
+            )
+            if attempts_remaining and fast_fail:
+                time.sleep(_throttle_backoff_seconds(attempt))
+                continue
+            excerpt = stderr[:500] if stderr else (stdout[-500:] if stdout else "(no output)")
+            raise AgenticThrottleError(
+                f"Bedrock throttled the sandbox call (attempt {attempt + 1}/{max_attempts}, "
+                f"elapsed {elapsed:.1f}s, fast_fail={fast_fail}). Excerpt: {excerpt}"
+            )
+
+        if exit_code != 0:
+            excerpt = stderr[:500] if stderr else "(no stderr)"
+            raise AgenticSubprocessError(
+                f"Claude exited with code {exit_code}. "
+                f"Check CLAUDE_CODE_USE_BEDROCK and AWS credentials. stderr: {excerpt}"
+            )
+
+        return stdout
+
+    # Unreachable: the loop above always either returns or raises on every
+    # iteration, including the last (attempts_remaining is False there).
+    raise AgenticSubprocessError("agentic sandbox retry loop exited without a result")
 
 
 def _check_sandbox_reachable() -> None:

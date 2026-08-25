@@ -24,10 +24,17 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
 from app.models import ApiTitleMatchJob, ApiTitleMatchRow
+
+# Captured at import time, BEFORE the patched_task fixture below replaces
+# task_mod.enqueue_next_window with a no-op mock -- tests that want the REAL
+# claim/publish mechanics (not the narrow row-level tests it's mocked out
+# for) restore it via this reference.
+import app.tasks.external_match_task as _real_task_mod  # noqa: E402
+_REAL_ENQUEUE_NEXT_WINDOW = _real_task_mod.enqueue_next_window
 
 
 @pytest.fixture
@@ -51,6 +58,14 @@ def patched_task(monkeypatch, db_engine):
     from unittest.mock import MagicMock
 
     monkeypatch.setattr(task_mod.external_finalize_job, "apply_async", MagicMock())
+
+    # Phase 5: _after_row_terminal self-refills (enqueue_next_window) when it
+    # does NOT win the finalize claim. These narrow row-level unit tests
+    # invoke external_match_row.run(...) directly without ever going through
+    # external_dispatch_job, so self-refill's actual claim/publish mechanics
+    # aren't under test here (see test_enqueue_next_window_* below for that)
+    # -- mocked out like finalize's apply_async above.
+    monkeypatch.setattr(task_mod, "enqueue_next_window", MagicMock(return_value=0))
     return task_mod
 
 
@@ -259,28 +274,11 @@ def test_external_retry_rows_task_clears_finalize_claimed_at(patched_task, db_en
         s.add(job)
         s.commit()
 
-    # external_retry_rows_task does `from celery import chord, group` INSIDE
-    # the function body, re-imported fresh on every call -- so patching the
-    # `celery` package's own attributes (looked up at call time) is what
-    # actually takes effect, not patching this module's namespace. This
-    # avoids touching the real broker for the chord the task builds; `.s()`
-    # itself never touches the broker (it only builds a signature), so it
-    # needs no patching.
-    import celery as celery_pkg
-
-    captured = {}
-
-    class _FakeChordApplier:
-        def __init__(self, header):
-            captured["header"] = header
-
-        def __call__(self, callback):
-            captured["callback"] = callback
-            return None
-
-    monkeypatch.setattr(celery_pkg, "chord", _FakeChordApplier)
-    monkeypatch.setattr(celery_pkg, "group", lambda sigs: sigs)
-
+    # Phase 5: external_retry_rows_task no longer builds a chord -- it flips
+    # rows back to 'pending' + clears finalize_claimed_at, then calls
+    # enqueue_next_window (mocked by patched_task) to publish them. Asserting
+    # on row.status=='pending' here (not 'dispatched') proves the flip +
+    # clear happen in one transaction BEFORE enqueue_next_window runs.
     patched_task.external_retry_rows_task(job_id, ["r1"])
 
     job = _get_job(db_engine, job_id)
@@ -288,3 +286,94 @@ def test_external_retry_rows_task_clears_finalize_claimed_at(patched_task, db_en
     assert job.phase == "processing"
     row = _get_row(db_engine, r1)
     assert row.status == "pending"
+    patched_task.enqueue_next_window.assert_called_once()
+    call_args = patched_task.enqueue_next_window.call_args.args
+    assert call_args[0] == job_id
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 -- enqueue_next_window / scheduler_state
+# ---------------------------------------------------------------------------
+def test_enqueue_next_window_claims_pending_rows_and_publishes(patched_task, db_engine, monkeypatch):
+    monkeypatch.setattr(patched_task, "enqueue_next_window", _REAL_ENQUEUE_NEXT_WINDOW)
+
+    job_id = _make_job(db_engine)
+    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r2 = _add_row(db_engine, job_id, "r2", status="pending")
+    r3 = _add_row(db_engine, job_id, "r3", status="pending")
+
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(patched_task.external_match_row, "apply_async", MagicMock())
+
+    published = patched_task.enqueue_next_window(job_id, 2)
+
+    assert published == 2
+    with Session(db_engine) as s:
+        rows = s.exec(select(ApiTitleMatchRow).where(ApiTitleMatchRow.job_id == job_id)).all()
+        statuses = {r.id: r.status for r in rows}
+    dispatched_ids = [rid for rid, st in statuses.items() if st == "dispatched"]
+    pending_ids = [rid for rid, st in statuses.items() if st == "pending"]
+    assert len(dispatched_ids) == 2
+    assert len(pending_ids) == 1
+    assert patched_task.external_match_row.apply_async.call_count == 2
+
+
+def test_enqueue_next_window_noop_when_job_not_processing(patched_task, db_engine, monkeypatch):
+    monkeypatch.setattr(patched_task, "enqueue_next_window", _REAL_ENQUEUE_NEXT_WINDOW)
+
+    with Session(db_engine) as s:
+        s.add(ApiTitleMatchJob(id="ext-syncing", api_key_id="k1", market="domestic", phase="syncing"))
+        s.commit()
+    r1 = _add_row(db_engine, "ext-syncing", "r1", status="pending")
+
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(patched_task.external_match_row, "apply_async", MagicMock())
+
+    published = patched_task.enqueue_next_window("ext-syncing", 5)
+
+    assert published == 0
+    patched_task.external_match_row.apply_async.assert_not_called()
+    assert _get_row(db_engine, r1).status == "pending"
+
+
+def test_scheduler_state_reports_outstanding_and_remaining(patched_task, db_engine):
+    job_id = _make_job(db_engine)
+    _add_row(db_engine, job_id, "r1", status="dispatched")
+    _add_row(db_engine, job_id, "r2", status="pending")
+    _add_row(db_engine, job_id, "r3", status="completed")
+
+    states = patched_task.scheduler_state()
+    by_id = {s.job_id: s for s in states}
+    assert set(by_id) == {job_id}
+    assert by_id[job_id].kind == "external"
+    assert by_id[job_id].outstanding == 1
+    assert by_id[job_id].remaining == 1
+
+
+def test_scheduler_state_excludes_fully_dispatched_and_processed_jobs(patched_task, db_engine):
+    job_id = _make_job(db_engine)
+    _add_row(db_engine, job_id, "r1", status="completed")
+    _add_row(db_engine, job_id, "r2", status="failed")
+
+    states = patched_task.scheduler_state()
+    assert states == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 -- self-refill from _after_row_terminal
+# ---------------------------------------------------------------------------
+def test_after_row_terminal_self_refills_when_not_finalizing(patched_task, db_engine):
+    job_id = _make_job(db_engine)
+    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r2 = _add_row(db_engine, job_id, "r2", status="pending")
+
+    from app.config import settings
+
+    patched_task._record_failed_row(job_id, r1, "boom")
+
+    patched_task.external_finalize_job.apply_async.assert_not_called()
+    patched_task.enqueue_next_window.assert_called_once_with(
+        job_id, settings.AGENTIC_ROUNDROBIN_CHUNK
+    )

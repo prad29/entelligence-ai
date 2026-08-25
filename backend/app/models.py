@@ -401,7 +401,13 @@ class ApiTitleMatchRow(SQLModel, table=True):
     job_id: str = Field(foreign_key="apititlematchjob.id", index=True)
     row_uuid: str = Field(index=True)
     input_json: str  # the submitted row as received, including metadata
-    status: str = Field(default="pending")  # pending|processing|completed|failed
+    # pending|dispatched|completed|failed. `dispatched` (Phase 5 — windowed
+    # dispatch/round-robin fairness) means "claimed and published to
+    # external_match_row, not yet terminal" -- external's per-row dispatch
+    # cursor, mirroring domestic/international's integer `dispatched` column
+    # on the job itself. Never surfaced externally: GET .../results only
+    # returns rows with status in (completed, failed).
+    status: str = Field(default="pending")
     mapped_title: Optional[str] = None
     confidence: Optional[float] = None
     reasoning: Optional[str] = None

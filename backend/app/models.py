@@ -62,6 +62,15 @@ class MovieTitleBatchJob(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ttl: Optional[datetime] = None
     stats: Optional[str] = None  # JSON string
+    # Phase 4/5 (agentic batch fairness project): `dispatched` is the
+    # windowed-dispatch cursor — unused/unwritten until Phase 5's round-robin
+    # dispatcher, but added now so its migration backfill (dispatched=total
+    # for jobs already `processing`) ships ahead of that dispatcher, per
+    # finding #4 in the plan. `finalize_claimed_at` is the counter-based
+    # finalize claim (see title_matching/dispatch_window.claim_finalize) —
+    # active starting Phase 4, running alongside the still-active chord.
+    dispatched: int = Field(default=0)
+    finalize_claimed_at: Optional[datetime] = None
 
 
 class AmenityMapping(SQLModel, table=True):
@@ -207,6 +216,10 @@ class MovieTitleIntlBatchJob(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ttl: Optional[datetime] = None
     stats: Optional[str] = None  # JSON string
+    # See MovieTitleBatchJob's identical fields above — same Phase 4/5
+    # rationale, kept symmetrical across the domestic/international split.
+    dispatched: int = Field(default=0)
+    finalize_claimed_at: Optional[datetime] = None
 
 
 class MovieMasterSyncJob(SQLModel, table=True):
@@ -366,6 +379,11 @@ class ApiTitleMatchJob(SQLModel, table=True):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     ttl: Optional[datetime] = None
+    # Phase 4 counter-based finalize claim (see
+    # title_matching/dispatch_window.claim_finalize). No `dispatched` cursor
+    # here — external already has per-row ApiTitleMatchRow.status as its
+    # dispatch state, so there's nothing for a cursor to duplicate.
+    finalize_claimed_at: Optional[datetime] = None
 
 
 class ApiTitleMatchRow(SQLModel, table=True):

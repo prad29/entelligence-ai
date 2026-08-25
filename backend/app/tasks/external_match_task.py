@@ -30,6 +30,7 @@ from sqlmodel import Session, select
 
 from app.celery_app import celery
 from app.config import settings
+from app.title_matching.agentic import limits
 
 logger = logging.getLogger(__name__)
 
@@ -217,9 +218,19 @@ def external_dispatch_job(job_id: str) -> None:
     bind=True,
     name="app.tasks.external_match_task.external_match_row",
     queue=AGENTIC_QUEUE,
+    # NOT raised in Phase 1 (unlike the two internal-batch row tasks) — this
+    # is deliberately still tied to EXTERNAL_API_ROW_MAX_ATTEMPTS, which also
+    # governs the /retry endpoint's own attempt-cap predicate
+    # (external_retry_rows_task's `attempts < EXTERNAL_API_ROW_MAX_ATTEMPTS`
+    # filter) and the is_retry/attempts counter bookkeeping below (finding
+    # #3 in the plan) — decoupling this number without touching that whole
+    # bookkeeping scheme is explicitly out of scope for this phase. A
+    # throttle retry (see the AgenticThrottleError branch below) does NOT
+    # touch row.attempts either way, so it doesn't change is_retry semantics
+    # even while sharing this smaller retry budget.
     max_retries=settings.EXTERNAL_API_ROW_MAX_ATTEMPTS - 1,
-    soft_time_limit=settings.AGENTIC_TIMEOUT_SECONDS + 30,
-    time_limit=settings.AGENTIC_TIMEOUT_SECONDS + 90,
+    soft_time_limit=limits.row_soft_time_limit(),
+    time_limit=limits.row_time_limit(),
 )
 def external_match_row(self, job_id: str, row_id: int) -> None:
     """Process a single ApiTitleMatchRow. theater is always None — the
@@ -238,7 +249,7 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
     )
     from app.observability.context import LlmCallContext
     from app.title_matching import batch_io
-    from app.title_matching.agentic import AgenticError
+    from app.title_matching.agentic import AgenticError, AgenticThrottleError
     from app.title_matching.agentic.runner import run_agentic_match
     from app.title_matching import sandbox_semaphore
 
@@ -268,7 +279,7 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
 
     holder = None
     try:
-        holder = sandbox_semaphore.acquire(timeout=settings.AGENTIC_TIMEOUT_SECONDS + 30)
+        holder = sandbox_semaphore.acquire(timeout=limits.slot_wait_timeout())
         try:
             result = run_agentic_match(
                 title,
@@ -288,6 +299,26 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
                     job_type="ApiTitleMatchJob",
                 ),
             )
+        except AgenticThrottleError as exc:
+            # MUST be checked before the generic `except AgenticError` below
+            # — same ordering rationale as the internal batch row tasks.
+            # Does NOT touch row.attempts/is_retry bookkeeping (see the
+            # decorator comment above) — self.retry() here is pure Celery
+            # control flow, not a recorded row attempt.
+            if self.request.retries < self.max_retries:
+                countdown = limits.throttle_retry_countdown(self.request.retries)
+                logger.warning(
+                    "external_match_row throttled, retrying job=%s row=%s title=%r "
+                    "countdown=%s err=%s",
+                    job_id, row_id, title, countdown, exc,
+                )
+                raise self.retry(exc=exc, countdown=countdown)
+            logger.error(
+                "external_match_row throttle retries exhausted job=%s row=%s title=%r err=%s",
+                job_id, row_id, title, exc,
+            )
+            _record_failed_row(job_id, row_id, str(exc), is_retry=is_retry)
+            return
         except AgenticError as exc:
             if self.request.retries < self.max_retries:
                 logger.warning(

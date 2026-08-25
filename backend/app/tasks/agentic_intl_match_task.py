@@ -28,6 +28,7 @@ from sqlmodel import Session, select
 
 from app.celery_app import celery
 from app.config import settings
+from app.title_matching.agentic import limits
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +73,13 @@ def _bump_counters(session: Session, job_id: str, **increments: int) -> None:
     bind=True,
     name="app.tasks.agentic_intl_match_task.agentic_intl_batch_row",
     queue=AGENTIC_QUEUE,
-    max_retries=2,
-    soft_time_limit=settings.AGENTIC_TIMEOUT_SECONDS + 30,
-    time_limit=settings.AGENTIC_TIMEOUT_SECONDS + 90,
+    # Raised from 2 — see agentic_match_task.agentic_batch_row's identical
+    # comment: a throttle storm now shares this retry budget via the
+    # AgenticThrottleError branch below, and shouldn't be able to exhaust
+    # what genuine errors also need.
+    max_retries=4,
+    soft_time_limit=limits.row_soft_time_limit(),
+    time_limit=limits.row_time_limit(),
 )
 def agentic_intl_batch_row(
     self,
@@ -99,13 +104,13 @@ def agentic_intl_batch_row(
     )
     from app.observability.context import LlmCallContext
     from app.title_matching import batch_io
-    from app.title_matching.agentic import AgenticError
+    from app.title_matching.agentic import AgenticError, AgenticThrottleError
     from app.title_matching.agentic.runner import run_agentic_match
     from app.title_matching import sandbox_semaphore
 
     holder = None
     try:
-        holder = sandbox_semaphore.acquire(timeout=settings.AGENTIC_TIMEOUT_SECONDS + 30)
+        holder = sandbox_semaphore.acquire(timeout=limits.slot_wait_timeout())
         try:
             result = run_agentic_match(
                 title,
@@ -123,6 +128,24 @@ def agentic_intl_batch_row(
                     job_type="MovieTitleIntlBatchJob",
                 ),
             )
+        except AgenticThrottleError as exc:
+            # MUST be checked before the generic `except AgenticError` below
+            # — see agentic_match_task.agentic_batch_row's identical branch.
+            if self.request.retries < self.max_retries:
+                countdown = limits.throttle_retry_countdown(self.request.retries)
+                logger.warning(
+                    "agentic_intl_batch_row throttled, retrying job=%s row=%s title=%r "
+                    "countdown=%s err=%s",
+                    job_id, row_index, title, countdown, exc,
+                )
+                raise self.retry(exc=exc, countdown=countdown)
+            logger.error(
+                "agentic_intl_batch_row throttle retries exhausted job=%s row=%s "
+                "title=%r err=%s",
+                job_id, row_index, title, exc,
+            )
+            _record_failed_row(job_id, row_index, str(exc))
+            return
         except AgenticError as exc:
             if self.request.retries < self.max_retries:
                 logger.warning(

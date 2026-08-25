@@ -84,5 +84,16 @@ celery.conf.update(
             "task": "app.tasks.agentic_scheduler_task.sample_agentic_pool",
             "schedule": 30.0,
         },
+        # Phase 5 (windowed dispatch + round-robin top-up — the fairness fix,
+        # see local-docs/2026-08-25-agentic-batch-concurrency-design.md §4.4):
+        # tops up every active agentic job's dispatch window in rotation,
+        # sweeps for missed finalizes, and logs soak metrics. Also
+        # deliberately NOT in task_routes above, for the same reason as
+        # agentic-pool-sample — it must never land on the "agentic" queue and
+        # consume a scarce sandbox-call worker slot; it does no sandbox work.
+        "agentic-topup": {
+            "task": "app.tasks.agentic_scheduler_task.topup_agentic_queue",
+            "schedule": settings.AGENTIC_SCHED_TICK_SECONDS,
+        },
     },
 )

@@ -1,25 +1,36 @@
 """
-REAL-BROKER chord + retry integration test (NOT eager mode).
+REAL-BROKER windowed-dispatch + retry integration test (NOT eager mode).
 
-This is the one test that actually exercises Celery's chord-completion tracking
-combined with a per-member ``self.retry()`` against the Redis result backend —
-the exact interaction eager mode bypasses and that the design review flagged as
-a version-dependent Celery edge case. It proves, on this repo's real Celery
-5.6.3 + redis-py stack, that the chord callback (``finalize_batch``) fires
-EXACTLY ONCE, only after every member (including the one that retried) has
-finished, and that the retried row appears in the output exactly once with its
-eventual SUCCESSFUL result.
+Formerly (pre-Phase-5) a chord-completion test: with the chord gone (see
+app.tasks.agentic_match_task.dispatch_batch / enqueue_next_window /
+_after_row_terminal), this now proves the SAME retry-interaction guarantee
+against the counter-based, windowed-dispatch replacement -- on this repo's
+real Celery 5.6.3 + redis-py stack, ``finalize_batch`` fires EXACTLY ONCE,
+only once every row (including the one that retried) has reached a terminal
+state, and the retried row appears in the output exactly once with its
+eventual SUCCESSFUL result. dispatch still goes through the real
+``dispatch_batch`` entry point unchanged -- only its internals (windowed
+dispatch + self-refill instead of a chord) differ from what this test
+originally exercised.
 
 How it runs (no HTTP server needed):
   * a throwaway SQLite *file* DB is shared between this process and the worker
     subprocess (both read DATABASE_URL from the env);
-  * a dedicated Redis logical db (localhost:6379/15) is the broker + backend,
-    flushed before and after;
+  * a dedicated Redis logical db (db 15 on ``BATCH_TEST_REDIS_URL``, default
+    ``redis://localhost:6379/15`` -- override to e.g. ``redis://redis:6379/15``
+    when running inside a container on the compose network, where "localhost"
+    is NOT the Redis service) is the broker + backend, flushed before and
+    after;
   * an actual ``celery worker`` subprocess consumes the ``agentic`` queue via
     tests/_batch_worker_bootstrap.py, which patches run_agentic_match to a
     deterministic fail-first-then-succeed fake for one target row;
-  * the test dispatches the chord, then polls the job row in the DB (not HTTP)
-    until it reports ``completed`` or a generous timeout elapses.
+  * the test calls ``dispatch_batch`` directly (the real, non-chord dispatch
+    path), then polls the job row in the DB (not HTTP) until it reports
+    ``completed`` or a generous timeout elapses. With only 4 rows and the
+    default fallback window (``max(AGENTIC_JOB_WINDOW_MIN,
+    AGENTIC_BATCH_MAX_CONCURRENCY)`` = 4, since no beat tick has cached a
+    computed window here), all 4 rows are dispatched up front, same as the
+    old chord's behavior.
 
 Marked ``@pytest.mark.integration``. Redis IS reachable in this environment, so
 the test RUNS (it only skips if redis is genuinely unreachable — never silently
@@ -37,7 +48,10 @@ import uuid
 import pytest
 
 # ── real broker / backend + shared file DB for this test only ────────────────
-_REDIS_URL = "redis://localhost:6379/15"
+# Overridable via env: "localhost" is not the Redis service hostname inside a
+# container on the compose network (only the "redis" service name resolves
+# there) -- see BATCH_TEST_REDIS_URL in the module docstring above.
+_REDIS_URL = os.environ.get("BATCH_TEST_REDIS_URL", "redis://localhost:6379/15")
 _DB_FILE = f"/tmp/batch_chord_live_{uuid.uuid4().hex}.db"  # noqa: S108
 _DB_URL = f"sqlite:///{_DB_FILE}"
 
@@ -160,7 +174,14 @@ def _start_worker() -> subprocess.Popen:
     env["PYTHONPATH"] = _BACKEND_DIR + os.pathsep + env.get("PYTHONPATH", "")
 
     cmd = [
-        os.path.join(_BACKEND_DIR, ".venv", "bin", "celery"),
+        # `sys.executable -m celery` rather than a hardcoded .venv/bin/celery
+        # path: this must work identically whether pytest runs from a host
+        # .venv (sys.executable == that venv's python) or inside a container
+        # image with celery installed on the system interpreter and no
+        # working .venv/bin shebangs (no live volume mount there).
+        sys.executable,
+        "-m",
+        "celery",
         "-A",
         "tests._batch_worker_bootstrap",
         "worker",
@@ -210,7 +231,7 @@ def _drain(proc: subprocess.Popen) -> str:
 
 
 @pytest.mark.integration
-def test_chord_retry_fires_callback_once_with_correct_output(live_env):
+def test_windowed_dispatch_retry_fires_finalize_once_with_correct_output(live_env):
     engine = live_env["engine"]
 
     from sqlmodel import Session
@@ -251,7 +272,9 @@ def test_chord_retry_fires_callback_once_with_correct_output(live_env):
     try:
         _wait_worker_ready(worker)
 
-        # Publish the chord to the real broker.
+        # Dispatch via the real (non-chord) windowed-dispatch entry point --
+        # with only 4 rows and the default fallback window of 4 (see the
+        # module docstring), this publishes all 4 rows up front.
         from app.tasks.agentic_match_task import dispatch_batch
 
         dispatch_batch(job_id)

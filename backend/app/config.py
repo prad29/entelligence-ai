@@ -35,6 +35,21 @@ class Settings(BaseSettings):
     # Claude sandbox sidecar URL (set via CLAUDE_SANDBOX_URL env var)
     CLAUDE_SANDBOX_URL: str = "http://claude-sandbox:3100"
     AGENTIC_BATCH_MAX_CONCURRENCY: int = 2
+    # Bedrock-throttle retry/backoff on the sandbox call path (runner.py's
+    # _call_sandbox). AGENTIC_THROTTLE_MAX_RETRIES is IN-PROCESS fast-fail
+    # retries within a single _call_sandbox() invocation (never retried if
+    # the failed attempt was slow — see runner.py — because a slow failure
+    # means the claude CLI already spent its own internal retry budget and
+    # an immediate retry from here wouldn't help). AGENTIC_THROTTLE_BACKOFF_
+    # BASE_SECONDS is the base for that in-process exponential-backoff sleep.
+    # AGENTIC_THROTTLE_CELERY_BACKOFF_SECONDS is a SEPARATE, larger base for
+    # the Celery-level self.retry(countdown=...) once AgenticThrottleError
+    # is finally raised (limits.throttle_retry_countdown) — that backoff
+    # releases the sandbox semaphore slot for the whole wait, so it can
+    # afford to be much longer than the in-process one.
+    AGENTIC_THROTTLE_MAX_RETRIES: int = 1
+    AGENTIC_THROTTLE_BACKOFF_BASE_SECONDS: float = 2.0
+    AGENTIC_THROTTLE_CELERY_BACKOFF_SECONDS: int = 30
     # S3 bucket backing batch upload/output storage — required because backend,
     # celery-worker, and celery-agentic-worker are separate containers with no
     # shared filesystem; a local /tmp path written by one is invisible to another.

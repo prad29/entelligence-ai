@@ -34,6 +34,7 @@ from sqlmodel import Session, select
 
 from app.celery_app import celery
 from app.config import settings
+from app.title_matching.agentic import limits
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,15 @@ def _bump_counters(session: Session, job_id: str, **increments: int) -> None:
     bind=True,
     name="app.tasks.agentic_match_task.agentic_batch_row",
     queue=AGENTIC_QUEUE,
-    max_retries=2,
-    soft_time_limit=settings.AGENTIC_TIMEOUT_SECONDS + 30,
-    time_limit=settings.AGENTIC_TIMEOUT_SECONDS + 90,
+    # Raised from 2: a Bedrock throttle storm now consumes retries via the
+    # SAME self.request.retries counter as genuine AgenticError retries (see
+    # the AgenticThrottleError branch below), and a throttle-heavy stretch
+    # shouldn't be able to exhaust the retry budget that real errors also
+    # depend on. 4 gives real errors their original 2 retries' worth of
+    # headroom even if 1-2 throttle retries also land on this row.
+    max_retries=4,
+    soft_time_limit=limits.row_soft_time_limit(),
+    time_limit=limits.row_time_limit(),
 )
 def agentic_batch_row(
     self,
@@ -112,13 +119,13 @@ def agentic_batch_row(
     )
     from app.observability.context import LlmCallContext
     from app.title_matching import batch_io
-    from app.title_matching.agentic import AgenticError
+    from app.title_matching.agentic import AgenticError, AgenticThrottleError
     from app.title_matching.agentic.runner import run_agentic_match
     from app.title_matching import sandbox_semaphore
 
     holder = None
     try:
-        holder = sandbox_semaphore.acquire(timeout=settings.AGENTIC_TIMEOUT_SECONDS + 30)
+        holder = sandbox_semaphore.acquire(timeout=limits.slot_wait_timeout())
         try:
             result = run_agentic_match(
                 title,
@@ -134,6 +141,28 @@ def agentic_batch_row(
                     job_type="MovieTitleBatchJob",
                 ),
             )
+        except AgenticThrottleError as exc:
+            # MUST be checked before the generic `except AgenticError` below —
+            # AgenticThrottleError is a subclass, so ordering matters. A
+            # throttle backs off and re-queues the WHOLE row via Celery's own
+            # countdown (releasing the sandbox semaphore slot for the entire
+            # wait) instead of the tight in-process retry a generic
+            # AgenticError gets, since the fix for throttling is time, not a
+            # fast resubmission.
+            if self.request.retries < self.max_retries:
+                countdown = limits.throttle_retry_countdown(self.request.retries)
+                logger.warning(
+                    "agentic_batch_row throttled, retrying job=%s row=%s title=%r "
+                    "countdown=%s err=%s",
+                    job_id, row_index, title, countdown, exc,
+                )
+                raise self.retry(exc=exc, countdown=countdown)
+            logger.error(
+                "agentic_batch_row throttle retries exhausted job=%s row=%s title=%r err=%s",
+                job_id, row_index, title, exc,
+            )
+            _record_failed_row(job_id, row_index, str(exc))
+            return
         except AgenticError as exc:
             # Retry once; on the final attempt fall through to the failed-row path.
             if self.request.retries < self.max_retries:

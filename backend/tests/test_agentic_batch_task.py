@@ -361,7 +361,8 @@ def test_semaphore_caps_concurrency(local_redis):
     from app.title_matching import sandbox_semaphore as sem
     from app.config import settings
 
-    # Fill all slots (cap = AGENTIC_BATCH_MAX_CONCURRENCY, default 2).
+    # Fill all slots (cap = AGENTIC_BATCH_MAX_CONCURRENCY, read dynamically —
+    # do not hardcode this test to a specific default).
     holders = [
         sem.acquire(timeout=2, ttl=30, redis_client=local_redis)
         for _ in range(settings.AGENTIC_BATCH_MAX_CONCURRENCY)

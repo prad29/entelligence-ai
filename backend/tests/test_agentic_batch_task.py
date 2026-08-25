@@ -29,7 +29,8 @@ from sqlmodel.pool import StaticPool
 
 from app.models import MovieMaster, MovieTitleBatchJob
 from app.title_matching import batch_io
-from app.title_matching.agentic import AgenticError
+from app.title_matching.agentic import AgenticError, AgenticThrottleError
+from app.title_matching.agentic import limits
 
 
 @pytest.fixture
@@ -388,3 +389,116 @@ def test_semaphore_fails_open_when_redis_none():
     assert holder == sem.FAIL_OPEN_HOLDER
     # release of the sentinel is a no-op and never raises.
     sem.release(holder)
+
+
+# ---------------------------------------------------------------------------
+# (e) AgenticThrottleError branch — checked BEFORE the generic AgenticError
+#     branch, backs off via limits.throttle_retry_countdown, and (once
+#     retries are exhausted) falls into the exact same failed-row path as a
+#     generic AgenticError.
+# ---------------------------------------------------------------------------
+def test_throttle_error_retries_with_positive_countdown(patched_task, db_engine, fake_hash):
+    """A throttled row (retries < max_retries) must call self.retry with a
+    positive `countdown` kwarg, proving the throttle branch backs off at the
+    Celery level rather than retrying immediately like a generic
+    AgenticError."""
+    job_id = _make_job(db_engine)
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch, MagicMock
+    from celery.exceptions import Retry as CeleryRetry
+
+    def always_throttle(*a, **k):
+        raise AgenticThrottleError("bedrock throttled")
+
+    raw_fn = patched_task.agentic_batch_row.run.__func__
+    with patch.object(runner_mod, "run_agentic_match", side_effect=always_throttle), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"):
+        fake_self = MagicMock()
+        fake_self.request.retries = 0
+        fake_self.max_retries = 4
+        fake_self.retry.side_effect = CeleryRetry()
+
+        with pytest.raises(CeleryRetry):
+            raw_fn(fake_self, job_id, 0, "boom", None, None, False)
+
+        assert fake_self.retry.called
+        _, kwargs = fake_self.retry.call_args
+        assert "countdown" in kwargs
+        assert kwargs["countdown"] > 0
+        # And never falls through to the failed-row path while retries remain.
+        job = _get_job(db_engine, job_id)
+        assert job.processed == 0
+        assert job.failed == 0
+
+
+def test_throttle_retry_countdown_jitter_bounds():
+    """Sample throttle_retry_countdown(0) repeatedly and assert every value
+    lands within the documented jitter bounds: base * 2**retries * [0.5, 1.5],
+    i.e. for retries=0 and the default AGENTIC_THROTTLE_CELERY_BACKOFF_SECONDS
+    (30s), every sample must fall in [15, 45] seconds (rounded to the nearest
+    int, so allow +/-1 at the edges from rounding)."""
+    from app.config import settings
+
+    base = settings.AGENTIC_THROTTLE_CELERY_BACKOFF_SECONDS
+    lower = int(base * 1 * 0.5)
+    upper = int(base * 1 * 1.5) + 1  # +1 for rounding at the upper edge
+
+    samples = [limits.throttle_retry_countdown(0) for _ in range(40)]
+    assert len(samples) == 40
+    for value in samples:
+        assert lower <= value <= upper, (value, lower, upper)
+    # Not a constant -- jitter is actually doing something across 40 samples.
+    assert len(set(samples)) > 1
+
+
+def test_throttle_error_exhausted_records_failed_row_and_does_not_retry_again(
+    patched_task, db_engine, fake_hash
+):
+    """Once retries == max_retries, a throttled row must land on the SAME
+    failed-row path a generic AgenticError uses (processed+failed bumped,
+    row stored as a failure) -- and self.retry must NOT be called again."""
+    job_id = _make_job(db_engine)
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch, MagicMock
+
+    def always_throttle(*a, **k):
+        raise AgenticThrottleError("bedrock throttled, budget exhausted")
+
+    raw_fn = patched_task.agentic_batch_row.run.__func__
+    with patch.object(runner_mod, "run_agentic_match", side_effect=always_throttle), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"):
+        fake_self = MagicMock()
+        fake_self.request.retries = 4
+        fake_self.max_retries = 4
+
+        raw_fn(fake_self, job_id, 0, "boom", None, None, False)
+
+    assert not fake_self.retry.called
+    job = _get_job(db_engine, job_id)
+    assert job.processed == 1
+    assert job.failed == 1
+    assert job.matched == 0
+    assert job.no_match == 0
+    stored = json.loads(fake_hash["0"])
+    assert stored["present_in_db"] == "No"
+    assert "bedrock throttled" in stored["reasoning"]
+
+
+# ---------------------------------------------------------------------------
+# (f) Regression guard: the exact ordering violated by the original
+#     timeout-math bug (finding #1) must hold no matter how the derivation
+#     formulas in limits.py are tuned later.
+# ---------------------------------------------------------------------------
+def test_limits_ordering_regression_guard():
+    assert (
+        limits.holder_ttl_seconds()
+        > limits.row_time_limit()
+        > limits.row_soft_time_limit()
+        > limits.slot_wait_timeout()
+    )

@@ -170,9 +170,15 @@ def agentic_intl_batch_row(
                 "reasoning": getattr(result, "reasoning", "") or "",
                 "present_in_db": present,
             }
-            _store_row_result(job_id, row_index, row_result)
-            outcome_col = "matched" if present == "Yes" else "no_match"
-            _bump_counters(session, job_id, processed=1, **{outcome_col: 1})
+            if _store_row_result(job_id, row_index, row_result):
+                outcome_col = "matched" if present == "Yes" else "no_match"
+                _bump_counters(session, job_id, processed=1, **{outcome_col: 1})
+            else:
+                logger.warning(
+                    "agentic_intl_batch_row: duplicate row execution ignored, "
+                    "not re-bumping counters job=%s row=%s", job_id, row_index,
+                )
+        _after_row_terminal(job_id)
     except Retry:
         raise
     except BaseException as exc:  # noqa: BLE001
@@ -202,18 +208,54 @@ def _failure_message(exc: BaseException) -> str:
     return text or f"{type(exc).__name__}"
 
 
-def _store_row_result(job_id: str, row_index: int, row_result: dict) -> None:
+def _store_row_result(job_id: str, row_index: int, row_result: dict) -> bool:
+    """Store this row's result under its index, once.
+
+    See agentic_match_task._store_row_result's identical docstring — uses
+    Redis ``HSETNX`` so a row executed twice only ever writes its result
+    the first time; callers must only bump counters when this returns True.
+    """
     r = _get_redis()
-    r.hset(_results_key(job_id), str(row_index), json.dumps(row_result))
+    return bool(r.hsetnx(_results_key(job_id), str(row_index), json.dumps(row_result)))
 
 
 def _record_failed_row(job_id: str, row_index: int, message: str) -> None:
     from app.database import engine
     from app.title_matching import batch_io
 
-    _store_row_result(job_id, row_index, batch_io.failed_row_result(message))
     with Session(engine) as session:
-        _bump_counters(session, job_id, processed=1, failed=1)
+        if _store_row_result(job_id, row_index, batch_io.failed_row_result(message)):
+            _bump_counters(session, job_id, processed=1, failed=1)
+        else:
+            logger.warning(
+                "agentic_intl_batch_row: duplicate row execution ignored, "
+                "not re-bumping counters job=%s row=%s", job_id, row_index,
+            )
+    _after_row_terminal(job_id)
+
+
+def _after_row_terminal(job_id: str) -> None:
+    """Counter-based completion trigger — see agentic_match_task's identical
+    docstring. Call at the end of every TERMINAL row outcome, never on the
+    Celery-retry path; never raises; the chord remains the backstop."""
+    from app.database import engine
+    from app.models import MovieTitleIntlBatchJob
+    from app.title_matching.dispatch_window import claim_finalize
+
+    try:
+        with Session(engine) as session:
+            won = claim_finalize(
+                session,
+                MovieTitleIntlBatchJob,
+                job_id,
+                completion_predicate=(
+                    MovieTitleIntlBatchJob.processed >= MovieTitleIntlBatchJob.total
+                ),
+            )
+        if won:
+            finalize_intl_batch.apply_async(args=[None, job_id])
+    except Exception:  # noqa: BLE001 - must never escape into the row task
+        logger.exception("_after_row_terminal failed job=%s", job_id)
 
 
 @celery.task(

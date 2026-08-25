@@ -189,9 +189,15 @@ def agentic_batch_row(
                 "reasoning": getattr(result, "reasoning", "") or "",
                 "present_in_db": present,
             }
-            _store_row_result(job_id, row_index, row_result)
-            outcome_col = "matched" if present == "Yes" else "no_match"
-            _bump_counters(session, job_id, processed=1, **{outcome_col: 1})
+            if _store_row_result(job_id, row_index, row_result):
+                outcome_col = "matched" if present == "Yes" else "no_match"
+                _bump_counters(session, job_id, processed=1, **{outcome_col: 1})
+            else:
+                logger.warning(
+                    "agentic_batch_row: duplicate row execution ignored, not "
+                    "re-bumping counters job=%s row=%s", job_id, row_index,
+                )
+        _after_row_terminal(job_id)
     except Retry:
         # celery's self.retry() control-flow signal — MUST propagate so the row
         # is rescheduled. Not a failure of this row.
@@ -233,18 +239,65 @@ def _failure_message(exc: BaseException) -> str:
     return text or f"{type(exc).__name__}"
 
 
-def _store_row_result(job_id: str, row_index: int, row_result: dict) -> None:
+def _store_row_result(job_id: str, row_index: int, row_result: dict) -> bool:
+    """Store this row's result under its index, once.
+
+    Uses Redis ``HSETNX`` so a row executed twice (Celery retry racing a
+    redelivery, at-least-once redelivery, a future repair sweep) only ever
+    writes its result the first time. Returns True if THIS call was the
+    first writer -- callers MUST only bump counters when this is True, or a
+    duplicate execution double-counts processed/matched/no_match/failed and
+    could double-trigger finalize. Returns False if a result for this index
+    already existed.
+    """
     r = _get_redis()
-    r.hset(_results_key(job_id), str(row_index), json.dumps(row_result))
+    return bool(r.hsetnx(_results_key(job_id), str(row_index), json.dumps(row_result)))
 
 
 def _record_failed_row(job_id: str, row_index: int, message: str) -> None:
     from app.database import engine
     from app.title_matching import batch_io
 
-    _store_row_result(job_id, row_index, batch_io.failed_row_result(message))
     with Session(engine) as session:
-        _bump_counters(session, job_id, processed=1, failed=1)
+        if _store_row_result(job_id, row_index, batch_io.failed_row_result(message)):
+            _bump_counters(session, job_id, processed=1, failed=1)
+        else:
+            logger.warning(
+                "agentic_batch_row: duplicate row execution ignored, not "
+                "re-bumping counters job=%s row=%s", job_id, row_index,
+            )
+    _after_row_terminal(job_id)
+
+
+def _after_row_terminal(job_id: str) -> None:
+    """Counter-based completion trigger.
+
+    Call this at the end of every TERMINAL row outcome (success or a
+    recorded failure), after the counter bump for that outcome has
+    committed -- NEVER on the Celery-retry path (a retried row hasn't
+    finished and hasn't incremented ``processed``).
+
+    Never raises: a failure here must not turn a completed row into a
+    failed one. The Celery chord (still the active dispatch/completion
+    mechanism this phase) is the backstop if this trigger is ever missed --
+    jobs still complete via the chord exactly as before.
+    """
+    from app.database import engine
+    from app.models import MovieTitleBatchJob
+    from app.title_matching.dispatch_window import claim_finalize
+
+    try:
+        with Session(engine) as session:
+            won = claim_finalize(
+                session,
+                MovieTitleBatchJob,
+                job_id,
+                completion_predicate=MovieTitleBatchJob.processed >= MovieTitleBatchJob.total,
+            )
+        if won:
+            finalize_batch.apply_async(args=[None, job_id])
+    except Exception:  # noqa: BLE001 - must never escape into the row task
+        logger.exception("_after_row_terminal failed job=%s", job_id)
 
 
 @celery.task(

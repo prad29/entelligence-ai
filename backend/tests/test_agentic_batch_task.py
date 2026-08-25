@@ -74,6 +74,16 @@ def patched_task(monkeypatch, db_engine, fake_hash):
     from unittest.mock import MagicMock
 
     monkeypatch.setattr(task_mod.finalize_batch, "apply_async", MagicMock())
+
+    # Phase 5: _after_row_terminal self-refills (enqueue_next_window) when it
+    # does NOT win the finalize claim. These narrow single-row unit tests
+    # invoke agentic_batch_row.run(...) directly without ever going through
+    # dispatch_batch, so the job's `dispatched` cursor never advances --
+    # self-refill is not what's under test here (see
+    # test_enqueue_next_window_* below for that), so it's mocked out like
+    # finalize's apply_async above. Tests that care about it firing assert on
+    # this mock directly.
+    monkeypatch.setattr(task_mod, "enqueue_next_window", MagicMock(return_value=0))
     return task_mod
 
 
@@ -615,6 +625,173 @@ def test_after_row_terminal_second_claim_attempt_is_a_noop(patched_task, db_engi
     # calling it again for the same job) -- must be a no-op.
     patched_task._after_row_terminal(job_id)
     patched_task.finalize_batch.apply_async.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# (h) Phase 5 -- self-refill: _after_row_terminal calls enqueue_next_window
+#     exactly when it does NOT win the finalize claim, with the configured
+#     round-robin chunk size.
+# ---------------------------------------------------------------------------
+def test_after_row_terminal_self_refills_when_not_finalizing(patched_task, db_engine, fake_hash):
+    job_id = _make_job(db_engine, total=3)
+    with Session(db_engine) as s:
+        s.add(MovieMaster(id=42, movie_title="Whatever"))
+        s.commit()
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch
+
+    from app.config import settings
+
+    with patch.object(runner_mod, "run_agentic_match", side_effect=_fake_run_ok), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"):
+        patched_task.agentic_batch_row.run(job_id, 0, "Row0", None, None, False)
+
+    patched_task.finalize_batch.apply_async.assert_not_called()
+    patched_task.enqueue_next_window.assert_called_once_with(
+        job_id, settings.AGENTIC_ROUNDROBIN_CHUNK
+    )
+
+
+def test_after_row_terminal_does_not_self_refill_when_finalizing(patched_task, db_engine, fake_hash):
+    job_id = _make_job(db_engine, total=1)
+    with Session(db_engine) as s:
+        s.add(MovieMaster(id=42, movie_title="Whatever"))
+        s.commit()
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch
+
+    with patch.object(runner_mod, "run_agentic_match", side_effect=_fake_run_ok), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"):
+        patched_task.agentic_batch_row.run(job_id, 0, "Row0", None, None, False)
+
+    patched_task.finalize_batch.apply_async.assert_called_once_with(args=[None, job_id])
+    patched_task.enqueue_next_window.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# (i) Phase 5 -- enqueue_next_window: claims via dispatch_window.claim_row_window,
+#     fetches cached row args, publishes via agentic_batch_row.apply_async.
+# ---------------------------------------------------------------------------
+def test_enqueue_next_window_publishes_claimed_rows(monkeypatch, db_engine):
+    import app.tasks.agentic_match_task as task_mod
+
+    monkeypatch.setattr("app.database.engine", db_engine, raising=False)
+
+    job_id = "job-enqueue-1"
+    with Session(db_engine) as s:
+        s.add(MovieTitleBatchJob(id=job_id, status="processing", total=5, dispatched=0))
+        s.commit()
+
+    # Pre-cache row args directly, bypassing Redis (unit test -- no live
+    # Redis dependency needed for this).
+    cached = {
+        0: ["Row0", None, None, False],
+        1: ["Row1", None, None, False],
+    }
+    monkeypatch.setattr(task_mod, "_row_args_for", lambda jid, idxs: {i: cached[i] for i in idxs if i in cached})
+
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(task_mod.agentic_batch_row, "apply_async", MagicMock())
+
+    published = task_mod.enqueue_next_window(job_id, 2)
+
+    assert published == 2
+    job = _get_job(db_engine, job_id)
+    assert job.dispatched == 2
+
+    calls = task_mod.agentic_batch_row.apply_async.call_args_list
+    assert len(calls) == 2
+    published_indices = sorted(c.kwargs["args"][1] for c in calls)
+    assert published_indices == [0, 1]
+    for c in calls:
+        assert c.kwargs["queue"] == task_mod.AGENTIC_QUEUE
+
+
+def test_enqueue_next_window_records_unrecoverable_row_as_failed(monkeypatch, db_engine):
+    import app.tasks.agentic_match_task as task_mod
+
+    monkeypatch.setattr("app.database.engine", db_engine, raising=False)
+
+    job_id = "job-enqueue-2"
+    with Session(db_engine) as s:
+        s.add(MovieTitleBatchJob(id=job_id, status="processing", total=2, dispatched=0))
+        s.commit()
+
+    # No cached args recoverable for either index (simulates cache miss +
+    # upload gone).
+    monkeypatch.setattr(task_mod, "_row_args_for", lambda jid, idxs: {})
+
+    fake_hash = {}
+
+    def _store(jid, idx, row_result):
+        fake_hash[str(idx)] = row_result
+        return True
+
+    monkeypatch.setattr(task_mod, "_store_row_result", _store)
+
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(task_mod.agentic_batch_row, "apply_async", MagicMock())
+    monkeypatch.setattr(task_mod.finalize_batch, "apply_async", MagicMock())
+
+    published = task_mod.enqueue_next_window(job_id, 2)
+
+    assert published == 0
+    task_mod.agentic_batch_row.apply_async.assert_not_called()
+
+    job = _get_job(db_engine, job_id)
+    # Both unrecoverable rows recorded as failed -> processed/failed bumped,
+    # and since that brings processed to total, finalize was triggered.
+    assert job.processed == 2
+    assert job.failed == 2
+    task_mod.finalize_batch.apply_async.assert_called_once_with(args=[None, job_id])
+    assert set(fake_hash.keys()) == {"0", "1"}
+
+
+def test_enqueue_next_window_zero_limit_is_noop(monkeypatch, db_engine):
+    import app.tasks.agentic_match_task as task_mod
+
+    monkeypatch.setattr("app.database.engine", db_engine, raising=False)
+
+    job_id = "job-enqueue-3"
+    with Session(db_engine) as s:
+        s.add(MovieTitleBatchJob(id=job_id, status="processing", total=5, dispatched=0))
+        s.commit()
+
+    assert task_mod.enqueue_next_window(job_id, 0) == 0
+    assert _get_job(db_engine, job_id).dispatched == 0
+
+
+# ---------------------------------------------------------------------------
+# (j) Phase 5 -- scheduler_state
+# ---------------------------------------------------------------------------
+def test_scheduler_state_reports_outstanding_and_remaining(monkeypatch, db_engine):
+    import app.tasks.agentic_match_task as task_mod
+
+    monkeypatch.setattr("app.database.engine", db_engine, raising=False)
+
+    with Session(db_engine) as s:
+        # dispatched=4, processed=2, total=10 -> outstanding=2, remaining=6
+        s.add(MovieTitleBatchJob(id="j1", status="processing", total=10, dispatched=4, processed=2))
+        # fully dispatched + processed -> excluded (finalize sweep's job, not this)
+        s.add(MovieTitleBatchJob(id="j2", status="processing", total=3, dispatched=3, processed=3))
+        # not processing -> excluded
+        s.add(MovieTitleBatchJob(id="j3", status="completed", total=3, dispatched=3, processed=3))
+        s.commit()
+
+    states = task_mod.scheduler_state()
+    by_id = {s.job_id: s for s in states}
+    assert set(by_id) == {"j1"}
+    assert by_id["j1"].kind == "domestic"
+    assert by_id["j1"].outstanding == 2
+    assert by_id["j1"].remaining == 6
 
 
 def test_hsetnx_duplicate_row_execution_does_not_double_bump(db_engine):

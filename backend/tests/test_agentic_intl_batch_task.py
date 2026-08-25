@@ -61,6 +61,11 @@ def patched_task(monkeypatch, db_engine, fake_hash):
     from unittest.mock import MagicMock
 
     monkeypatch.setattr(task_mod.finalize_intl_batch, "apply_async", MagicMock())
+
+    # Phase 5: see test_agentic_batch_task.py's identical rationale -- these
+    # narrow single-row unit tests never go through dispatch_intl_batch, so
+    # self-refill isn't under test here.
+    monkeypatch.setattr(task_mod, "enqueue_next_window", MagicMock(return_value=0))
     return task_mod
 
 
@@ -162,6 +167,80 @@ def test_finalize_claimed_exactly_once_when_last_row_fails(patched_task, db_engi
     assert job.failed == 1
     assert job.finalize_claimed_at is not None
     patched_task.finalize_intl_batch.apply_async.assert_called_once_with(args=[None, job_id])
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 -- self-refill + enqueue_next_window/scheduler_state
+# ---------------------------------------------------------------------------
+def test_after_row_terminal_self_refills_when_not_finalizing(patched_task, db_engine, fake_hash):
+    job_id = _make_job(db_engine, total=2)
+    with Session(db_engine) as s:
+        s.add(MovieMasterIntl(id=42, movie_id=42, movie_title="Whatever", country="GB"))
+        s.commit()
+
+    import app.title_matching.agentic.runner as runner_mod
+    import app.title_matching.sandbox_semaphore as sem
+    from unittest.mock import patch
+
+    from app.config import settings
+
+    with patch.object(runner_mod, "run_agentic_match", side_effect=_fake_run_ok), \
+         patch.object(sem, "acquire", return_value="h"), \
+         patch.object(sem, "release"):
+        patched_task.agentic_intl_batch_row.run(job_id, 0, "Row0", None, None, "GB", False)
+
+    patched_task.finalize_intl_batch.apply_async.assert_not_called()
+    patched_task.enqueue_next_window.assert_called_once_with(
+        job_id, settings.AGENTIC_ROUNDROBIN_CHUNK
+    )
+
+
+def test_enqueue_next_window_publishes_claimed_rows(monkeypatch, db_engine):
+    import app.tasks.agentic_intl_match_task as task_mod
+
+    monkeypatch.setattr("app.database.engine", db_engine, raising=False)
+
+    job_id = "intl-job-enqueue-1"
+    with Session(db_engine) as s:
+        s.add(MovieTitleIntlBatchJob(id=job_id, status="processing", total=5, dispatched=0))
+        s.commit()
+
+    cached = {
+        0: ["Row0", None, None, "GB", False],
+        1: ["Row1", None, None, "FR", False],
+    }
+    monkeypatch.setattr(task_mod, "_row_args_for", lambda jid, idxs: {i: cached[i] for i in idxs if i in cached})
+
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(task_mod.agentic_intl_batch_row, "apply_async", MagicMock())
+
+    published = task_mod.enqueue_next_window(job_id, 2)
+
+    assert published == 2
+    assert _get_job(db_engine, job_id).dispatched == 2
+    calls = task_mod.agentic_intl_batch_row.apply_async.call_args_list
+    assert len(calls) == 2
+    published_indices = sorted(c.kwargs["args"][1] for c in calls)
+    assert published_indices == [0, 1]
+
+
+def test_scheduler_state_reports_outstanding_and_remaining(monkeypatch, db_engine):
+    import app.tasks.agentic_intl_match_task as task_mod
+
+    monkeypatch.setattr("app.database.engine", db_engine, raising=False)
+
+    with Session(db_engine) as s:
+        s.add(MovieTitleIntlBatchJob(id="j1", status="processing", total=10, dispatched=4, processed=2))
+        s.add(MovieTitleIntlBatchJob(id="j2", status="processing", total=3, dispatched=3, processed=3))
+        s.commit()
+
+    states = task_mod.scheduler_state()
+    by_id = {s.job_id: s for s in states}
+    assert set(by_id) == {"j1"}
+    assert by_id["j1"].kind == "international"
+    assert by_id["j1"].outstanding == 2
+    assert by_id["j1"].remaining == 6
 
 
 def test_hsetnx_duplicate_row_execution_does_not_double_bump():

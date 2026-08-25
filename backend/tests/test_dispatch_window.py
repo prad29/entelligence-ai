@@ -14,8 +14,17 @@ from sqlalchemy import update
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
-from app.models import ApiTitleMatchJob, ApiTitleMatchRow, MovieTitleBatchJob
-from app.title_matching.dispatch_window import JobDispatchState, claim_finalize
+from app.models import ApiTitleMatchJob, ApiTitleMatchRow, MovieTitleBatchJob, MovieTitleIntlBatchJob
+from app.title_matching import dispatch_window
+from app.title_matching.dispatch_window import (
+    JobDispatchState,
+    claim_finalize,
+    claim_row_window,
+    compute_job_window,
+    read_job_window,
+    target_queue_depth,
+    write_job_window,
+)
 
 
 @pytest.fixture
@@ -207,3 +216,182 @@ def test_job_dispatch_state_is_a_plain_frozen_dataclass():
     assert state.remaining == 5
     with pytest.raises(Exception):
         state.kind = "international"  # frozen -> AttributeError/FrozenInstanceError
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 -- claim_row_window
+# ---------------------------------------------------------------------------
+def _make_dispatch_job(engine, total=10, dispatched=0, status="processing", job_id="disp-job-1"):
+    with Session(engine) as s:
+        s.add(MovieTitleBatchJob(id=job_id, status=status, total=total, dispatched=dispatched))
+        s.commit()
+    return job_id
+
+
+def test_claim_row_window_disjoint_sequential_claims(db_engine):
+    job_id = _make_dispatch_job(db_engine, total=10, dispatched=0)
+
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleBatchJob, job_id, 3) == (0, 3)
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleBatchJob, job_id, 3) == (3, 6)
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleBatchJob, job_id, 10) == (6, 10)
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleBatchJob, job_id, 10) == (0, 0)
+
+
+def test_claim_row_window_not_processing_returns_zero(db_engine):
+    job_id = _make_dispatch_job(db_engine, total=10, dispatched=0, status="queued")
+
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleBatchJob, job_id, 3) == (0, 0)
+
+
+def test_claim_row_window_zero_or_negative_limit_returns_zero(db_engine):
+    job_id = _make_dispatch_job(db_engine, total=10, dispatched=0)
+
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleBatchJob, job_id, 0) == (0, 0)
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleBatchJob, job_id, -5) == (0, 0)
+
+
+def test_claim_row_window_missing_job_returns_zero(db_engine):
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleBatchJob, "does-not-exist", 3) == (0, 0)
+
+
+def test_claim_row_window_works_identically_for_intl_model(db_engine):
+    job_id = "intl-disp-1"
+    with Session(db_engine) as s:
+        s.add(MovieTitleIntlBatchJob(id=job_id, status="processing", total=4, dispatched=0))
+        s.commit()
+
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleIntlBatchJob, job_id, 4) == (0, 4)
+    with Session(db_engine) as s:
+        assert claim_row_window(s, MovieTitleIntlBatchJob, job_id, 4) == (0, 0)
+
+
+def test_claim_row_window_never_overlaps_under_contention(db_engine):
+    """Simulate contention: repeatedly claiming small windows concurrently
+    (sequential calls standing in for overlapping callers -- the CAS
+    guarantee doesn't depend on true thread concurrency to prove disjointness)
+    must never produce overlapping [from, to) ranges."""
+    job_id = _make_dispatch_job(db_engine, total=50, dispatched=0)
+
+    claims = []
+    with Session(db_engine) as s:
+        for _ in range(20):
+            frm, to = claim_row_window(s, MovieTitleBatchJob, job_id, 3)
+            if to > frm:
+                claims.append((frm, to))
+
+    total_claimed = sum(to - frm for frm, to in claims)
+    assert total_claimed == 50
+    covered = set()
+    for frm, to in claims:
+        rng = set(range(frm, to))
+        assert not (rng & covered), f"overlap detected: {frm, to} vs already-covered {covered}"
+        covered |= rng
+    assert covered == set(range(50))
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 -- compute_job_window / target_queue_depth
+# ---------------------------------------------------------------------------
+def test_target_queue_depth_auto_derives_from_max_concurrency(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "AGENTIC_QUEUE_TARGET_DEPTH", 0)
+    monkeypatch.setattr(settings, "AGENTIC_BATCH_MAX_CONCURRENCY", 4)
+    assert target_queue_depth() == 8
+
+
+def test_target_queue_depth_explicit_override(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "AGENTIC_QUEUE_TARGET_DEPTH", 25)
+    assert target_queue_depth() == 25
+
+
+def test_compute_job_window_single_job_gets_full_depth(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "AGENTIC_QUEUE_TARGET_DEPTH", 8)
+    monkeypatch.setattr(settings, "AGENTIC_JOB_WINDOW_MIN", 2)
+    assert compute_job_window(1) == 8
+    assert compute_job_window(0) == 8
+
+
+def test_compute_job_window_divides_across_active_jobs(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "AGENTIC_QUEUE_TARGET_DEPTH", 8)
+    monkeypatch.setattr(settings, "AGENTIC_JOB_WINDOW_MIN", 2)
+    assert compute_job_window(4) == 2
+
+
+def test_compute_job_window_floors_at_job_window_min(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "AGENTIC_QUEUE_TARGET_DEPTH", 8)
+    monkeypatch.setattr(settings, "AGENTIC_JOB_WINDOW_MIN", 2)
+    assert compute_job_window(99) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 -- write_job_window / read_job_window
+# ---------------------------------------------------------------------------
+def test_write_then_read_job_window_round_trips(monkeypatch):
+    import redis
+
+    try:
+        client = redis.Redis.from_url("redis://localhost:6379/0")
+        client.ping()
+    except Exception:
+        pytest.skip("local redis not reachable at localhost:6379")
+
+    write_job_window(7, redis_client=client)
+    try:
+        assert read_job_window(redis_client=client) == 7
+    finally:
+        client.delete(dispatch_window._JOB_WINDOW_KEY)
+
+
+def test_read_job_window_returns_fallback_when_redis_unavailable(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "AGENTIC_JOB_WINDOW_MIN", 2)
+    monkeypatch.setattr(settings, "AGENTIC_BATCH_MAX_CONCURRENCY", 4)
+    monkeypatch.setattr(dispatch_window, "_get_redis", lambda: (_ for _ in ()).throw(ConnectionError("down")))
+
+    assert read_job_window() == 4  # max(2, 4)
+
+
+def test_read_job_window_returns_fallback_when_key_missing():
+    from app.config import settings
+
+    class _EmptyRedis:
+        def get(self, key):
+            return None
+
+    expected = max(settings.AGENTIC_JOB_WINDOW_MIN, settings.AGENTIC_BATCH_MAX_CONCURRENCY)
+    assert read_job_window(redis_client=_EmptyRedis()) == expected
+
+
+def test_write_job_window_never_raises_when_redis_unavailable():
+    class _RaisingRedis:
+        def set(self, *a, **k):
+            raise ConnectionError("down")
+
+    write_job_window(5, redis_client=_RaisingRedis())  # must not raise
+
+
+def test_read_job_window_never_raises_when_client_raises():
+    class _RaisingRedis:
+        def get(self, key):
+            raise ConnectionError("down")
+
+    assert isinstance(read_job_window(redis_client=_RaisingRedis()), int)

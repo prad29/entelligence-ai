@@ -123,12 +123,17 @@ def test_sample_agentic_pool_reports_active_jobs_across_all_three_kinds(monkeypa
     monkeypatch.setattr(sched, "queue_depth", lambda *a, **k: 7)
     monkeypatch.setattr(sched, "holder_count", lambda *a, **k: 2)
 
+    from app.config import settings
+
     result = sched.sample_agentic_pool()
 
     assert result["ok"] is True
     assert result["queue_depth"] == 7
     assert result["semaphore_holders"] == 2
-    assert result["max_concurrency"] == 2  # AGENTIC_BATCH_MAX_CONCURRENCY default
+    # Read from settings rather than hardcoding — this must track whatever
+    # AGENTIC_BATCH_MAX_CONCURRENCY is currently configured to, not a
+    # particular historical default.
+    assert result["max_concurrency"] == settings.AGENTIC_BATCH_MAX_CONCURRENCY
     # 2 domestic + 1 intl + 1 external = 4 processing jobs.
     assert result["active_jobs"] == 4
 

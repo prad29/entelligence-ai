@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     AGENTIC_USE_BEDROCK: bool = True
     # Claude sandbox sidecar URL (set via CLAUDE_SANDBOX_URL env var)
     CLAUDE_SANDBOX_URL: str = "http://claude-sandbox:3100"
-    AGENTIC_BATCH_MAX_CONCURRENCY: int = 2
+    AGENTIC_BATCH_MAX_CONCURRENCY: int = 4
     # Bedrock-throttle retry/backoff on the sandbox call path (runner.py's
     # _call_sandbox). AGENTIC_THROTTLE_MAX_RETRIES is IN-PROCESS fast-fail
     # retries within a single _call_sandbox() invocation (never retried if

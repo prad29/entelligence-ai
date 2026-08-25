@@ -26,6 +26,15 @@ ECR_CLAUDE_SANDBOX=${ECR_CLAUDE_SANDBOX}
 IMAGE_TAG=${IMAGE_TAG}
 EOF
 
+# docker-compose.prod.yml's celery-agentic-worker command interpolates
+# ${AGENTIC_BATCH_MAX_CONCURRENCY} at `docker compose` parse time, which reads
+# ONLY .env.compose (passed via --env-file below) — never /app/.env.prod, which
+# is a separate file read at container-runtime by FastAPI/Celery via env_file.
+# Forward the value across so changing it in one place (.env.prod) is enough
+# to move both the semaphore cap and the worker's actual --concurrency flag.
+grep '^AGENTIC_BATCH_MAX_CONCURRENCY=' /app/.env.prod >> /app/.env.compose \
+  || echo 'AGENTIC_BATCH_MAX_CONCURRENCY=4' >> /app/.env.compose
+
 # Start all services
 docker compose -f docker-compose.prod.yml --env-file .env.compose up -d
 

@@ -68,3 +68,9 @@ local-docs/
 
 # Subagent-driven-development scratch workspace (ledger, briefs, reports)
 .superpowers/
+
+# scripts/mmvision.py's runtime cache/output/downloaded-image dirs — always
+# regenerated at the repo root when run from there, never source.
+/.mmvision-cache/
+/downloads/
+/out/

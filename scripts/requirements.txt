@@ -1,0 +1,7 @@
+boto3>=1.35.60
+pandas
+openpyxl
+pillow
+requests
+pyyaml
+tabulate

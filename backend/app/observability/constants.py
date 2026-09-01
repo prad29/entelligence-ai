@@ -15,19 +15,30 @@ TASK_DOMESTIC_MAPPING = "domestic_mapping"
 TASK_INTL_MAPPING = "intl_mapping"
 TASK_AMENITY_DETECTION = "amenity_detection"
 TASK_MOVIE_FORMAT_DETECTION = "movie_format_detection"
+# Cinema lobby marketing-material image extraction (Qwen 3-VL on Bedrock,
+# app/lobby_check/) — see docs/plans/2026-09-01-lobby-check-design.md §6.1.
+TASK_LOBBY_CHECK = "lobby_check"
 
 TASK_TYPES: tuple[str, ...] = (
     TASK_DOMESTIC_MAPPING,
     TASK_INTL_MAPPING,
     TASK_AMENITY_DETECTION,
     TASK_MOVIE_FORMAT_DETECTION,
+    TASK_LOBBY_CHECK,
 )
 
 # --- call_path (spec §5) -----------------------------------------------------
 PATH_BEDROCK_DIRECT = "bedrock_direct"
 PATH_AGENTIC_CLI = "agentic_cli"
+# A third, genuinely distinct usage shape: boto3's Converse API returns
+# `usage` inline in the response dict (camelCase inputTokens/outputTokens),
+# unlike bedrock_direct's raw-httpx `invoke` (HTTP header / snake_case body
+# fields — see bedrock_usage.extract_bedrock_usage) or agentic_cli's
+# stream-json result event. Reusing bedrock_direct would make "which
+# extractor parses this row's usage" un-derivable from the log.
+PATH_BEDROCK_CONVERSE = "bedrock_converse"
 
-CALL_PATHS: tuple[str, ...] = (PATH_BEDROCK_DIRECT, PATH_AGENTIC_CLI)
+CALL_PATHS: tuple[str, ...] = (PATH_BEDROCK_DIRECT, PATH_AGENTIC_CLI, PATH_BEDROCK_CONVERSE)
 
 # --- caller_type (spec §3 — no portal auth; portal is a single bucket) -------
 CALLER_PORTAL = "portal"

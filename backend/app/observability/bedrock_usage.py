@@ -92,6 +92,30 @@ def extract_bedrock_usage(
     )
 
 
+def extract_converse_usage(response: Optional[dict]) -> TokenUsage:
+    """Best-effort token counts for one boto3 Converse API response
+    (app/lobby_check/extractor.py, PATH_BEDROCK_CONVERSE).
+
+    Converse's usage shape is genuinely different from extract_bedrock_usage
+    above: camelCase keys inline in the response dict
+    (`response["usage"]["inputTokens"]`), never in HTTP headers and never
+    snake_case — do NOT extend extract_bedrock_usage with these keys, since
+    two response shapes with silently overlapping fallbacks is how a wrong
+    token count goes unnoticed. Never raises; a missing/malformed usage
+    block yields zeros.
+    """
+    usage = response.get("usage") if isinstance(response, dict) else None
+    if not isinstance(usage, dict):
+        usage = {}
+
+    return TokenUsage(
+        input_tokens=_as_int(usage.get("inputTokens")),
+        output_tokens=_as_int(usage.get("outputTokens")),
+        cache_read_tokens=_as_int(usage.get("cacheReadInputTokens")),
+        cache_write_tokens=_as_int(usage.get("cacheWriteInputTokens")),
+    )
+
+
 def build_request_metadata(task_type: str, market: Optional[str] = None) -> str:
     """Compact JSON for the X-Amzn-Bedrock-Request-Metadata header (spec §7).
 

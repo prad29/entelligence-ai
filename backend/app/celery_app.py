@@ -17,6 +17,7 @@ celery = Celery(
         "app.tasks.serpapi_credit_task",
         "app.tasks.usage_rollup_task",
         "app.tasks.agentic_scheduler_task",
+        "app.tasks.lobby_check_task",
     ],
 )
 
@@ -38,6 +39,14 @@ celery.conf.update(
         "app.tasks.deleted_showtime_task.process_batch": {"queue": "deleted-showtimes"},
         "app.tasks.deleted_showtime_task.finalize_job": {"queue": "deleted-showtimes"},
         "app.tasks.deleted_showtime_task.dispatch_job_task": {"queue": "deleted-showtimes"},
+        # Lobby Check's own dedicated queue/pool -- deliberately NOT the
+        # shared "agentic" queue (see lobby_check_task.py's module
+        # docstring): that pool is sized for the title-matching pipelines
+        # and joining it would shrink their fair-share windows to fund a
+        # pipeline that consumes none of their worker slots.
+        "app.tasks.lobby_check_task.lobby_check_dispatch_job_task": {"queue": "lobby-check"},
+        "app.tasks.lobby_check_task.lobby_check_row": {"queue": "lobby-check"},
+        "app.tasks.lobby_check_task.lobby_check_finalize_job": {"queue": "lobby-check"},
     },
     # Periodic tasks, run by the single-replica `celery-beat` service in
     # docker-compose.

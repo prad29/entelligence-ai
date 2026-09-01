@@ -39,8 +39,10 @@ app = FastAPI(
                 "image extraction (Qwen 3-VL on Bedrock). Submit one or many S3 image links "
                 "(POST /api/v1/lobby-check), then poll /api/v1/lobby-check/jobs/{job_id} for "
                 "status and /api/v1/lobby-check/jobs/{job_id}/results for per-image results. "
-                "Every request requires an x-api-key header — a DEDICATED key, not shared with "
-                "external-title-match's."
+                "Every request requires an x-api-key header — the SAME key used for the "
+                "external-title-match surface above (singletitle/batchtitle), not a separate one. "
+                "The two surfaces track concurrent-job limits independently even though they "
+                "share one key."
             ),
         },
     ],
@@ -262,19 +264,16 @@ async def startup() -> None:
     with Session(db_engine) as session:
         app.state.engine = build_engine_from_db(session)
         _seed_default_movie_formats(session)
+        # This same ApiKey row is also what require_api_key_lobby_check
+        # checks against — the lobby-check surface deliberately REUSES
+        # X_API_KEY/amenity/external-api-key rather than getting its own
+        # dedicated key (per product decision 2026-09-01). Its concurrent-
+        # jobs budget is still independent per surface (counted against
+        # LobbyCheckJob vs. ApiTitleMatchJob separately — see
+        # dependencies/api_auth.py), just under the same row/limits.
         _seed_api_key(
             session, settings.X_API_KEY,
             label="env-seeded (X_API_KEY)", db_update_allowed=True,
-        )
-        # A DEDICATED key, not shared with X_API_KEY above (see
-        # docs/plans/2026-09-01-lobby-check-design.md §5.1) —
-        # db_update_allowed=False since lobby-check has no db-update
-        # concept, and its own max_rows_per_batch since a 500-image vision
-        # batch and a 10000-row CSV batch shouldn't share one cap.
-        _seed_api_key(
-            session, settings.LOBBY_CHECK_API_KEY,
-            label="env-seeded (LOBBY_CHECK_API_KEY)", db_update_allowed=False,
-            max_rows_per_batch=settings.LOBBY_CHECK_MAX_BATCH_ROWS,
         )
         app.state.movie_engine = build_movie_format_engine_from_db(session)
 

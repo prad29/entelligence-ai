@@ -77,13 +77,20 @@ _client = None
 _supports_temperature = True
 
 
-def _ensure_local_bedrock_auth() -> None:
-    """Local-dev convenience: alias BEDROCK_API_KEY (this repo's bearer
-    token, from .env) to AWS_BEARER_TOKEN_BEDROCK, the only name boto3
-    recognizes for bearer auth. In production, setup_env.sh instead writes
-    real static AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, so this is a no-op
-    there (that env var is already unset, and boto3 falls back to the
-    static credentials automatically).
+def _ensure_bearer_token_auth() -> None:
+    """Alias BEDROCK_API_KEY (amenity/bedrock-api-key — the same bearer
+    token bedrock_client.py already uses for its raw httpx calls) to
+    AWS_BEARER_TOKEN_BEDROCK, the only name boto3 recognizes for bearer
+    auth. This IS the production mechanism for lobby-check's Bedrock calls
+    (product decision 2026-09-01) — NOT a local-dev-only fallback: lobby-
+    check deliberately does not use the static AWS_ACCESS_KEY_ID/
+    AWS_SECRET_ACCESS_KEY pair (amenity/aws-bedrock-keys) other Bedrock call
+    sites in this backend rely on.
+
+    Mutates os.environ for the whole process, which is safe here because
+    celery-lobby-check-worker is its own dedicated container running only
+    lobby_check_task.py's tasks — no other Bedrock call site executes in
+    that process to be affected by the global env var.
     """
     if not os.environ.get("AWS_BEARER_TOKEN_BEDROCK") and settings.BEDROCK_API_KEY:
         os.environ["AWS_BEARER_TOKEN_BEDROCK"] = settings.BEDROCK_API_KEY
@@ -92,7 +99,7 @@ def _ensure_local_bedrock_auth() -> None:
 def _get_client():
     global _client
     if _client is None:
-        _ensure_local_bedrock_auth()
+        _ensure_bearer_token_auth()
         import boto3
         import botocore.config
 

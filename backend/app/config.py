@@ -212,13 +212,12 @@ class Settings(BaseSettings):
     # mounted (main.py) when this is true, so a deploy can land the
     # migration/worker/secret plumbing and flip the surface on separately.
     LOBBY_CHECK_ENABLED: bool = False
-    # Plaintext API key read from env/Secrets Manager and hashed into an
-    # ApiKey row at startup (see main.py's _seed_api_key), same mechanism as
-    # X_API_KEY but a DEDICATED key/row — not shared with the external
-    # title-match surface. Rationale: independent blast radius on rotation,
-    # and an independent max_rows_per_batch (500 here vs. 10000 there) via
-    # the existing per-key override with zero branching.
-    LOBBY_CHECK_API_KEY: str = ""
+    # Auth reuses X_API_KEY/amenity/external-api-key — the SAME ApiKey row
+    # as the external title-match surface, not a dedicated key (product
+    # decision 2026-09-01). No separate LOBBY_CHECK_API_KEY setting exists;
+    # require_api_key_lobby_check (dependencies/api_auth.py) still tracks
+    # concurrent-jobs independently per surface even though both check the
+    # same row/hash.
     # ~600 images/day expected (confirmed 2026-09-01) — a 500-row batch at
     # $0.0013/row is ~$0.65 and, at LOBBY_CHECK_MAX_CONCURRENCY=4, finishes
     # within a few poll cycles. Sized far below MAX_BATCH_ROWS=10000, which

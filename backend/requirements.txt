@@ -18,8 +18,14 @@ rapidfuzz>=3.0.0
 ftfy>=6.1.0
 playwright>=1.45.0
 pyvespa>=0.40.0
-boto3>=1.34.0
+# >=1.35.60 is the floor for both the Converse API used by
+# app/lobby_check/extractor.py and AWS_BEARER_TOKEN_BEDROCK bearer-token
+# auth (local dev) — below it, converse() is unavailable or the token is
+# silently ignored.
+boto3>=1.35.60
 numpy>=1.26.0
+# Image framing heuristic for lobby-check (app/lobby_check/images.py).
+pillow>=10.3.0
 # Cost-calculation library ONLY — litellm's proxy is deliberately not used
 # (see observability design doc §4). Provides a maintained Bedrock pricing
 # map via litellm.cost_per_token so we don't hand-roll one.

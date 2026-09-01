@@ -184,9 +184,27 @@ class Settings(BaseSettings):
     # Comma-separated exact hostnames a submitted image_url is allowed to
     # target. Confirmed production host: mm-intelligence.s3.amazonaws.com.
     # This server performs the fetch itself, so an unbounded host list here
-    # is a live SSRF vector — see images.py (phase 2) for the rest of the
-    # guard (https-only, no redirects, private-IP rejection).
+    # is a live SSRF vector — see images.py for the rest of the guard
+    # (https-only, no redirects, private-IP rejection).
     LOBBY_CHECK_ALLOWED_URL_HOSTS: str = "mm-intelligence.s3.amazonaws.com"
+    # Phase 2 — Bedrock/Qwen extraction settings. Job/batch/concurrency/
+    # secrets settings are added in phase 3 alongside the job/row tables.
+    LOBBY_CHECK_MODEL_ID: str = "qwen.qwen3-vl-235b-a22b"
+    # Per-converse-call budget. lobby_check/limits.py derives the Celery row
+    # task's soft/hard time limits from this (fetch + up to two attempts:
+    # the primary call plus the one in-process repair retry).
+    LOBBY_CHECK_TIMEOUT_SECONDS: int = 90
+    LOBBY_CHECK_IMAGE_FETCH_TIMEOUT_SECONDS: int = 30
+    # Below this, at least one of the four confidences is low enough that
+    # the record should route to a human — drives both LlmCallLog.decision
+    # (AUTO_ACCEPT vs REVIEW) and the API's needs_review flag.
+    LOBBY_CHECK_REVIEW_CONFIDENCE_THRESHOLD: float = 0.7
+    # If the model's material_condition still disagrees with its own
+    # defects list after the repair retry, the persisted condition is the
+    # defects-derived value and confidence_material_condition is clamped to
+    # at most this — a conflict is a low-confidence signal, not a failure
+    # (see docs/plans/2026-09-01-lobby-check-design.md §3.4).
+    LOBBY_CHECK_CONDITION_CONFLICT_CONFIDENCE_CAP: float = 0.5
 
     @property
     def SERPAPI_API_KEYS(self) -> list[tuple[int, str]]:

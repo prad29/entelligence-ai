@@ -448,9 +448,10 @@ class LobbyCheckJob(SQLModel, table=True):
 
 
 class LobbyCheckRow(SQLModel, table=True):
-    """One image of a LobbyCheckJob. row_uuid is client-supplied and is the
-    sole join key between input and output — never parsed or interpreted,
-    only echoed back. Unique per job (not globally) via the composite
+    """One image of a LobbyCheckJob. photo_id is client-supplied (a plain
+    numeric id, matching mmvision.py's original photo_id convention) and is
+    the sole join key between input and output — never interpreted beyond
+    that, only echoed back. Unique per job (not globally) via the composite
     constraint below.
 
     Diagnostic columns (framing/model_id/input_tokens/output_tokens/
@@ -460,14 +461,14 @@ class LobbyCheckRow(SQLModel, table=True):
     """
 
     __table_args__ = (
-        UniqueConstraint("job_id", "row_uuid", name="uq_lobby_row_job_uuid"),
+        UniqueConstraint("job_id", "photo_id", name="uq_lobby_row_job_photo"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     job_id: str = Field(foreign_key="lobbycheckjob.id", index=True)
-    row_uuid: str = Field(index=True)
+    photo_id: int = Field(index=True)
     image_url: str  # first-class column, not only inside input_json
-    input_json: str  # the submitted row as received, including metadata
+    input_json: str  # the submitted row as received
     # pending|dispatched|completed|failed — see LobbyCheckJob's docstring;
     # unlike ApiTitleMatchRow, GET .../results DOES surface pending/
     # dispatched rows (supports partial retrieval mid-run).

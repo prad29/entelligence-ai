@@ -19,7 +19,6 @@ docs/plans/2026-09-01-lobby-check-design.md §6.6).
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -37,29 +36,21 @@ def _allowed_hosts() -> set[str]:
 
 
 class LobbyCheckImageInput(BaseModel):
-    row_uuid: str = Field(
-        description="Client-supplied UUID. Sole join key between input and output; "
-        "must be unique within a submission. Opaque to the API — never parsed or interpreted.",
-        examples=["3f7a1c92-5d84-4b21-9e6f-1a2b3c4d5e6f"],
+    photo_id: int = Field(
+        description="Client-supplied numeric photo id (matches mmvision.py's original "
+        "photo_id convention, e.g. from a filename like 678294.jpg). Sole join key between "
+        "input and output; must be unique within a submission. Opaque to the API — never "
+        "interpreted beyond that.",
+        examples=[678294],
     )
     image_url: str = Field(
         description="https URL of the lobby photo, on an allow-listed host.",
         examples=["https://mm-intelligence.s3.amazonaws.com/August2026FullLobbyAug20212026/"
                   "intelligence_photos/1787248984204.jpg"],
     )
-    metadata: Optional[dict[str, Any]] = Field(
-        default=None,
-        description="Arbitrary key-value passthrough, returned untouched on the result row.",
-        examples=[{"theater_name": "Regal Union Square"}],
-    )
 
     @model_validator(mode="after")
     def _validate_fields(self) -> "LobbyCheckImageInput":
-        try:
-            uuid.UUID(self.row_uuid)
-        except (ValueError, AttributeError, TypeError):
-            raise ValueError(f"row_uuid is not a valid UUID: {self.row_uuid!r}")
-
         parsed = urlparse(self.image_url)
         if parsed.scheme != "https" or not parsed.netloc:
             raise ValueError(f"image_url must be an https URL: {self.image_url!r}")
@@ -77,7 +68,7 @@ class LobbyCheckImageInput(BaseModel):
 class LobbyCheckRequest(BaseModel):
     images: list[LobbyCheckImageInput] = Field(
         description="Images to process, in submission order. Must be non-empty, capped at the "
-        "calling key's row limit (defaults to LOBBY_CHECK_MAX_BATCH_ROWS), and every row_uuid "
+        "calling key's row limit (defaults to LOBBY_CHECK_MAX_BATCH_ROWS), and every photo_id "
         "must be unique within this list.",
     )
 
@@ -86,24 +77,24 @@ class LobbyCheckRequest(BaseModel):
         if not self.images:
             raise ValueError("images must be non-empty")
 
-        seen: set[str] = set()
+        seen: set[int] = set()
         for image in self.images:
-            if image.row_uuid in seen:
-                raise ValueError(f"Duplicate row_uuid within submission: {image.row_uuid!r}")
-            seen.add(image.row_uuid)
+            if image.photo_id in seen:
+                raise ValueError(f"Duplicate photo_id within submission: {image.photo_id!r}")
+            seen.add(image.photo_id)
 
         return self
 
 
 class LobbyCheckRowError(BaseModel):
-    row_uuid: str
+    photo_id: Optional[int] = None
     field: str
     message: str
 
 
 class ValidationFailedResponse(BaseModel):
     """422 body shape when the batch cap is exceeded. Per-image field errors
-    (bad row_uuid/image_url, duplicate row_uuid) are raised by pydantic
+    (bad photo_id/image_url, duplicate photo_id) are raised by pydantic
     itself before this ever runs, and surface as FastAPI's normal 422 body."""
 
     error: str = Field(default="validation_failed", examples=["validation_failed"])
@@ -119,7 +110,7 @@ def validate_batch_size(
     if len(images) > max_rows:
         return [
             LobbyCheckRowError(
-                row_uuid="",
+                photo_id=None,
                 field="images",
                 message=f"Submission has {len(images)} images, exceeding this key's "
                         f"limit of {max_rows}",
@@ -154,9 +145,9 @@ class LobbyCheckJobStatusResponse(BaseModel):
 
 
 class LobbyCheckResult(BaseModel):
-    row_uuid: str = Field(description="Echoed verbatim from the input — the join key.")
+    photo_id: int = Field(description="Echoed verbatim from the input — the join key.")
     status: str = Field(description="pending | dispatched | completed | failed")
-    input: dict[str, Any] = Field(description="The submitted row as received, including metadata.")
+    input: dict[str, Any] = Field(description="The submitted row as received.")
 
     movie_title: Optional[str] = Field(default=None, description="Empty string if illegible.")
     confidence_movie_title: Optional[float] = None
@@ -218,7 +209,7 @@ def serialize_row_result(row: Any, *, review_threshold: float) -> dict:
     needs_review = bool(present) and min(present) < review_threshold
 
     return {
-        "row_uuid": row.row_uuid,
+        "photo_id": row.photo_id,
         "status": row.status,
         "input": json.loads(row.input_json),
         "movie_title": row.movie_title,

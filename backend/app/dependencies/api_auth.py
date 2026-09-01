@@ -17,14 +17,24 @@ concurrent-jobs budgets, each counted against its own job table
 (ApiTitleMatchJob vs. LobbyCheckJob) — a title-match backlog must never 429
 a lobby-check submission, and vice versa, since the two surfaces have very
 different per-job runtimes (design doc §5.3).
+
+The x-api-key header is declared via fastapi.security.APIKeyHeader, wired in
+as a sub-dependency (Depends(_authenticate)) rather than read off the raw
+Request — that's what makes FastAPI register it as a security scheme and
+show the "Authorize" lock + an actual input field in Swagger UI. Reading
+request.headers.get(...) directly (the previous approach) is invisible to
+FastAPI's OpenAPI generation entirely, which is why Swagger never offered a
+way to set it.
 """
 
 from __future__ import annotations
 
 import hashlib
 from datetime import datetime
+from typing import Optional
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
+from fastapi.security import APIKeyHeader
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -33,6 +43,8 @@ from app.models import ApiKey, ApiTitleMatchJob
 
 IN_FLIGHT_PHASES = ("queued", "syncing", "processing")
 LOBBY_CHECK_IN_FLIGHT_PHASES = ("queued", "processing")
+
+_api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
 def hash_api_key(raw: str) -> str:
@@ -45,8 +57,10 @@ def _get_redis():
     return redis.Redis.from_url(settings.REDIS_URL)
 
 
-def _authenticate(request: Request, session: Session) -> ApiKey:
-    raw_key = request.headers.get("x-api-key")
+def _authenticate(
+    session: Session = Depends(get_session),
+    raw_key: Optional[str] = Depends(_api_key_header),
+) -> ApiKey:
     if not raw_key:
         raise HTTPException(status_code=401, detail="Missing x-api-key header")
 
@@ -61,21 +75,19 @@ def _authenticate(request: Request, session: Session) -> ApiKey:
 
 
 def require_api_key(
-    request: Request,
     session: Session = Depends(get_session),
+    api_key: ApiKey = Depends(_authenticate),
 ) -> ApiKey:
-    api_key = _authenticate(request, session)
     _check_concurrent_jobs(session, api_key, ApiTitleMatchJob, IN_FLIGHT_PHASES)
     return api_key
 
 
 def require_api_key_lobby_check(
-    request: Request,
     session: Session = Depends(get_session),
+    api_key: ApiKey = Depends(_authenticate),
 ) -> ApiKey:
     from app.models import LobbyCheckJob
 
-    api_key = _authenticate(request, session)
     _check_concurrent_jobs(session, api_key, LobbyCheckJob, LOBBY_CHECK_IN_FLIGHT_PHASES)
     return api_key
 

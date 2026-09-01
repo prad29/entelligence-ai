@@ -71,13 +71,13 @@ def _make_job(engine, job_id="lc-job-1", api_key_id="k1"):
     return job_id
 
 
-def _add_row(engine, job_id, row_uuid, status="pending"):
+def _add_row(engine, job_id, photo_id, status="pending"):
     with Session(engine) as s:
         row = LobbyCheckRow(
             job_id=job_id,
-            row_uuid=row_uuid,
+            photo_id=photo_id,
             image_url="https://mm-intelligence.s3.amazonaws.com/lobby/x.jpg",
-            input_json=json.dumps({"row_uuid": row_uuid}),
+            input_json=json.dumps({"photo_id": photo_id}),
             status=status,
         )
         s.add(row)
@@ -167,9 +167,9 @@ def test_compute_job_window_floors_at_job_window_min(patched_task):
 
 def test_remaining_row_count_ignores_terminal_rows(patched_task, db_engine):
     job_id = _make_job(db_engine)
-    _add_row(db_engine, job_id, "r1", status="pending")
-    _add_row(db_engine, job_id, "r2", status="completed")
-    _add_row(db_engine, job_id, "r3", status="failed")
+    _add_row(db_engine, job_id, 1, status="pending")
+    _add_row(db_engine, job_id, 2, status="completed")
+    _add_row(db_engine, job_id, 3, status="failed")
 
     with Session(db_engine) as s:
         assert patched_task._remaining_row_count(s, job_id) == 1
@@ -177,8 +177,8 @@ def test_remaining_row_count_ignores_terminal_rows(patched_task, db_engine):
 
 def test_after_row_terminal_claims_once_when_last_row_succeeds(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
-    r2 = _add_row(db_engine, job_id, "r2", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
+    r2 = _add_row(db_engine, job_id, 2, status="pending")
 
     _patched_fetch_ok(monkeypatch)
     _patched_extract(monkeypatch, _fake_extraction_ok())
@@ -199,7 +199,7 @@ def test_after_row_terminal_claims_once_when_last_row_succeeds(patched_task, db_
 
 def test_after_row_terminal_claims_once_when_last_row_fails(patched_task, db_engine):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
 
     patched_task._record_failed_row(job_id, r1, "boom")
 
@@ -215,8 +215,8 @@ def test_retry_regression_finalizes_a_second_time_after_retry_completes(patched_
     satisfied before the retried row finishes -- the direct regression test
     for the NOT EXISTS-based completion predicate."""
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
-    r2 = _add_row(db_engine, job_id, "r2", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
+    r2 = _add_row(db_engine, job_id, 2, status="pending")
 
     _patched_fetch_ok(monkeypatch)
 
@@ -261,7 +261,7 @@ def test_retry_regression_finalizes_a_second_time_after_retry_completes(patched_
 
 def test_unexpected_exception_never_wedges_the_job(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
 
     import app.lobby_check.images as images_mod
     monkeypatch.setattr(images_mod, "fetch_image", MagicMock(side_effect=RuntimeError("boom")))
@@ -282,7 +282,7 @@ def test_unexpected_exception_never_wedges_the_job(patched_task, db_engine, monk
 
 def test_row_success_persists_all_fields_and_bumps_counters(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
 
     _patched_fetch_ok(monkeypatch)
     _patched_extract(monkeypatch, _fake_extraction_ok())
@@ -307,7 +307,7 @@ def test_row_success_persists_all_fields_and_bumps_counters(patched_task, db_eng
 
 def test_row_low_confidence_bumps_needs_review(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
 
     _patched_fetch_ok(monkeypatch)
     _patched_extract(monkeypatch, _fake_extraction_ok(confidence_material_condition=0.2))
@@ -320,7 +320,7 @@ def test_row_low_confidence_bumps_needs_review(patched_task, db_engine, monkeypa
 
 def test_row_image_fetch_failure_records_failed_no_retry_attempted(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
 
     import app.lobby_check.images as images_mod
     monkeypatch.setattr(
@@ -339,7 +339,7 @@ def test_row_image_fetch_failure_records_failed_no_retry_attempted(patched_task,
 
 def test_row_schema_error_records_failed_no_retry_attempted(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
 
     _patched_fetch_ok(monkeypatch)
     _patched_extract(monkeypatch, LobbyCheckSchemaError("still invalid after repair"))
@@ -353,7 +353,7 @@ def test_row_schema_error_records_failed_no_retry_attempted(patched_task, db_eng
 
 def test_row_throttle_exhausted_retries_records_failed(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
 
     _patched_fetch_ok(monkeypatch)
     _patched_extract(monkeypatch, LobbyCheckThrottleError("throttled"))
@@ -373,7 +373,7 @@ def test_row_throttle_exhausted_retries_records_failed(patched_task, db_engine, 
 
 def test_row_transient_exhausted_retries_records_failed(patched_task, db_engine, monkeypatch):
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
 
     _patched_fetch_ok(monkeypatch)
     _patched_extract(monkeypatch, LobbyCheckTransientError("model not ready"))
@@ -399,8 +399,8 @@ def test_enqueue_next_window_claims_each_pending_row_exactly_once(monkeypatch, d
     monkeypatch.setattr(_real_task_mod.lobby_check_row, "apply_async", MagicMock())
 
     job_id = _make_job(db_engine)
-    r1 = _add_row(db_engine, job_id, "r1", status="pending")
-    r2 = _add_row(db_engine, job_id, "r2", status="pending")
+    r1 = _add_row(db_engine, job_id, 1, status="pending")
+    r2 = _add_row(db_engine, job_id, 2, status="pending")
 
     won_first = _REAL_ENQUEUE_NEXT_WINDOW(job_id, 10)
     won_second = _REAL_ENQUEUE_NEXT_WINDOW(job_id, 10)  # doubled call -- nothing left to claim
@@ -424,7 +424,7 @@ def test_enqueue_next_window_noop_when_job_not_processing(monkeypatch, db_engine
         job.phase = "completed"
         s.add(job)
         s.commit()
-    _add_row(db_engine, job_id, "r1", status="pending")
+    _add_row(db_engine, job_id, 1, status="pending")
 
     assert _REAL_ENQUEUE_NEXT_WINDOW(job_id, 10) == 0
     _real_task_mod.lobby_check_row.apply_async.assert_not_called()

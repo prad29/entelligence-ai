@@ -70,19 +70,13 @@ def _clear_tables():
         s.commit()
 
 
-def _uuid(n: int) -> str:
-    import uuid
-
-    return str(uuid.UUID(int=n))
-
-
 # --- POST /api/v1/lobby-check ------------------------------------------------
 
 def test_submit_returns_202_and_persists_pending_rows():
     resp = client.post(
         "/api/v1/lobby-check",
         headers=HEADERS,
-        json={"images": [{"row_uuid": _uuid(1), "image_url": VALID_URL}]},
+        json={"images": [{"photo_id": 1, "image_url": VALID_URL}]},
     )
     assert resp.status_code == 202
     body = resp.json()
@@ -101,19 +95,19 @@ def test_submit_returns_202_and_persists_pending_rows():
 def test_submit_missing_api_key_returns_401():
     resp = client.post(
         "/api/v1/lobby-check",
-        json={"images": [{"row_uuid": _uuid(1), "image_url": VALID_URL}]},
+        json={"images": [{"photo_id": 1, "image_url": VALID_URL}]},
     )
     assert resp.status_code == 401
 
 
-def test_submit_duplicate_row_uuid_returns_422():
-    dup = _uuid(1)
+def test_submit_duplicate_photo_id_returns_422():
+    dup = 1
     resp = client.post(
         "/api/v1/lobby-check",
         headers=HEADERS,
         json={"images": [
-            {"row_uuid": dup, "image_url": VALID_URL},
-            {"row_uuid": dup, "image_url": VALID_URL},
+            {"photo_id": dup, "image_url": VALID_URL},
+            {"photo_id": dup, "image_url": VALID_URL},
         ]},
     )
     assert resp.status_code == 422
@@ -123,7 +117,7 @@ def test_submit_malformed_url_returns_422():
     resp = client.post(
         "/api/v1/lobby-check",
         headers=HEADERS,
-        json={"images": [{"row_uuid": _uuid(1), "image_url": "not-a-url"}]},
+        json={"images": [{"photo_id": 1, "image_url": "not-a-url"}]},
     )
     assert resp.status_code == 422
 
@@ -132,14 +126,14 @@ def test_submit_disallowed_host_returns_422():
     resp = client.post(
         "/api/v1/lobby-check",
         headers=HEADERS,
-        json={"images": [{"row_uuid": _uuid(1), "image_url": "https://evil.example.com/x.jpg"}]},
+        json={"images": [{"photo_id": 1, "image_url": "https://evil.example.com/x.jpg"}]},
     )
     assert resp.status_code == 422
 
 
 def test_submit_over_batch_cap_returns_422():
     # ApiKey.max_rows_per_batch=3 in the fixture above
-    images = [{"row_uuid": _uuid(i), "image_url": VALID_URL} for i in range(4)]
+    images = [{"photo_id": i, "image_url": VALID_URL} for i in range(4)]
     resp = client.post("/api/v1/lobby-check", headers=HEADERS, json={"images": images})
     assert resp.status_code == 422
     assert "exceeding this key's limit of 3" in resp.text
@@ -156,7 +150,7 @@ def _submit_one() -> str:
     resp = client.post(
         "/api/v1/lobby-check",
         headers=HEADERS,
-        json={"images": [{"row_uuid": _uuid(1), "image_url": VALID_URL}]},
+        json={"images": [{"photo_id": 1, "image_url": VALID_URL}]},
     )
     return resp.json()["job_id"]
 
@@ -205,7 +199,7 @@ def test_get_job_results_single_page_when_under_page_size():
     resp = client.post(
         "/api/v1/lobby-check",
         headers=HEADERS,
-        json={"images": [{"row_uuid": _uuid(i), "image_url": VALID_URL} for i in range(3)]},
+        json={"images": [{"photo_id": i, "image_url": VALID_URL} for i in range(3)]},
     )
     job_id = resp.json()["job_id"]
 
@@ -221,22 +215,22 @@ def test_get_job_results_cursor_excludes_already_seen_rows():
     resp = client.post(
         "/api/v1/lobby-check",
         headers=HEADERS,
-        json={"images": [{"row_uuid": _uuid(i), "image_url": VALID_URL} for i in range(3)]},
+        json={"images": [{"photo_id": i, "image_url": VALID_URL} for i in range(3)]},
     )
     job_id = resp.json()["job_id"]
 
     all_rows = client.get(f"/api/v1/lobby-check/jobs/{job_id}/results", headers=HEADERS).json()["results"]
-    first_row_uuid = all_rows[0]["row_uuid"]
+    first_photo_id = all_rows[0]["photo_id"]
     with Session(_sqlite_engine) as s:
         first_id = s.exec(
-            select(LobbyCheckRow.id).where(LobbyCheckRow.row_uuid == first_row_uuid)
+            select(LobbyCheckRow.id).where(LobbyCheckRow.photo_id == first_photo_id)
         ).one()
     cursor = base64.urlsafe_b64encode(str(first_id).encode()).decode()
 
     resp = client.get(f"/api/v1/lobby-check/jobs/{job_id}/results?cursor={cursor}", headers=HEADERS)
-    remaining_uuids = {r["row_uuid"] for r in resp.json()["results"]}
-    assert first_row_uuid not in remaining_uuids
-    assert len(remaining_uuids) == 2
+    remaining_ids = {r["photo_id"] for r in resp.json()["results"]}
+    assert first_photo_id not in remaining_ids
+    assert len(remaining_ids) == 2
 
 
 def test_get_job_results_invalid_cursor_returns_400():

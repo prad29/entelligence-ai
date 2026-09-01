@@ -86,7 +86,7 @@ async def submit_lobby_check(
         session.add(
             LobbyCheckRow(
                 job_id=job.id,
-                row_uuid=image.row_uuid,
+                photo_id=image.photo_id,
                 image_url=image.image_url,
                 input_json=image.model_dump_json(),
             )

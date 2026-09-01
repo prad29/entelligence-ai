@@ -26,7 +26,7 @@ from app.lobby_check.schemas import (
 from app.lobby_check.taxonomy import DEFECTS, MATERIAL_CONDITIONS, MATERIAL_TYPES
 
 VALID_URL = "https://mm-intelligence.s3.amazonaws.com/lobby/1787248984204.jpg"
-VALID_UUID = "3f7a1c92-5d84-4b21-9e6f-1a2b3c4d5e6f"
+VALID_PHOTO_ID = 678294
 
 
 # --- prompt-coverage guard --------------------------------------------------
@@ -77,19 +77,19 @@ def test_prompt_hash_changes_with_schema():
 # --- LobbyCheckImageInput / LobbyCheckRequest -------------------------------
 
 def test_valid_image_input():
-    img = LobbyCheckImageInput(row_uuid=VALID_UUID, image_url=VALID_URL)
-    assert img.row_uuid == VALID_UUID
+    img = LobbyCheckImageInput(photo_id=VALID_PHOTO_ID, image_url=VALID_URL)
+    assert img.photo_id == VALID_PHOTO_ID
 
 
-def test_invalid_row_uuid_rejected():
-    with pytest.raises(ValueError, match="not a valid UUID"):
-        LobbyCheckImageInput(row_uuid="not-a-uuid", image_url=VALID_URL)
+def test_non_numeric_photo_id_rejected():
+    with pytest.raises(ValueError):
+        LobbyCheckImageInput(photo_id="not-a-number", image_url=VALID_URL)
 
 
 def test_non_https_url_rejected():
     with pytest.raises(ValueError, match="https URL"):
         LobbyCheckImageInput(
-            row_uuid=VALID_UUID,
+            photo_id=VALID_PHOTO_ID,
             image_url="http://mm-intelligence.s3.amazonaws.com/lobby/x.jpg",
         )
 
@@ -97,24 +97,17 @@ def test_non_https_url_rejected():
 def test_disallowed_host_rejected():
     with pytest.raises(ValueError, match="not allow-listed"):
         LobbyCheckImageInput(
-            row_uuid=VALID_UUID,
+            photo_id=VALID_PHOTO_ID,
             image_url="https://evil.example.com/lobby/x.jpg",
         )
 
 
-def test_metadata_echoed_through_untouched():
-    img = LobbyCheckImageInput(
-        row_uuid=VALID_UUID, image_url=VALID_URL, metadata={"theater_name": "Regal Union Square"}
-    )
-    assert img.metadata == {"theater_name": "Regal Union Square"}
-
-
-def test_duplicate_row_uuid_rejected():
-    with pytest.raises(ValueError, match="Duplicate row_uuid"):
+def test_duplicate_photo_id_rejected():
+    with pytest.raises(ValueError, match="Duplicate photo_id"):
         LobbyCheckRequest(
             images=[
-                LobbyCheckImageInput(row_uuid=VALID_UUID, image_url=VALID_URL),
-                LobbyCheckImageInput(row_uuid=VALID_UUID, image_url=VALID_URL),
+                LobbyCheckImageInput(photo_id=VALID_PHOTO_ID, image_url=VALID_URL),
+                LobbyCheckImageInput(photo_id=VALID_PHOTO_ID, image_url=VALID_URL),
             ]
         )
 
@@ -125,12 +118,15 @@ def test_empty_images_rejected():
 
 
 def test_validate_batch_size_under_cap():
-    images = [LobbyCheckImageInput(row_uuid=VALID_UUID, image_url=VALID_URL)]
+    images = [LobbyCheckImageInput(photo_id=VALID_PHOTO_ID, image_url=VALID_URL)]
     assert validate_batch_size(images, max_rows=10) == []
 
 
 def test_validate_batch_size_over_cap():
-    images = [LobbyCheckImageInput(row_uuid=VALID_UUID, image_url=VALID_URL)] * 2
+    images = [
+        LobbyCheckImageInput(photo_id=VALID_PHOTO_ID, image_url=VALID_URL),
+        LobbyCheckImageInput(photo_id=VALID_PHOTO_ID + 1, image_url=VALID_URL),
+    ]
     errors = validate_batch_size(images, max_rows=1)
     assert len(errors) == 1
     assert "exceeding this key's limit of 1" in errors[0].message
@@ -141,7 +137,7 @@ def test_validate_batch_size_over_cap():
 class _FakeRow:
     def __init__(self, **kwargs):
         defaults = dict(
-            row_uuid=VALID_UUID,
+            photo_id=VALID_PHOTO_ID,
             status="completed",
             input_json=json.dumps({"a": 1}),
             movie_title="Inception",

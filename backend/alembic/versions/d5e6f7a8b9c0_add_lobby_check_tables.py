@@ -44,7 +44,7 @@ def upgrade() -> None:
             'lobbycheckrow',
             sa.Column('id', sa.Integer(), nullable=False),
             sa.Column('job_id', sa.String(), nullable=False),
-            sa.Column('row_uuid', sa.String(), nullable=False),
+            sa.Column('photo_id', sa.Integer(), nullable=False),
             sa.Column('image_url', sa.String(), nullable=False),
             sa.Column('input_json', sa.String(), nullable=False),
             sa.Column('status', sa.String(), nullable=False, server_default='pending'),
@@ -73,14 +73,14 @@ def upgrade() -> None:
             sa.Column('updated_at', sa.DateTime(), nullable=False),
             sa.PrimaryKeyConstraint('id'),
             sa.ForeignKeyConstraint(['job_id'], ['lobbycheckjob.id']),
-            sa.UniqueConstraint('job_id', 'row_uuid', name='uq_lobby_row_job_uuid'),
+            sa.UniqueConstraint('job_id', 'photo_id', name='uq_lobby_row_job_photo'),
         )
         op.create_index('ix_lobbycheckrow_job_id', 'lobbycheckrow', ['job_id'])
-        op.create_index('ix_lobbycheckrow_row_uuid', 'lobbycheckrow', ['row_uuid'])
+        op.create_index('ix_lobbycheckrow_photo_id', 'lobbycheckrow', ['photo_id'])
 
 
 def downgrade() -> None:
-    op.drop_index('ix_lobbycheckrow_row_uuid', 'lobbycheckrow')
+    op.drop_index('ix_lobbycheckrow_photo_id', 'lobbycheckrow')
     op.drop_index('ix_lobbycheckrow_job_id', 'lobbycheckrow')
     op.drop_table('lobbycheckrow')
 

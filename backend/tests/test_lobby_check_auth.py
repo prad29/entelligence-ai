@@ -4,6 +4,11 @@ function calls (no HTTP layer) against an in-memory SQLite session —
 mirrors the concurrent-jobs regression the design doc calls out: an
 in-flight ApiTitleMatchJob must not consume a lobby-check slot, and vice
 versa.
+
+_authenticate/require_api_key* now take `raw_key` directly (via
+fastapi.security.APIKeyHeader in real requests, so Swagger shows an
+"Authorize" input for x-api-key) rather than a raw Request object — these
+tests call the same two-step chain FastAPI's dependency injection would.
 """
 
 from __future__ import annotations
@@ -12,9 +17,9 @@ import pytest
 from fastapi import HTTPException
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
-from starlette.requests import Request
 
 from app.dependencies.api_auth import (
+    _authenticate,
     hash_api_key,
     require_api_key,
     require_api_key_lobby_check,
@@ -30,10 +35,14 @@ def db_engine():
     engine.dispose()
 
 
-def _make_request(raw_key: str | None) -> Request:
-    headers = [(b"x-api-key", raw_key.encode())] if raw_key else []
-    scope = {"type": "http", "headers": headers, "method": "GET", "path": "/"}
-    return Request(scope)
+def _call_lobby_check(session: Session, raw_key: str | None) -> ApiKey:
+    api_key = _authenticate(session, raw_key)
+    return require_api_key_lobby_check(session, api_key)
+
+
+def _call_external(session: Session, raw_key: str | None) -> ApiKey:
+    api_key = _authenticate(session, raw_key)
+    return require_api_key(session, api_key)
 
 
 def _make_key(engine, raw_key="secret123", **overrides) -> ApiKey:
@@ -56,14 +65,14 @@ def _make_key(engine, raw_key="secret123", **overrides) -> ApiKey:
 def test_missing_header_raises_401(db_engine):
     with Session(db_engine) as session:
         with pytest.raises(HTTPException) as exc:
-            require_api_key_lobby_check(_make_request(None), session)
+            _call_lobby_check(session, None)
     assert exc.value.status_code == 401
 
 
 def test_unknown_key_raises_401(db_engine):
     with Session(db_engine) as session:
         with pytest.raises(HTTPException) as exc:
-            require_api_key_lobby_check(_make_request("nope"), session)
+            _call_lobby_check(session, "nope")
     assert exc.value.status_code == 401
 
 
@@ -71,14 +80,14 @@ def test_inactive_key_raises_401(db_engine):
     _make_key(db_engine, raw_key="deadkey", active=False)
     with Session(db_engine) as session:
         with pytest.raises(HTTPException) as exc:
-            require_api_key_lobby_check(_make_request("deadkey"), session)
+            _call_lobby_check(session, "deadkey")
     assert exc.value.status_code == 401
 
 
 def test_valid_key_returns_api_key(db_engine):
     _make_key(db_engine, raw_key="goodkey")
     with Session(db_engine) as session:
-        api_key = require_api_key_lobby_check(_make_request("goodkey"), session)
+        api_key = _call_lobby_check(session, "goodkey")
     assert api_key.key_prefix == "goodkey"[:8]
 
 
@@ -92,7 +101,7 @@ def test_lobby_check_cap_ignores_in_flight_external_job(db_engine):
 
     with Session(db_engine) as session:
         # must NOT raise -- zero LobbyCheckJob rows are in-flight for this key
-        require_api_key_lobby_check(_make_request("k1"), session)
+        _call_lobby_check(session, "k1")
 
 
 def test_external_cap_ignores_in_flight_lobby_check_job(db_engine):
@@ -104,7 +113,7 @@ def test_external_cap_ignores_in_flight_lobby_check_job(db_engine):
         s.commit()
 
     with Session(db_engine) as session:
-        require_api_key(_make_request("k2"), session)  # must NOT raise
+        _call_external(session, "k2")  # must NOT raise
 
 
 def test_lobby_check_cap_enforced_against_lobby_check_jobs(db_engine):
@@ -115,7 +124,7 @@ def test_lobby_check_cap_enforced_against_lobby_check_jobs(db_engine):
 
     with Session(db_engine) as session:
         with pytest.raises(HTTPException) as exc:
-            require_api_key_lobby_check(_make_request("k3"), session)
+            _call_lobby_check(session, "k3")
     assert exc.value.status_code == 429
 
 
@@ -126,7 +135,7 @@ def test_lobby_check_cap_allows_when_under_limit(db_engine):
         s.commit()
 
     with Session(db_engine) as session:
-        require_api_key_lobby_check(_make_request("k4"), session)  # 1 < 2, must NOT raise
+        _call_lobby_check(session, "k4")  # 1 < 2, must NOT raise
 
 
 def test_lobby_check_cap_ignores_terminal_jobs(db_engine):
@@ -136,4 +145,4 @@ def test_lobby_check_cap_ignores_terminal_jobs(db_engine):
         s.commit()
 
     with Session(db_engine) as session:
-        require_api_key_lobby_check(_make_request("k5"), session)  # completed doesn't count
+        _call_lobby_check(session, "k5")  # completed doesn't count

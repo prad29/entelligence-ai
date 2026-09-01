@@ -91,6 +91,14 @@ def test_fetch_image_success(monkeypatch):
     assert images.fetch_image(ALLOWED_URL) == b"jpegbytes"
 
 
+def test_fetch_image_accepts_octet_stream(monkeypatch):
+    # S3's default Content-Type for an object uploaded without one set --
+    # must NOT be rejected just because it isn't an image/* MIME type.
+    resp = _FakeStreamResponse(headers={"content-type": "application/octet-stream", "content-length": "9"})
+    monkeypatch.setattr(httpx, "stream", lambda *a, **k: resp)
+    assert images.fetch_image(ALLOWED_URL) == b"jpegbytes"
+
+
 def test_fetch_image_rejects_non_200(monkeypatch):
     resp = _FakeStreamResponse(status_code=404)
     monkeypatch.setattr(httpx, "stream", lambda *a, **k: resp)

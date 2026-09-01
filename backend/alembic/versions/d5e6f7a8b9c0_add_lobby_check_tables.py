@@ -44,7 +44,9 @@ def upgrade() -> None:
             'lobbycheckrow',
             sa.Column('id', sa.Integer(), nullable=False),
             sa.Column('job_id', sa.String(), nullable=False),
-            sa.Column('photo_id', sa.Integer(), nullable=False),
+            # BigInteger -- real photo_ids (e.g. 1787248984204) exceed
+            # Postgres's 32-bit Integer range.
+            sa.Column('photo_id', sa.BigInteger(), nullable=False),
             sa.Column('image_url', sa.String(), nullable=False),
             sa.Column('input_json', sa.String(), nullable=False),
             sa.Column('status', sa.String(), nullable=False, server_default='pending'),

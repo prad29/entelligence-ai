@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel, Field
-from sqlalchemy import Index, UniqueConstraint
+from sqlalchemy import BigInteger, Column, Index, UniqueConstraint
 from typing import Optional
 from datetime import datetime
 import uuid
@@ -466,7 +466,9 @@ class LobbyCheckRow(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     job_id: str = Field(foreign_key="lobbycheckjob.id", index=True)
-    photo_id: int = Field(index=True)
+    # BigInteger, not the default 32-bit Integer -- real photo_ids observed in
+    # production (e.g. 1787248984204) exceed Postgres's int32 range (max ~2.1B).
+    photo_id: int = Field(sa_column=Column(BigInteger(), index=True))
     image_url: str  # first-class column, not only inside input_json
     input_json: str  # the submitted row as received
     # pending|dispatched|completed|failed — see LobbyCheckJob's docstring;

@@ -24,7 +24,16 @@ from app.lobby_check.errors import LobbyCheckImageError
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # Bedrock cap is 5 MB base64
 FRAMING_BY_WIDTH = {629: "close", 768: "wide"}
 
-_ALLOWED_CONTENT_TYPES = ("image/jpeg", "image/jpg", "image/png", "image/webp")
+# application/octet-stream is included deliberately: S3 defaults to it for
+# any object uploaded without an explicit Content-Type (a common case for
+# this bucket in practice), so it is not itself a signal that the object
+# isn't a real image -- image_framing's actual PIL decode is what catches a
+# genuinely non-image body; this check only exists to reject obvious
+# non-image responses (an HTML error page, a JSON error body, ...).
+_ALLOWED_CONTENT_TYPES = (
+    "image/jpeg", "image/jpg", "image/png", "image/webp",
+    "application/octet-stream",
+)
 
 
 def _allowed_hosts() -> set[str]:

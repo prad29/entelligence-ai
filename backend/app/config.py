@@ -206,6 +206,49 @@ class Settings(BaseSettings):
     # (see docs/plans/2026-09-01-lobby-check-design.md §3.4).
     LOBBY_CHECK_CONDITION_CONFLICT_CONFIDENCE_CAP: float = 0.5
 
+    # Phase 3 — job/batch/concurrency/auth settings.
+    #
+    # Feature-flagged like EXTERNAL_API_ENABLED — the router is only
+    # mounted (main.py) when this is true, so a deploy can land the
+    # migration/worker/secret plumbing and flip the surface on separately.
+    LOBBY_CHECK_ENABLED: bool = False
+    # Plaintext API key read from env/Secrets Manager and hashed into an
+    # ApiKey row at startup (see main.py's _seed_api_key), same mechanism as
+    # X_API_KEY but a DEDICATED key/row — not shared with the external
+    # title-match surface. Rationale: independent blast radius on rotation,
+    # and an independent max_rows_per_batch (500 here vs. 10000 there) via
+    # the existing per-key override with zero branching.
+    LOBBY_CHECK_API_KEY: str = ""
+    # ~600 images/day expected (confirmed 2026-09-01) — a 500-row batch at
+    # $0.0013/row is ~$0.65 and, at LOBBY_CHECK_MAX_CONCURRENCY=4, finishes
+    # within a few poll cycles. Sized far below MAX_BATCH_ROWS=10000, which
+    # is priced for a cheap CSV row, not a multi-MB vision call.
+    LOBBY_CHECK_MAX_BATCH_ROWS: int = 500
+    # Confirmed comfortable against the ~600/day volume — Bedrock on-demand
+    # quotas are per-model-per-region, so Qwen has its own TPM/RPM bucket
+    # independent of the Claude/Cohere calls already running on this host.
+    # Raise only after a soak period if real usage materially exceeds the
+    # confirmed estimate (see design doc §4.5/phase 7).
+    LOBBY_CHECK_MAX_CONCURRENCY: int = 4
+    # Phase 5 fair-dispatch primitives, mirroring the AGENTIC_* settings'
+    # naming/values/reasoning (see dispatch_window.py) — lobby-check gets
+    # its OWN queue/pool/Redis keys, deliberately not joined to the shared
+    # agentic pool (design doc §4.1). 0 means "auto-derive as
+    # 2 * LOBBY_CHECK_MAX_CONCURRENCY".
+    LOBBY_CHECK_QUEUE_TARGET_DEPTH: int = 0
+    LOBBY_CHECK_JOB_WINDOW_MIN: int = 2
+    LOBBY_CHECK_ROUNDROBIN_CHUNK: int = 1
+    LOBBY_CHECK_SCHED_TICK_SECONDS: float = 10.0
+    # Celery self.retry budget for transient/throttle failures (layer 2 of
+    # the three-layer retry policy — see extractor.py/errors.py). Also
+    # governs the /retry endpoint's attempt-cap predicate (phase 7).
+    LOBBY_CHECK_ROW_MAX_ATTEMPTS: int = 3
+    LOBBY_CHECK_THROTTLE_BACKOFF_SECONDS: int = 30
+    # Longer than JOB_TTL_HOURS (24h) — mirrors EXTERNAL_API_JOB_TTL_HOURS's
+    # rationale: lobby-check rows must survive long enough for a client to
+    # retry across a business day.
+    LOBBY_CHECK_JOB_TTL_HOURS: int = 72
+
     @property
     def SERPAPI_API_KEYS(self) -> list[tuple[int, str]]:
         """Ordered (slot, key) pairs for every configured SerpApi key, slot 1 = SERPAPI_API_KEY."""

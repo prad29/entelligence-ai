@@ -418,6 +418,93 @@ class ApiTitleMatchRow(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class LobbyCheckJob(SQLModel, table=True):
+    """Job for the /api/v1/lobby-check API (cinema-lobby marketing-material
+    image extraction, Qwen 3-VL on Bedrock — app/lobby_check/). Mirrors
+    ApiTitleMatchJob field-for-field where the semantics carry over; no
+    `syncing` phase here (no prod-MySQL write-back analog for lobby-check).
+    See docs/plans/2026-09-01-lobby-check-design.md §1.1.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    api_key_id: str = Field(foreign_key="apikey.id", index=True)
+    phase: str = Field(default="queued")  # queued|processing|completed|completed_with_errors|failed
+    rows_total: int = Field(default=0)
+    rows_processed: int = Field(default=0)
+    rows_succeeded: int = Field(default=0)
+    rows_failed: int = Field(default=0)
+    # count of rows where min(confidence_*) < LOBBY_CHECK_REVIEW_CONFIDENCE_THRESHOLD
+    rows_needs_review: int = Field(default=0)
+    error: Optional[str] = None  # top-level job failure message (not per-row)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    ttl: Optional[datetime] = None
+    # Counter-based finalize claim — see
+    # title_matching/dispatch_window.claim_finalize. No `dispatched` cursor
+    # here: LobbyCheckRow.status IS the per-row dispatch state, same
+    # rationale as ApiTitleMatchJob/ApiTitleMatchRow.
+    finalize_claimed_at: Optional[datetime] = None
+
+
+class LobbyCheckRow(SQLModel, table=True):
+    """One image of a LobbyCheckJob. row_uuid is client-supplied and is the
+    sole join key between input and output — never parsed or interpreted,
+    only echoed back. Unique per job (not globally) via the composite
+    constraint below.
+
+    Diagnostic columns (framing/model_id/input_tokens/output_tokens/
+    cost_usd/latency_ms/parse_retries) are for direct per-row debugging only
+    — LlmCallLog is the source of truth for spend analytics, and these
+    fields are NEVER serialized into any API response (design doc §6.6).
+    """
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "row_uuid", name="uq_lobby_row_job_uuid"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    job_id: str = Field(foreign_key="lobbycheckjob.id", index=True)
+    row_uuid: str = Field(index=True)
+    image_url: str  # first-class column, not only inside input_json
+    input_json: str  # the submitted row as received, including metadata
+    # pending|dispatched|completed|failed — see LobbyCheckJob's docstring;
+    # unlike ApiTitleMatchRow, GET .../results DOES surface pending/
+    # dispatched rows (supports partial retrieval mid-run).
+    status: str = Field(default="pending")
+    attempts: int = Field(default=0)
+    error: Optional[str] = None
+
+    # --- outputs ---
+    movie_title: Optional[str] = None
+    confidence_movie_title: Optional[float] = None
+    material_type: Optional[str] = None
+    confidence_material_type: Optional[float] = None
+    material_quantity: Optional[int] = None
+    confidence_material_quantity: Optional[float] = None
+    material_condition: Optional[str] = None  # good|damaged
+    confidence_material_condition: Optional[float] = None
+    visual_notes: Optional[str] = None  # renamed to ai_reasoning at the response boundary
+    defects_json: Optional[str] = None  # JSON array of taxonomy defect values
+    defect_evidence: Optional[str] = None
+    # set when the model's material_condition disagreed with its own
+    # defects list even after the repair retry — see extractor.py's
+    # _salvage_condition_conflict.
+    condition_conflict: bool = Field(default=False)
+
+    # --- diagnostics (internal only — see class docstring) ---
+    framing: Optional[str] = None  # close|wide|unknown
+    model_id: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
+    latency_ms: Optional[int] = None
+    parse_retries: int = Field(default=0)
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class LlmCallLog(SQLModel, table=True):
     """One row per LLM call — the atomic fact table for usage observability
     (spec §5/§6). Every field except cost_usd is captured directly at the call

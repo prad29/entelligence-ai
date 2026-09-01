@@ -35,6 +35,10 @@ EOF
 grep '^AGENTIC_BATCH_MAX_CONCURRENCY=' /app/.env.prod >> /app/.env.compose \
   || echo 'AGENTIC_BATCH_MAX_CONCURRENCY=4' >> /app/.env.compose
 
+# Same forwarding, for celery-lobby-check-worker's --concurrency flag.
+grep '^LOBBY_CHECK_MAX_CONCURRENCY=' /app/.env.prod >> /app/.env.compose \
+  || echo 'LOBBY_CHECK_MAX_CONCURRENCY=4' >> /app/.env.compose
+
 # Start all services
 docker compose -f docker-compose.prod.yml --env-file .env.compose up -d
 

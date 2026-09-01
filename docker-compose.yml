@@ -112,6 +112,23 @@ services:
       redis:
         condition: service_healthy
 
+  celery-lobby-check-worker:
+    build: ./backend
+    # Concurrency is driven from LOBBY_CHECK_MAX_CONCURRENCY (backend/app/config.py,
+    # default below matches), same convention as celery-agentic-worker above.
+    # Its own dedicated queue -- deliberately not "agentic" (see
+    # app/tasks/lobby_check_task.py's module docstring).
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=${LOBBY_CHECK_MAX_CONCURRENCY:-4} -Q lobby-check
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   celery-beat:
     build: ./backend
     # Exactly one replica, always: beat only *dispatches* scheduled tasks, and

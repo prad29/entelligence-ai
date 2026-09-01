@@ -19,6 +19,10 @@ PROD_DB_DATABASE=$(echo "$PROD_DB_SECRET" | jq -r .database)
 PROD_DB_USERNAME=$(echo "$PROD_DB_SECRET" | jq -r .username)
 PROD_DB_PASSWORD=$(echo "$PROD_DB_SECRET" | jq -r .password)
 EXTERNAL_API_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/external-api-key --query SecretString --output text --region us-east-1)
+# Dedicated key for /api/v1/lobby-check -- NOT shared with EXTERNAL_API_KEY
+# above (see docs/plans/2026-09-01-lobby-check-design.md §5.1): independent
+# rotation blast radius, independent per-key row limits.
+LOBBY_CHECK_API_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/lobby-check-api-key --query SecretString --output text --region us-east-1)
 # Rotation pool for the Deleted Showtimes Check feature — one JSON secret
 # holding all configured SerpApi keys, keyed "1".."13" (slot 1 is the
 # legacy single key). Add more slots here (and in app/config.py) if more
@@ -76,6 +80,15 @@ PROD_DB_USERNAME=${PROD_DB_USERNAME}
 PROD_DB_PASSWORD=${PROD_DB_PASSWORD}
 EXTERNAL_API_ENABLED=true
 X_API_KEY=${EXTERNAL_API_KEY}
+LOBBY_CHECK_ENABLED=false
+LOBBY_CHECK_API_KEY=${LOBBY_CHECK_API_KEY}
+LOBBY_CHECK_MODEL_ID=qwen.qwen3-vl-235b-a22b
+LOBBY_CHECK_ALLOWED_URL_HOSTS=mm-intelligence.s3.amazonaws.com
+LOBBY_CHECK_MAX_BATCH_ROWS=500
+LOBBY_CHECK_MAX_CONCURRENCY=4
+LOBBY_CHECK_TIMEOUT_SECONDS=90
+LOBBY_CHECK_ROW_MAX_ATTEMPTS=3
+LOBBY_CHECK_JOB_TTL_HOURS=72
 SERPAPI_API_KEY=${SERPAPI_API_KEY}
 SERPAPI_API_KEY_2=${SERPAPI_API_KEY_2}
 SERPAPI_API_KEY_3=${SERPAPI_API_KEY_3}

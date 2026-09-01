@@ -91,6 +91,19 @@ services:
       redis:
         condition: service_healthy
 
+  celery-lobby-check-worker:
+    image: ${ECR_BACKEND}:${IMAGE_TAG}
+    # Concurrency driven from LOBBY_CHECK_MAX_CONCURRENCY, forwarded into
+    # .env.compose by start_containers.sh -- same convention as
+    # celery-agentic-worker above. Its own dedicated queue -- deliberately
+    # not "agentic" (see app/tasks/lobby_check_task.py's module docstring).
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=${LOBBY_CHECK_MAX_CONCURRENCY:-4} -Q lobby-check
+    restart: unless-stopped
+    env_file: /app/.env.prod
+    depends_on:
+      redis:
+        condition: service_healthy
+
   celery-beat:
     image: ${ECR_BACKEND}:${IMAGE_TAG}
     # Exactly one replica, always — see docker-compose.yml for why.

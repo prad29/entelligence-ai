@@ -175,6 +175,19 @@ class Settings(BaseSettings):
     # "count all SerperCallLog rows ever".
     SERPER_QUOTA_PERIOD_START: str = ""
 
+    # ── Lobby Check API (see docs/plans/2026-09-01-lobby-check-design.md) —
+    # productionizes the mmvision.py prototype's Qwen-on-Bedrock cinema-lobby
+    # marketing-material extraction as /api/v1/lobby-check. Only the setting
+    # schemas.py needs at import time (the SSRF host allow-list) is added in
+    # phase 1; the rest land in phase 3 alongside the job/row tables.
+    #
+    # Comma-separated exact hostnames a submitted image_url is allowed to
+    # target. Confirmed production host: mm-intelligence.s3.amazonaws.com.
+    # This server performs the fetch itself, so an unbounded host list here
+    # is a live SSRF vector — see images.py (phase 2) for the rest of the
+    # guard (https-only, no redirects, private-IP rejection).
+    LOBBY_CHECK_ALLOWED_URL_HOSTS: str = "mm-intelligence.s3.amazonaws.com"
+
     @property
     def SERPAPI_API_KEYS(self) -> list[tuple[int, str]]:
         """Ordered (slot, key) pairs for every configured SerpApi key, slot 1 = SERPAPI_API_KEY."""

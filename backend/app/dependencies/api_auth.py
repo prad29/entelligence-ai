@@ -1,6 +1,7 @@
 """
-Auth, rate-limit, and concurrency dependencies for the external
-title-matching API (app/routers/external_title_match.py).
+Auth, rate-limit, and concurrency dependencies for the API-key-authenticated
+surfaces: external title-matching (app/routers/external_title_match.py) and
+lobby-check (app/routers/lobby_check.py).
 
 Plain FastAPI `Depends()` callables — no new middleware. This mirrors the
 codebase's existing convention: every route in movie_title_match.py only
@@ -10,6 +11,12 @@ prior auth dependency to extend.
 Rate limiting uses a Redis fixed-window counter (INCR + EXPIRE), the same
 "Redis as coordination primitive" pattern sandbox_semaphore.py already
 establishes for a different concern (bounding concurrent sandbox calls).
+
+The two surfaces share auth/rate-limit (_authenticate) but have INDEPENDENT
+concurrent-jobs budgets, each counted against its own job table
+(ApiTitleMatchJob vs. LobbyCheckJob) — a title-match backlog must never 429
+a lobby-check submission, and vice versa, since the two surfaces have very
+different per-job runtimes (design doc §5.3).
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from app.database import get_session
 from app.models import ApiKey, ApiTitleMatchJob
 
 IN_FLIGHT_PHASES = ("queued", "syncing", "processing")
+LOBBY_CHECK_IN_FLIGHT_PHASES = ("queued", "processing")
 
 
 def hash_api_key(raw: str) -> str:
@@ -37,10 +45,7 @@ def _get_redis():
     return redis.Redis.from_url(settings.REDIS_URL)
 
 
-def require_api_key(
-    request: Request,
-    session: Session = Depends(get_session),
-) -> ApiKey:
+def _authenticate(request: Request, session: Session) -> ApiKey:
     raw_key = request.headers.get("x-api-key")
     if not raw_key:
         raise HTTPException(status_code=401, detail="Missing x-api-key header")
@@ -52,8 +57,26 @@ def require_api_key(
         raise HTTPException(status_code=401, detail="Invalid or inactive API key")
 
     _check_rate_limit(api_key)
-    _check_concurrent_jobs(session, api_key)
+    return api_key
 
+
+def require_api_key(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> ApiKey:
+    api_key = _authenticate(request, session)
+    _check_concurrent_jobs(session, api_key, ApiTitleMatchJob, IN_FLIGHT_PHASES)
+    return api_key
+
+
+def require_api_key_lobby_check(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> ApiKey:
+    from app.models import LobbyCheckJob
+
+    api_key = _authenticate(request, session)
+    _check_concurrent_jobs(session, api_key, LobbyCheckJob, LOBBY_CHECK_IN_FLIGHT_PHASES)
     return api_key
 
 
@@ -82,11 +105,11 @@ def _check_rate_limit(api_key: ApiKey) -> None:
         )
 
 
-def _check_concurrent_jobs(session: Session, api_key: ApiKey) -> None:
+def _check_concurrent_jobs(session: Session, api_key: ApiKey, job_model, in_flight_phases) -> None:
     in_flight = session.exec(
-        select(ApiTitleMatchJob)
-        .where(ApiTitleMatchJob.api_key_id == api_key.id)
-        .where(ApiTitleMatchJob.phase.in_(IN_FLIGHT_PHASES))
+        select(job_model)
+        .where(job_model.api_key_id == api_key.id)
+        .where(job_model.phase.in_(in_flight_phases))
     ).all()
     if len(in_flight) >= api_key.max_concurrent_jobs:
         raise HTTPException(

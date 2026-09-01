@@ -11,6 +11,7 @@ from app.routers import external_title_match
 from app.routers import deleted_showtimes
 from app.routers import intl_detect, intl_amenities, intl_jobs
 from app.routers import usage
+from app.routers import lobby_check
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -29,6 +30,17 @@ app = FastAPI(
                 "/external/jobs/{job_id}/results for row-level results. Every request requires "
                 "an x-api-key header. This is a parallel surface to the internal Excel-upload "
                 "flow under movie-title-match — both delegate to the same matching core."
+            ),
+        },
+        {
+            "name": "lobby-check",
+            "description": (
+                "External, API-key-authenticated surface for cinema-lobby marketing-material "
+                "image extraction (Qwen 3-VL on Bedrock). Submit one or many S3 image links "
+                "(POST /api/v1/lobby-check), then poll /api/v1/lobby-check/jobs/{job_id} for "
+                "status and /api/v1/lobby-check/jobs/{job_id}/results for per-image results. "
+                "Every request requires an x-api-key header — a DEDICATED key, not shared with "
+                "external-title-match's."
             ),
         },
     ],
@@ -61,6 +73,9 @@ app.include_router(usage.router)
 if settings.EXTERNAL_API_ENABLED:
     app.include_router(external_title_match.router)
 
+if settings.LOBBY_CHECK_ENABLED:
+    app.include_router(lobby_check.router)
+
 
 _DEFAULT_MOVIE_FORMAT_SEEDS = [
     ("70mm", "70MM", 1),
@@ -86,26 +101,32 @@ def _seed_default_movie_formats(session) -> None:
     session.commit()
 
 
-def _seed_env_api_key(session) -> None:
+def _seed_api_key(
+    session,
+    raw_key: str,
+    *,
+    label: str,
+    db_update_allowed: bool = False,
+    max_rows_per_batch: "int | None" = None,
+) -> None:
     """
-    If settings.X_API_KEY is set, ensure a matching ApiKey row exists —
+    If `raw_key` is non-empty, ensure a matching ApiKey row exists —
     idempotent, so this can run on every startup without duplicating rows
     or fighting a manually-created key.
 
-    This is how the operator's own key gets from .env (locally) or Secrets
-    Manager (in production) into the hashed ApiKey table the external API's
-    require_api_key dependency checks against, without ever hand-writing a
-    raw INSERT. The env var only ever holds the plaintext; only the hash is
-    persisted.
+    This is how an operator's key gets from .env (locally) or Secrets
+    Manager (in production) into the hashed ApiKey table the require_api_key*
+    dependencies check against, without ever hand-writing a raw INSERT. The
+    env var only ever holds the plaintext; only the hash is persisted.
     """
-    if not settings.X_API_KEY:
+    if not raw_key:
         return
 
     from sqlmodel import select
     from app.dependencies.api_auth import hash_api_key
     from app.models import ApiKey
 
-    key_hash = hash_api_key(settings.X_API_KEY)
+    key_hash = hash_api_key(raw_key)
     existing = session.exec(select(ApiKey).where(ApiKey.key_hash == key_hash)).first()
     if existing is not None:
         return
@@ -113,9 +134,10 @@ def _seed_env_api_key(session) -> None:
     session.add(
         ApiKey(
             key_hash=key_hash,
-            key_prefix=settings.X_API_KEY[:8],
-            label="env-seeded (X_API_KEY)",
-            db_update_allowed=True,
+            key_prefix=raw_key[:8],
+            label=label,
+            db_update_allowed=db_update_allowed,
+            max_rows_per_batch=max_rows_per_batch,
         )
     )
     session.commit()
@@ -240,7 +262,20 @@ async def startup() -> None:
     with Session(db_engine) as session:
         app.state.engine = build_engine_from_db(session)
         _seed_default_movie_formats(session)
-        _seed_env_api_key(session)
+        _seed_api_key(
+            session, settings.X_API_KEY,
+            label="env-seeded (X_API_KEY)", db_update_allowed=True,
+        )
+        # A DEDICATED key, not shared with X_API_KEY above (see
+        # docs/plans/2026-09-01-lobby-check-design.md §5.1) —
+        # db_update_allowed=False since lobby-check has no db-update
+        # concept, and its own max_rows_per_batch since a 500-image vision
+        # batch and a 10000-row CSV batch shouldn't share one cap.
+        _seed_api_key(
+            session, settings.LOBBY_CHECK_API_KEY,
+            label="env-seeded (LOBBY_CHECK_API_KEY)", db_update_allowed=False,
+            max_rows_per_batch=settings.LOBBY_CHECK_MAX_BATCH_ROWS,
+        )
         app.state.movie_engine = build_movie_format_engine_from_db(session)
 
         from app.intl_detection.loader import build_intl_engine_from_db

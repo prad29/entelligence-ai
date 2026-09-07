@@ -1,0 +1,699 @@
+version: 1
+table: movie_shows
+row_id: id
+grain: [mm_id, running_date]
+window_column: date_sh
+
+allowlist_regex: "^[[:alnum:] &''.,/#():+|-]*$"
+ca_provinces: [AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT]
+
+rules:
+
+- id: PRES_MM_ID
+  name: mm_id null or blank
+  class: presence
+  severity: critical
+  status: active
+  requires: [mm_id]
+  expr: "mm_id IS NULL OR mm_id = ''"
+  detail_columns: [mm_id]
+  message: "showtime identifier missing"
+
+- id: PRES_LAST_UPDATES
+  name: last_updates null
+  class: presence
+  severity: critical
+  status: active
+  requires: [last_updates]
+  expr: "last_updates IS NULL"
+  detail_columns: [last_updates, running_date]
+  message: "row has no update timestamp, invisible to a delta scan"
+
+- id: PRES_DATE_SH
+  name: date_sh null or zero date
+  class: presence
+  severity: critical
+  status: active
+  requires: [date_sh]
+  expr: "date_sh IS NULL OR CAST(date_sh AS CHAR) IN ('0000-00-00', '')"
+  detail_columns: [date_sh]
+  message: "showtime date missing or zero"
+
+- id: PRES_TIME_SH
+  name: time_sh null or blank
+  class: presence
+  severity: critical
+  status: active
+  requires: [time_sh]
+  expr: "time_sh IS NULL OR time_sh = ''"
+  detail_columns: [time_sh]
+  message: "showtime time missing"
+
+- id: PRES_TITLE
+  name: title null or blank
+  class: presence
+  severity: critical
+  status: active
+  requires: [title]
+  expr: "title IS NULL OR TRIM(title) = ''"
+  detail_columns: [title]
+  message: "film title missing"
+
+- id: PRES_THEATER_ID
+  name: theater_id null or blank
+  class: presence
+  severity: critical
+  status: active
+  requires: [theater_id]
+  expr: "theater_id IS NULL OR theater_id = ''"
+  detail_columns: [theater_id, theater_name]
+  message: "theater identifier missing"
+
+- id: PRES_CIRCUIT
+  name: circuit_name blank
+  class: presence
+  severity: medium
+  status: active
+  requires: [circuit_name]
+  expr: "circuit_name IS NULL OR TRIM(circuit_name) = ''"
+  detail_columns: [circuit_name, theater_name]
+  message: "circuit missing"
+
+- id: PRES_COUNTRY
+  name: country blank
+  class: presence
+  severity: medium
+  status: active
+  requires: [country]
+  expr: "country IS NULL OR TRIM(country) = ''"
+  detail_columns: [country, theater_state]
+  message: "country missing"
+
+- id: PRES_THEATER_NAME
+  name: theater_name blank
+  class: presence
+  severity: medium
+  status: active
+  requires: [theater_name]
+  expr: "theater_name IS NULL OR TRIM(theater_name) = ''"
+  detail_columns: [theater_id, theater_name]
+  message: "theater name missing"
+
+- id: FMT_RUNNING_DATE
+  name: running_date not equal to date of last_updates
+  class: cross_column
+  severity: high
+  status: active
+  requires: [running_date, last_updates]
+  expr: "last_updates IS NOT NULL AND running_date <> DATE(last_updates)"
+  detail_columns: [running_date, last_updates]
+  message: "crawl date does not match the update timestamp it should be derived from"
+
+- id: FMT_MM_ID
+  name: mm_id not 24-char hex
+  class: format
+  severity: high
+  status: active
+  requires: [mm_id]
+  expr: "mm_id IS NOT NULL AND mm_id <> '' AND NOT REGEXP_LIKE(mm_id, '^[0-9a-f]{24}$')"
+  detail_columns: [mm_id]
+  message: "showtime identifier is not a 24-character hex value"
+
+- id: FMT_TIME_SH
+  name: time_sh not 24-hour HH:MM
+  class: format
+  severity: high
+  status: active
+  requires: [time_sh]
+  expr: "time_sh IS NOT NULL AND time_sh <> '' AND NOT REGEXP_LIKE(CAST(time_sh AS CHAR), '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$')"
+  detail_columns: [time_sh]
+  message: "showtime time is not 24-hour HH:MM"
+
+- id: FMT_PRICE_SYMBOL
+  name: price carries a currency symbol
+  class: format
+  severity: medium
+  status: calibration
+  blocked_by: Q10
+  requires: [price]
+  expr: "price LIKE '%$%'"
+  detail_columns: [price]
+  message: "price stores a currency symbol"
+  note: "Every populated price in the sample carried a dollar sign. Expect this to match nearly every row. Keep it out of the digest until Q10 is answered."
+
+- id: FMT_PRICE_DECIMALS
+  name: price not 2 decimal places
+  class: format
+  severity: high
+  status: calibration
+  blocked_by: Q10
+  requires: [price]
+  expr: "price IS NOT NULL AND price <> '' AND NOT REGEXP_LIKE(REPLACE(price, '$', ''), '^[0-9]+[.][0-9]{2}$')"
+  detail_columns: [price]
+  message: "price is not two decimal places"
+  note: "About 22% of sample rows fail this. One-decimal values like $7.0 dominate."
+
+- id: FMT_PRICE_FLOAT_NOISE
+  name: price has 3 or more decimals
+  class: format
+  severity: critical
+  status: active
+  requires: [price]
+  expr: "REGEXP_LIKE(REPLACE(price, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
+  detail_columns: [price]
+  message: "price carries floating point noise"
+  note: "A defect under any reading of Q10. Sample values include $16.490000000000002."
+
+- id: FMT_CHILD_DECIMALS
+  name: child not 2 decimal places
+  class: format
+  severity: high
+  status: calibration
+  blocked_by: Q10
+  requires: [child]
+  expr: "child IS NOT NULL AND child <> '' AND NOT REGEXP_LIKE(REPLACE(child, '$', ''), '^[0-9]+[.][0-9]{2}$')"
+  detail_columns: [child, price]
+  message: "child price is not two decimal places"
+
+- id: FMT_SENIOR_DECIMALS
+  name: senior not 2 decimal places
+  class: format
+  severity: high
+  status: calibration
+  blocked_by: Q10
+  requires: [senior]
+  expr: "senior IS NOT NULL AND senior <> '' AND NOT REGEXP_LIKE(REPLACE(senior, '$', ''), '^[0-9]+[.][0-9]{2}$')"
+  detail_columns: [senior, price]
+  message: "senior price is not two decimal places"
+
+- id: FMT_CHILD_FLOAT_NOISE
+  name: child has 3 or more decimals
+  class: format
+  severity: critical
+  status: active
+  requires: [child]
+  expr: "REGEXP_LIKE(REPLACE(child, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
+  detail_columns: [child]
+  message: "child price carries floating point noise"
+
+- id: FMT_SENIOR_FLOAT_NOISE
+  name: senior has 3 or more decimals
+  class: format
+  severity: critical
+  status: active
+  requires: [senior]
+  expr: "REGEXP_LIKE(REPLACE(senior, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
+  detail_columns: [senior]
+  message: "senior price carries floating point noise"
+
+- id: FMT_ZIP_US
+  name: US row with invalid zip
+  class: format
+  severity: high
+  status: active
+  requires: [theater_zip, country]
+  expr: "country = 'USA' AND NOT REGEXP_LIKE(theater_zip, '^[0-9]{5}(-[0-9]{4})?$')"
+  detail_columns: [theater_zip, theater_city, theater_state, country]
+  message: "US postal code is not 5 digits or ZIP+4"
+  note: "theater_zip must stay a text column. Ten sample zips have a leading zero."
+
+- id: FMT_ZIP_CA
+  name: Canada row with invalid postal code
+  class: format
+  severity: high
+  status: active
+  requires: [theater_zip, country]
+  expr: "country = 'Canada' AND NOT REGEXP_LIKE(UPPER(theater_zip), '^[A-Z][0-9][A-Z] ?[0-9][A-Z][0-9]$')"
+  detail_columns: [theater_zip, theater_city, theater_state, country]
+  message: "Canadian postal code is not in A1A 1A1 form"
+  note: "Sample had a truncated value, K7R, at Bouler House Cinema."
+
+- id: FMT_RELEASE_DATE
+  name: release_date null or zero date
+  class: format
+  severity: medium
+  status: active
+  requires: [release_date]
+  expr: "release_date IS NULL OR CAST(release_date AS CHAR) LIKE '0000-00-00%'"
+  detail_columns: [release_date, title, studio_name]
+  message: "release date missing or zero"
+
+- id: JUNK_WHITESPACE
+  name: leading or trailing whitespace in a text column
+  class: format
+  severity: low
+  status: active
+  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, amenities_new, auditorium]
+  expr: >
+    circuit_name <> TRIM(circuit_name) OR theater_name <> TRIM(theater_name)
+    OR theater_address <> TRIM(theater_address) OR theater_city <> TRIM(theater_city)
+    OR theater_state <> TRIM(theater_state) OR theater_zip <> TRIM(theater_zip)
+    OR title <> TRIM(title) OR dma <> TRIM(dma) OR studio_name <> TRIM(studio_name)
+    OR amenities_new <> TRIM(amenities_new) OR auditorium <> TRIM(auditorium)
+  detail_columns: [theater_name, theater_address, title, amenities_new]
+  message: "text column has leading or trailing whitespace"
+
+- id: JUNK_DOUBLE_SPACE
+  name: doubled internal space
+  class: format
+  severity: low
+  status: active
+  requires: [theater_address, theater_name, title]
+  expr: "theater_address LIKE '%  %' OR theater_name LIKE '%  %' OR title LIKE '%  %'"
+  detail_columns: [theater_name, theater_address, title]
+  message: "doubled internal space"
+
+- id: JUNK_CHARS_THEATER_NAME
+  name: character outside allowlist in theater_name
+  class: format
+  severity: medium
+  status: active
+  requires: [theater_name]
+  expr: "NOT REGEXP_LIKE(theater_name, '{{allowlist_regex}}')"
+  detail_columns: [theater_name]
+  message: "theater name contains a character outside the allowlist"
+
+- id: JUNK_CHARS_ADDRESS
+  name: character outside allowlist in theater_address
+  class: format
+  severity: medium
+  status: active
+  requires: [theater_address]
+  expr: "NOT REGEXP_LIKE(theater_address, '{{allowlist_regex}}')"
+  detail_columns: [theater_address]
+  message: "address contains a character outside the allowlist"
+
+- id: JUNK_CHARS_TITLE
+  name: character outside allowlist in title
+  class: format
+  severity: medium
+  status: active
+  requires: [title]
+  expr: "NOT REGEXP_LIKE(title, '{{allowlist_regex}}')"
+  detail_columns: [title]
+  message: "title contains a character outside the allowlist"
+
+- id: DOM_TICKET_AVAILABILITY
+  name: ticket_availability outside known set
+  class: domain
+  severity: high
+  status: active
+  requires: [ticket_availability]
+  allowed: [available, soldout, disabled, Crawdads]
+  column: ticket_availability
+  detail_columns: [ticket_availability, is_ticketing]
+  message: "unexpected ticket availability value"
+
+- id: DOM_SEATING_TYPE
+  name: seating_type outside known set
+  class: domain
+  severity: high
+  status: active
+  requires: [seating_type]
+  allowed: ["Reserved", "Non Reserved"]
+  column: seating_type
+  detail_columns: [seating_type]
+  message: "unexpected seating type value"
+
+- id: DOM_SCREEN_FORMAT
+  name: screen_format outside known set
+  class: domain
+  severity: medium
+  status: active
+  requires: [screen_format]
+  allowed: [Standard, IMAX, "Elite Golden Ticket"]
+  column: screen_format
+  detail_columns: [screen_format, movie_format]
+  message: "unexpected screen format value"
+
+- id: DOM_MOVIE_FORMAT
+  name: movie_format outside known set
+  class: domain
+  severity: medium
+  status: active
+  requires: [movie_format]
+  allowed: ["2D", "3D", "35MM", "70MM"]
+  column: movie_format
+  detail_columns: [movie_format, screen_format]
+  message: "unexpected movie format value"
+
+- id: DOM_IS_TICKETING
+  name: is_ticketing outside known set
+  class: domain
+  severity: high
+  status: dormant
+  blocked_by: Q3
+  requires: [is_ticketing]
+  allowed: []
+  column: is_ticketing
+  detail_columns: [is_ticketing, ticket_availability, seating_type]
+  message: "unexpected is_ticketing code"
+  note: "Sample holds 0, 5, 6 and 7. The checklist claims 10 exists. Fill allowed once Q3 is answered, then set status to active."
+
+- id: DOM_SOURCE_FLAG
+  name: source_flag outside known set
+  class: domain
+  severity: medium
+  status: dormant
+  blocked_by: Q4
+  requires: [source_flag]
+  allowed: []
+  column: source_flag
+  detail_columns: [source_flag, circuit_name]
+  message: "unexpected source_flag value"
+  note: "Sample holds 2 and 4 only."
+
+- id: DOM_LANGUAGE_FORMAT
+  name: language_format outside known set
+  class: domain
+  severity: medium
+  status: dormant
+  blocked_by: Q5
+  requires: [language_format]
+  allowed: []
+  column: language_format
+  detail_columns: [language_format, movie_format, screen_format]
+  message: "unexpected language_format value"
+  note: "Sample holds the literal NA and English Dubbed."
+
+- id: DOM_DMA
+  name: dma not in the canonical market list
+  class: domain
+  severity: medium
+  status: dormant
+  blocked_by: Q16
+  requires: [dma]
+  allowed: []
+  column: dma
+  detail_columns: [dma, theater_city, theater_state]
+  message: "market name not in the canonical list"
+  note: "Needs a reference list. Sample shows inconsistent conventions, some markets carrying a state or province suffix."
+
+- id: XCOL_CHILD_GT_PRICE
+  name: child price greater than adult price
+  class: cross_column
+  severity: high
+  status: active
+  requires: [child, price]
+  expr: "child IS NOT NULL AND child <> '' AND price IS NOT NULL AND price <> '' AND CAST(REPLACE(child, '$', '') AS DECIMAL(10,2)) > CAST(REPLACE(price, '$', '') AS DECIMAL(10,2))"
+  detail_columns: [price, child, senior]
+  message: "child price exceeds adult price"
+
+- id: XCOL_SENIOR_GT_PRICE
+  name: senior price greater than adult price
+  class: cross_column
+  severity: high
+  status: active
+  requires: [senior, price]
+  expr: "senior IS NOT NULL AND senior <> '' AND price IS NOT NULL AND price <> '' AND CAST(REPLACE(senior, '$', '') AS DECIMAL(10,2)) > CAST(REPLACE(price, '$', '') AS DECIMAL(10,2))"
+  detail_columns: [price, child, senior]
+  message: "senior price exceeds adult price"
+
+- id: XCOL_DELTA_IDENTITY
+  name: delta seat identity broken
+  class: cross_column
+  severity: critical
+  status: active
+  requires: [total_seats, available, reserved, checkered]
+  expr: "total_seats IS NOT NULL AND total_seats <> available + reserved + checkered"
+  detail_columns: [total_seats, available, reserved, checkered]
+  message: "seat change columns do not balance"
+  note: "Held on 100% of populated sample rows. A breach means the pipeline lost or invented a seat."
+
+- id: XCOL_ACTUAL_IDENTITY
+  name: absolute seat identity broken
+  class: cross_column
+  severity: critical
+  status: active
+  requires: [actual_total_seats, actual_available, actual_reserved, actual_checkered]
+  expr: "actual_total_seats IS NOT NULL AND actual_total_seats <> actual_available + actual_reserved + actual_checkered"
+  detail_columns: [actual_total_seats, actual_available, actual_reserved, actual_checkered]
+  message: "absolute seat counts do not balance"
+
+- id: XCOL_NEGATIVE_ACTUAL
+  name: negative value in an actual_* seat column
+  class: cross_column
+  severity: critical
+  status: active
+  requires: [actual_total_seats, actual_available, actual_reserved, actual_checkered]
+  expr: "actual_total_seats < 0 OR actual_available < 0 OR actual_reserved < 0 OR actual_checkered < 0"
+  detail_columns: [actual_total_seats, actual_available, actual_reserved, actual_checkered]
+  message: "impossible negative seat count"
+  note: "Depends on Q1. If the delta reading is wrong, this rule moves to total_seats, available, reserved and checkered instead."
+
+- id: XCOL_RESERVED_ZERO_CAPACITY
+  name: Reserved showtime with zero or missing capacity
+  class: cross_column
+  severity: high
+  status: active
+  requires: [seating_type, actual_total_seats]
+  expr: "seating_type = 'Reserved' AND (actual_total_seats IS NULL OR actual_total_seats = 0)"
+  detail_columns: [seating_type, actual_total_seats, ticket_availability, is_ticketing]
+  message: "reserved seating showtime has no capacity"
+  note: "Non Reserved showtimes legitimately carry zero or blank capacity, so they are excluded."
+
+- id: XCOL_NONRESERVED_CAPACITY
+  name: Non Reserved showtime carrying real capacity
+  class: cross_column
+  severity: medium
+  status: active
+  requires: [seating_type, actual_total_seats]
+  expr: "seating_type = 'Non Reserved' AND actual_total_seats > 0"
+  detail_columns: [seating_type, actual_total_seats]
+  message: "non reserved showtime reports a seat count"
+
+- id: XCOL_COUNTRY_STATE
+  name: country does not match state or province
+  class: cross_column
+  severity: high
+  status: active
+  requires: [country, theater_state]
+  expr: "(FIND_IN_SET(theater_state, '{{ca_provinces}}') > 0 AND country <> 'Canada') OR (FIND_IN_SET(theater_state, '{{ca_provinces}}') = 0 AND country <> 'USA')"
+  detail_columns: [country, theater_state, theater_city, theater_name]
+  message: "country contradicts the state or province"
+  note: "Two sample theaters had Ontario and Quebec addresses with country USA."
+
+- id: XCOL_SEATING_AMENITIES
+  name: seating_type contradicts amenities_new text
+  class: cross_column
+  severity: medium
+  status: active
+  requires: [seating_type, amenities_new]
+  expr: "(seating_type = 'Reserved' AND LOWER(amenities_new) LIKE '%non reserved%') OR (seating_type = 'Non Reserved' AND LOWER(amenities_new) LIKE '%reserved seating%')"
+  detail_columns: [seating_type, amenities_new]
+  message: "seating type contradicts the amenities text"
+
+- id: XCOL_SHOW_BEFORE_RELEASE
+  name: show date before release date
+  class: cross_column
+  severity: high
+  status: active
+  requires: [date_sh, release_date]
+  expr: "release_date IS NOT NULL AND CAST(release_date AS CHAR) NOT LIKE '0000-00-00%' AND date_sh < DATE(release_date)"
+  detail_columns: [date_sh, release_date, title]
+  message: "showtime scheduled before the film's release date"
+
+- id: XCOL_STUDIO_RELEASE_PAIR
+  name: studio_name and release_date blank inconsistently
+  class: cross_column
+  severity: medium
+  status: active
+  requires: [studio_name, release_date]
+  expr: "(TRIM(COALESCE(studio_name, '')) = '') <> (release_date IS NULL OR CAST(release_date AS CHAR) LIKE '0000-00-00%')"
+  detail_columns: [studio_name, release_date, title]
+  message: "studio and release date disagree about whether a master record exists"
+  note: "In the sample these were blank on exactly the same rows, so this fires only when that pairing breaks."
+
+- id: XCOL_AMENITIES_LEADING_PIPE
+  name: amenities_new begins with an empty token
+  class: cross_column
+  severity: medium
+  status: active
+  requires: [amenities_new]
+  expr: "TRIM(amenities_new) LIKE '|%'"
+  detail_columns: [amenities_new]
+  message: "amenities list begins with an empty token"
+
+- id: XCOL_AMENITIES_RATING
+  name: amenities_new embeds a rating and runtime
+  class: cross_column
+  severity: medium
+  status: active
+  requires: [amenities_new]
+  expr: "REGEXP_LIKE(amenities_new, '(^|[|])[[:space:]]*(G|PG|PG-13|R|NC-17)/')"
+  detail_columns: [amenities_new]
+  message: "amenities field carries a rating and runtime instead of amenity tokens"
+
+- id: XCOL_DATE_SH_RECENCY
+  name: date_sh older than yesterday
+  class: cross_column
+  severity: high
+  status: dormant
+  blocked_by: Q3
+  requires: [date_sh, is_ticketing]
+  expr: ""
+  detail_columns: [date_sh, is_ticketing, ticket_availability]
+  message: "showtime date is older than allowed"
+  note: "The checklist allows yesterday only for ticketing records. Cannot be written until the is_ticketing codes are defined."
+
+- id: XROW_DUPLICATE_SHOWTIME
+  name: duplicate showtime on one crawl day
+  class: cross_row
+  severity: critical
+  status: active
+  requires: [mm_id, running_date, ticket_availability]
+  group_by: [mm_id, running_date]
+  filter: "ticket_availability <> 'Crawdads'"
+  having: "COUNT(*) > 1"
+  detail_columns: [mm_id, running_date, ticket_availability, last_updates]
+  message: "the same showtime was written twice on one crawl day"
+  note: "Crawdads rows are corrections, not duplicates, so they are filtered out. Confirm with Q2."
+
+- id: XROW_DUPLICATE_CRAWDADS
+  name: more than one Crawdads row for a showtime on one day
+  class: cross_row
+  severity: high
+  status: active
+  requires: [mm_id, running_date, ticket_availability]
+  group_by: [mm_id, running_date]
+  filter: "ticket_availability = 'Crawdads'"
+  having: "COUNT(*) > 1"
+  detail_columns: [mm_id, running_date, reserved, checkered]
+  message: "a showtime carries more than one correction row on one day"
+
+- id: XROW_THEATER_NAME
+  name: theater_id carrying more than one theater_name
+  class: cross_row
+  severity: high
+  status: active
+  requires: [theater_id, theater_name]
+  group_by: [theater_id]
+  having: "COUNT(DISTINCT theater_name) > 1"
+  detail_columns: [theater_id, theater_name]
+  message: "one theater id maps to more than one name"
+
+- id: XROW_THEATER_ADDRESS
+  name: theater_id carrying more than one address
+  class: cross_row
+  severity: high
+  status: active
+  requires: [theater_id, theater_address]
+  group_by: [theater_id]
+  having: "COUNT(DISTINCT theater_address) > 1"
+  detail_columns: [theater_id, theater_name, theater_address]
+  message: "one theater id maps to more than one address"
+
+- id: XROW_THEATER_DMA
+  name: theater_id carrying more than one dma
+  class: cross_row
+  severity: high
+  status: active
+  requires: [theater_id, dma]
+  group_by: [theater_id]
+  having: "COUNT(DISTINCT dma) > 1"
+  detail_columns: [theater_id, theater_name, dma]
+  message: "one theater id maps to more than one market"
+
+- id: XROW_THEATER_CIRCUIT
+  name: theater_id carrying more than one circuit_name
+  class: cross_row
+  severity: medium
+  status: active
+  requires: [theater_id, circuit_name]
+  group_by: [theater_id]
+  having: "COUNT(DISTINCT circuit_name) > 1"
+  detail_columns: [theater_id, theater_name, circuit_name]
+  message: "one theater id maps to more than one circuit"
+
+- id: XROW_TITLE_STUDIO
+  name: title carrying more than one studio_name
+  class: cross_row
+  severity: medium
+  status: active
+  requires: [title, studio_name]
+  group_by: [title]
+  having: "COUNT(DISTINCT studio_name) > 1"
+  detail_columns: [title, studio_name]
+  message: "one title maps to more than one studio"
+
+- id: XROW_TITLE_RELEASE
+  name: title carrying more than one release_date
+  class: cross_row
+  severity: medium
+  status: active
+  requires: [title, release_date]
+  group_by: [title]
+  having: "COUNT(DISTINCT release_date) > 1"
+  detail_columns: [title, release_date]
+  message: "one title maps to more than one release date"
+
+- id: XROW_DELTA_RECONCILE
+  name: delta does not reconcile against the previous crawl
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, running_date, available, actual_available, ticket_availability, total_seats]
+  detail_columns: [mm_id, running_date, available, actual_available]
+  message: "seat change does not match the movement in the absolute count"
+  note: "Reconciled on 100% of comparable sample rows. The single strongest check in the pack."
+  sql: |
+    SELECT id, mm_id, running_date, available, actual_available, prev_actual_available
+    FROM (
+      SELECT id, mm_id, running_date, available, actual_available,
+             LAG(actual_available) OVER (PARTITION BY mm_id ORDER BY running_date, id) AS prev_actual_available
+      FROM {{table}}
+      WHERE {{window}} AND ticket_availability <> 'Crawdads' AND total_seats IS NOT NULL
+    ) w
+    WHERE prev_actual_available IS NOT NULL
+      AND available <> actual_available - prev_actual_available
+
+- id: XROW_CRAWL_GAP
+  name: showtime missing a day in its crawl series
+  class: custom
+  severity: low
+  status: active
+  requires: [mm_id, running_date]
+  detail_columns: [mm_id, first_seen, last_seen, days_present, days_expected]
+  message: "showtime was not crawled every day between first and last sighting"
+  note: "May be normal depending on how the crawl is scheduled. Question 9."
+  sql: |
+    SELECT MIN(id) AS id, mm_id,
+           MIN(running_date) AS first_seen, MAX(running_date) AS last_seen,
+           COUNT(DISTINCT running_date) AS days_present,
+           DATEDIFF(MAX(running_date), MIN(running_date)) + 1 AS days_expected
+    FROM {{table}}
+    WHERE {{window}}
+    GROUP BY mm_id
+    HAVING COUNT(DISTINCT running_date) < DATEDIFF(MAX(running_date), MIN(running_date)) + 1
+
+- id: XTAB_THEATER_MASTER
+  name: theater fields disagree with mqproduction.theater
+  class: cross_table
+  severity: high
+  status: dormant
+  blocked_by: [Q17, Q18, Q19, Q20]
+  requires: [theater_id]
+  detail_columns: [theater_id, theater_name, theater_city, theater_state, dma]
+  message: "theater details do not match the master record"
+  note: "Needs the exact schema name, table name and join key. In the sample all 81 theaters were internally consistent, so this rule may be built and never fire."
+
+- id: XTAB_CIRCUIT_MASTER
+  name: circuit_name disagrees with mqproduction.theater_circuit
+  class: cross_table
+  severity: medium
+  status: dormant
+  blocked_by: [Q17, Q21]
+  requires: [circuit_name]
+  detail_columns: [circuit_name, theater_id, theater_name]
+  message: "circuit does not match the circuit master"
+
+- id: XTAB_MOVIE_MASTER
+  name: title, studio or release date disagrees with fq_movie_master
+  class: cross_table
+  severity: high
+  status: dormant
+  blocked_by: [Q17, Q18]
+  requires: [title, studio_name, release_date]
+  detail_columns: [title, studio_name, release_date]
+  message: "film details do not match the film master"
+  note: "Several titles carry suffixes such as (2026) or (Premiere Event). An exact string join will report those as missing films."

@@ -1,0 +1,13 @@
+database:
+  host: ${DEV_DB_HOST}
+  port: ${DEV_DB_PORT}
+  user: ${DEV_DB_USERNAME}
+  password: ${DEV_DB_PASSWORD}
+  schema: ${DEV_DB_DATABASE}
+scan:
+  window_column: date_sh
+  detail_row_cap: 500
+  calibration_threshold: 0.20
+  include_calibration: true
+  include_dormant: false
+  query_timeout_seconds: 60

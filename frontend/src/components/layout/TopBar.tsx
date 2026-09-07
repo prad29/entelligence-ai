@@ -24,6 +24,8 @@ const pageTitles: Record<string, string> = {
   '/movie-review': 'Movie Format Review Queue',
   '/movie-title-matching': 'Movie Title Matching',
   '/movie-title-seed': 'Seed Movie Master',
+  '/deleted-showtimes': 'Deleted Showtimes Check',
+  '/calendar-extraction': 'Competitive Calendar Extraction',
   '/observability': 'Usage & Cost Observability',
   '/settings': 'Settings',
 }

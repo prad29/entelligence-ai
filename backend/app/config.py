@@ -248,6 +248,31 @@ class Settings(BaseSettings):
     # retry across a business day.
     LOBBY_CHECK_JOB_TTL_HOURS: int = 72
 
+    # ── Competitive Calendar Extraction (see docs/plans/2026-09-04-competitive-
+    # calendar-extraction-design.md) — upload a studio release-calendar PDF,
+    # classify + extract per-movie rows, download an xlsx. Feature-flagged like
+    # LOBBY_CHECK_ENABLED — the router is only mounted (main.py) when true.
+    CALENDAR_EXTRACT_ENABLED: bool = False
+    # Own dedicated bucket/prefixes, matching DELETED_SHOWTIME_S3_BUCKET's
+    # rationale — independent of every other feature's S3 storage.
+    CALENDAR_EXTRACT_S3_BUCKET: str = "erica-datastore"
+    CALENDAR_EXTRACT_S3_REGION: str = "us-east-1"
+    # Chosen 2026-09-07 by scripts/calendar_eval.py: a 6-model harness against
+    # a 56-row hand-labeled golden set. The first harness pass had a token-cap
+    # bug (8000 max output tokens truncated nemotron/mistral's more verbose
+    # JSON) and a 60s client timeout too short for sonnet5 — after fixing
+    # both and rerunning, sonnet5 hit 100% full-row accuracy and mistral
+    # 98.2%, both well ahead of haiku45's 89.3%. Chose mistral over sonnet5:
+    # 98.2% vs 100% accuracy for roughly half the cost ($69 vs $128 per 1000
+    # calendars) and half the latency (~34s vs ~64s) — see
+    # out/calendar_eval/summary.md for the full comparison.
+    CALENDAR_EXTRACT_MODEL_ID: str = "mistral.mistral-large-3-675b-instruct"
+    # Result workbook stays downloadable for 30 days (product decision
+    # 2026-09-04) — mirrors DELETED_SHOWTIME_JOB_TTL_HOURS.
+    CALENDAR_EXTRACT_JOB_TTL_HOURS: int = 24 * 30
+    # Per-Converse-call budget for one classify or one extract call.
+    CALENDAR_EXTRACT_TIMEOUT_SECONDS: int = 90
+
     @property
     def SERPAPI_API_KEYS(self) -> list[tuple[int, str]]:
         """Ordered (slot, key) pairs for every configured SerpApi key, slot 1 = SERPAPI_API_KEY."""

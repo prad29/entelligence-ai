@@ -104,6 +104,17 @@ services:
       redis:
         condition: service_healthy
 
+  celery-calendar-extract-worker:
+    image: ${ECR_BACKEND}:${IMAGE_TAG}
+    # Low concurrency -- one job classifies+extracts a single PDF via a
+    # handful of sequential Bedrock calls; not a high-volume path.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q calendar-extract
+    restart: unless-stopped
+    env_file: /app/.env.prod
+    depends_on:
+      redis:
+        condition: service_healthy
+
   celery-beat:
     image: ${ECR_BACKEND}:${IMAGE_TAG}
     # Exactly one replica, always — see docker-compose.yml for why.

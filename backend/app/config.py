@@ -258,11 +258,15 @@ class Settings(BaseSettings):
     CALENDAR_EXTRACT_S3_BUCKET: str = "erica-datastore"
     CALENDAR_EXTRACT_S3_REGION: str = "us-east-1"
     # Chosen 2026-09-07 by scripts/calendar_eval.py: a 6-model harness against
-    # a 56-row hand-labeled golden set. haiku45 won clearly (89.3% full-row
-    # accuracy vs 69.6% for the next-best, nova2lite; nemotron/qwen/sonnet5/
-    # mistral all failed outright at this task) at $45/1000 calendars — see
+    # a 56-row hand-labeled golden set. The first harness pass had a token-cap
+    # bug (8000 max output tokens truncated nemotron/mistral's more verbose
+    # JSON) and a 60s client timeout too short for sonnet5 — after fixing
+    # both and rerunning, sonnet5 hit 100% full-row accuracy and mistral
+    # 98.2%, both well ahead of haiku45's 89.3%. Chose mistral over sonnet5:
+    # 98.2% vs 100% accuracy for roughly half the cost ($69 vs $128 per 1000
+    # calendars) and half the latency (~34s vs ~64s) — see
     # out/calendar_eval/summary.md for the full comparison.
-    CALENDAR_EXTRACT_MODEL_ID: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    CALENDAR_EXTRACT_MODEL_ID: str = "mistral.mistral-large-3-675b-instruct"
     # Result workbook stays downloadable for 30 days (product decision
     # 2026-09-04) — mirrors DELETED_SHOWTIME_JOB_TTL_HOURS.
     CALENDAR_EXTRACT_JOB_TTL_HOURS: int = 24 * 30

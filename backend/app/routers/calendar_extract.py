@@ -13,7 +13,7 @@ import os
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlmodel import Session, select
 
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/v1/calendar-extract", tags=["calendar-extract"])
 @router.post("/jobs")
 async def upload_job(
     file: UploadFile = File(...),
-    force: bool = False,
+    force: str = Form("false"),
     session: Session = Depends(get_session),
 ):
     from app.calendar_extract import storage
@@ -43,8 +43,9 @@ async def upload_job(
         raise HTTPException(status_code=400, detail="File is empty")
 
     file_hash = hashlib.sha256(contents).hexdigest()
+    force_bool = force.strip().lower() in ("true", "1", "yes")
 
-    if not force:
+    if not force_bool:
         existing = session.exec(
             select(CalendarExtractJob)
             .where(CalendarExtractJob.file_hash == file_hash)

@@ -122,7 +122,7 @@ export function useCalendarExtractJob() {
       const form = new FormData()
       form.append('file', file)
 
-      const res = await api.post<{ job_id: string; deduplicated: boolean }>(
+      const res = await api.post<{ job_id: string }>(
         `${BASE_URL}/jobs`,
         form,
         { headers: { 'Content-Type': 'multipart/form-data' } }

@@ -57,16 +57,15 @@ def classify_stage_a(text: str) -> ClassifyResult:
     )
 
 
-def classify_stage_b(text: str) -> ClassifyResult:
+def classify_stage_b(text: str, job_id: str | None = None) -> ClassifyResult:
     """One LLM call for the ambiguous case."""
-    import json
-
     from app.calendar_extract.bedrock import call_converse_json
     from app.calendar_extract.prompt import (
         CLASSIFY_PROMPT_ONLY_SUFFIX,
         CLASSIFY_SCHEMA,
         CLASSIFY_SYSTEM_PROMPT,
     )
+    from app.observability.constants import TASK_CALENDAR_EXTRACT
 
     rec, _usage = call_converse_json(
         system_prompt=CLASSIFY_SYSTEM_PROMPT,
@@ -74,7 +73,8 @@ def classify_stage_b(text: str) -> ClassifyResult:
         schema=CLASSIFY_SCHEMA,
         user_text="Is this document a release calendar?\n\n" + text[:8000],
         tool_name="emit_classification",
-        task_type="calendar_extract_classify",
+        task_type=TASK_CALENDAR_EXTRACT,
+        job_id=job_id,
     )
     return ClassifyResult(
         bool(rec.get("is_release_calendar")),
@@ -82,8 +82,8 @@ def classify_stage_b(text: str) -> ClassifyResult:
     )
 
 
-def classify(text: str) -> ClassifyResult:
+def classify(text: str, job_id: str | None = None) -> ClassifyResult:
     result = classify_stage_a(text)
     if result.ambiguous:
-        return classify_stage_b(text)
+        return classify_stage_b(text, job_id)
     return result

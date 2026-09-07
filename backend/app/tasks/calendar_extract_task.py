@@ -44,7 +44,7 @@ def process_calendar_job(job_id: str) -> None:
             pdf_bytes = storage.get_bytes(job.file_path)
             text = extract_calendar_text(pdf_bytes)
 
-            result = classify(text)
+            result = classify(text, job_id=job_id)
             job.is_release_calendar = result.is_release_calendar
             job.classification_reason = result.reasoning
 
@@ -58,7 +58,7 @@ def process_calendar_job(job_id: str) -> None:
             session.add(job)
             session.commit()
 
-            outcome = extract_calendar_rows(text)
+            outcome = extract_calendar_rows(text, job_id=job_id)
             if not outcome.rows:
                 job.status = "failed"
                 job.error = "No rows extracted" + (

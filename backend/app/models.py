@@ -658,3 +658,26 @@ class LlmUsageRollupWatermark(SQLModel, table=True):
     last_rolled_id: int = Field(default=0)
     last_rolled_hour: Optional[datetime] = None
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CalendarExtractJob(SQLModel, table=True):
+    """One-table-per-feature convention (matching DeletedShowtimeJob above).
+    One row per uploaded calendar PDF — no per-movie-row child table (the
+    generated xlsx is the entire deliverable, product decision 2026-09-04).
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    status: str = Field(default="queued")
+    # queued|classifying|processing|completed|failed|rejected
+    original_filename: Optional[str] = None
+    file_hash: str = Field(index=True)  # sha256 of raw bytes — dedup key
+    file_path: Optional[str] = None  # S3 input key
+    output_path: Optional[str] = None  # S3 output key
+    is_release_calendar: Optional[bool] = None
+    classification_reason: Optional[str] = None
+    rows_extracted: int = Field(default=0)
+    model_id: Optional[str] = None
+    error: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+    ttl: Optional[datetime] = None

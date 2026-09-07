@@ -12,6 +12,7 @@ from app.routers import deleted_showtimes
 from app.routers import intl_detect, intl_amenities, intl_jobs
 from app.routers import usage
 from app.routers import lobby_check
+from app.routers import calendar_extract
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -77,6 +78,9 @@ if settings.EXTERNAL_API_ENABLED:
 
 if settings.LOBBY_CHECK_ENABLED:
     app.include_router(lobby_check.router)
+
+if settings.CALENDAR_EXTRACT_ENABLED:
+    app.include_router(calendar_extract.router)
 
 
 _DEFAULT_MOVIE_FORMAT_SEEDS = [

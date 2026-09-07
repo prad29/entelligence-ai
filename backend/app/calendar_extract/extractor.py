@@ -75,8 +75,9 @@ class ExtractionOutcome:
     errors: list[str] = field(default_factory=list)
 
 
-def extract_calendar_rows(text: str) -> ExtractionOutcome:
+def extract_calendar_rows(text: str, job_id: str | None = None) -> ExtractionOutcome:
     from app.calendar_extract.bedrock import call_converse_json
+    from app.observability.constants import TASK_CALENDAR_EXTRACT
 
     outcome = ExtractionOutcome()
     chunks = _chunk_text(text)
@@ -90,7 +91,8 @@ def extract_calendar_rows(text: str) -> ExtractionOutcome:
                 schema=SCHEMA,
                 user_text=USER_TEXT_PREFIX + chunk,
                 tool_name="emit_calendar_rows",
-                task_type="calendar_extract_rows",
+                task_type=TASK_CALENDAR_EXTRACT,
+                job_id=job_id,
                 # 6000-char chunks can hold 100+ dense entries in the later,
                 # terser years of a multi-year calendar; 8000 truncated mid-
                 # JSON on a real run (confirmed: that chunk needed 8133).

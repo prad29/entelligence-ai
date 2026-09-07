@@ -22,6 +22,7 @@ import time
 from typing import Any
 
 from app.config import settings
+from app.observability.constants import PATH_BEDROCK_CONVERSE
 from app.observability.context import LlmCallContext, TokenUsage
 from app.observability.llm_logging import log_llm_call
 
@@ -116,6 +117,7 @@ def call_converse_json(
     user_text: str,
     tool_name: str,
     task_type: str,
+    job_id: str | None = None,
     max_tokens: int = 8000,
 ) -> tuple[dict, TokenUsage]:
     """One Converse call constrained to `schema` via whatever backend
@@ -123,7 +125,10 @@ def call_converse_json(
     validation failure. Returns (parsed_json, usage). Raises on a second
     failure."""
     client = _get_client()
-    ctx = LlmCallContext(task_type=task_type, call_path="calendar_extract")
+    ctx = LlmCallContext(
+        task_type=task_type, call_path=PATH_BEDROCK_CONVERSE,
+        job_id=job_id, job_type="CalendarExtractJob",
+    )
     model_id = settings.CALENDAR_EXTRACT_MODEL_ID
     backend = _backend_for(model_id)
     parse = _parse_tool_use if backend == "forced_tool" else _parse_text_json

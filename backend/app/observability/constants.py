@@ -18,6 +18,11 @@ TASK_MOVIE_FORMAT_DETECTION = "movie_format_detection"
 # Cinema lobby marketing-material image extraction (Qwen 3-VL on Bedrock,
 # app/lobby_check/) — see docs/plans/2026-09-01-lobby-check-design.md §6.1.
 TASK_LOBBY_CHECK = "lobby_check"
+# Competitive Calendar Extraction (Mistral Large 3 on Bedrock,
+# app/calendar_extract/) — one bucket covering both the classify and the
+# per-chunk extraction calls, matching every other feature's per-feature
+# (not per-call-site) granularity.
+TASK_CALENDAR_EXTRACT = "calendar_extract"
 
 TASK_TYPES: tuple[str, ...] = (
     TASK_DOMESTIC_MAPPING,
@@ -25,6 +30,7 @@ TASK_TYPES: tuple[str, ...] = (
     TASK_AMENITY_DETECTION,
     TASK_MOVIE_FORMAT_DETECTION,
     TASK_LOBBY_CHECK,
+    TASK_CALENDAR_EXTRACT,
 )
 
 # --- call_path (spec §5) -----------------------------------------------------

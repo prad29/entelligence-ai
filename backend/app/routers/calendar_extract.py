@@ -13,11 +13,10 @@ import os
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlmodel import Session, select
 
-from app.config import settings
 from app.database import get_session
 
 router = APIRouter(prefix="/api/v1/calendar-extract", tags=["calendar-extract"])
@@ -26,9 +25,13 @@ router = APIRouter(prefix="/api/v1/calendar-extract", tags=["calendar-extract"])
 @router.post("/jobs")
 async def upload_job(
     file: UploadFile = File(...),
-    force: str = Form("false"),
     session: Session = Depends(get_session),
 ):
+    """Every upload always creates a new job and reprocesses — no dedup.
+    (Product decision 2026-09-07: an earlier content-hash dedup was removed
+    because it surprised users re-running the same file on purpose. `file_hash`
+    is still recorded on the job row for observability/debugging, just no
+    longer used to skip processing.)"""
     from app.calendar_extract import storage
     from app.models import CalendarExtractJob
     from app.tasks.calendar_extract_task import process_calendar_job
@@ -43,17 +46,6 @@ async def upload_job(
         raise HTTPException(status_code=400, detail="File is empty")
 
     file_hash = hashlib.sha256(contents).hexdigest()
-    force_bool = force.strip().lower() in ("true", "1", "yes")
-
-    if not force_bool:
-        existing = session.exec(
-            select(CalendarExtractJob)
-            .where(CalendarExtractJob.file_hash == file_hash)
-            .where(CalendarExtractJob.status == "completed")
-            .order_by(CalendarExtractJob.created_at.desc())
-        ).first()
-        if existing is not None:
-            return {"job_id": existing.id, "deduplicated": True}
 
     job_id = str(uuid.uuid4())
     upload_key = storage.upload_key(job_id)
@@ -71,7 +63,7 @@ async def upload_job(
 
     process_calendar_job.delay(job_id)
 
-    return {"job_id": job_id, "deduplicated": False}
+    return {"job_id": job_id}
 
 
 def _serialize_job(job) -> dict:

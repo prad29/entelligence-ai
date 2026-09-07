@@ -11,6 +11,7 @@ import { MovieReviewQueuePage } from '@/pages/movie-review/MovieReviewQueuePage'
 import { MovieTitleMatchingPage } from '@/pages/movie-title-matching/MovieTitleMatchingPage'
 import { MovieMasterSeedPage } from '@/pages/movie-title-seed/MovieMasterSeedPage'
 import { DeletedShowtimesCheck } from '@/pages/deleted-showtimes/DeletedShowtimesCheck'
+import { CalendarExtractionPage } from '@/pages/calendar-extraction/CalendarExtractionPage'
 import { ObservabilityPage } from '@/pages/observability/ObservabilityPage'
 
 function AppRoutes() {
@@ -28,6 +29,7 @@ function AppRoutes() {
       <Route path="/movie-title-matching" element={<MovieTitleMatchingPage />} />
       <Route path="/movie-title-seed" element={<MovieMasterSeedPage />} />
       <Route path="/deleted-showtimes" element={<DeletedShowtimesCheck />} />
+      <Route path="/calendar-extraction" element={<CalendarExtractionPage />} />
       <Route path="/observability" element={<ObservabilityPage />} />
       <Route path="*" element={<Navigate to="/detection" replace />} />
     </Routes>

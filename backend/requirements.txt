@@ -5,6 +5,7 @@ psycopg2-binary>=2.9.9
 pymysql>=1.1.0
 alembic>=1.13.1
 openpyxl>=3.1.2
+pdfplumber>=0.11.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.1
 typer>=0.12.3

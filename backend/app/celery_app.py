@@ -18,6 +18,7 @@ celery = Celery(
         "app.tasks.usage_rollup_task",
         "app.tasks.agentic_scheduler_task",
         "app.tasks.lobby_check_task",
+        "app.tasks.calendar_extract_task",
     ],
 )
 
@@ -39,6 +40,7 @@ celery.conf.update(
         "app.tasks.deleted_showtime_task.process_batch": {"queue": "deleted-showtimes"},
         "app.tasks.deleted_showtime_task.finalize_job": {"queue": "deleted-showtimes"},
         "app.tasks.deleted_showtime_task.dispatch_job_task": {"queue": "deleted-showtimes"},
+        "app.tasks.calendar_extract_task.process_calendar_job": {"queue": "calendar-extract"},
         # Lobby Check's own dedicated queue/pool -- deliberately NOT the
         # shared "agentic" queue (see lobby_check_task.py's module
         # docstring): that pool is sized for the title-matching pipelines

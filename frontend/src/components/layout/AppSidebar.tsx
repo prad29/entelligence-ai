@@ -11,6 +11,7 @@ import {
   Clapperboard,
   Database,
   CalendarX,
+  FileSpreadsheet,
   Zap,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -40,6 +41,10 @@ const movieTitleMatchingGroup: NavItem[] = [
 
 const deletedShowtimesGroup: NavItem[] = [
   { to: '/deleted-showtimes', icon: <CalendarX className="h-4 w-4" />, label: 'Deleted Showtimes Check' },
+]
+
+const calendarExtractionGroup: NavItem[] = [
+  { to: '/calendar-extraction', icon: <FileSpreadsheet className="h-4 w-4" />, label: 'Competitive Calendar Extraction' },
 ]
 
 const observabilityGroup: NavItem[] = [
@@ -111,6 +116,7 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
         <NavGroup title="Movie Format Detection" items={movieFormatGroup} onItemClick={onItemClick} />
         <NavGroup title="Movie Title Matching" items={movieTitleMatchingGroup} onItemClick={onItemClick} />
         <NavGroup title="Deleted Showtimes" items={deletedShowtimesGroup} onItemClick={onItemClick} />
+        <NavGroup title="Competitive Calendar" items={calendarExtractionGroup} onItemClick={onItemClick} />
         <NavGroup title="Observability" items={observabilityGroup} onItemClick={onItemClick} />
         <NavGroup title="System" items={systemGroup} onItemClick={onItemClick} />
       </div>

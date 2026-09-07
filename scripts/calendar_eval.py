@@ -804,7 +804,13 @@ def run_and_score(client, model: Model) -> EvalResult:
 
 def make_client():
     import boto3
-    return boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    from botocore.config import Config
+    # sonnet5 timed out on boto3's default 60s read timeout for this bulk
+    # extraction task (~100s+ observed) — give every model real headroom.
+    return boto3.client(
+        "bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"),
+        config=Config(read_timeout=240, connect_timeout=10),
+    )
 
 
 def cmd_preflight(args) -> int:

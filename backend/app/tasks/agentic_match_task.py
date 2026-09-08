@@ -76,6 +76,15 @@ def _movie_exists(session: Session, movie_id: int) -> bool:
     return row is not None
 
 
+def _variant_of(job) -> str:
+    """Which matching pipeline processes this job's rows. None/missing/an
+    unrecognised value all degrade to "v1" (fail-safe: never an unhandled
+    branch) -- includes every job created before v2 existed, since
+    MovieTitleBatchJob.pipeline_variant is a nullable column added later."""
+    value = getattr(job, "pipeline_variant", None)
+    return "v2" if value == "v2" else "v1"
+
+
 def _bump_counters(session: Session, job_id: str, **increments: int) -> None:
     """
     Atomically increment one or more MovieTitleBatchJob counter columns using a
@@ -117,12 +126,18 @@ def agentic_batch_row(
     show_date: Optional[str] = None,
     ticketing_url: Optional[str] = None,
     use_poster_vision: bool = False,
+    variant: str = "v1",
 ) -> None:
     """Process a single batch row. theater is ALWAYS None in the batch path.
 
     The upload schema has no theater column (a deliberate, documented difference
     from the single-match UI, which does pass a theater). A single row failing
     only marks that row failed; it never aborts the batch.
+
+    `variant` selects the matching pipeline (see enqueue_next_window, which
+    learns it once per window from the job row and forwards it via a Celery
+    message kwarg rather than the cached row-args -- see that function's
+    docstring for why).
     """
     from celery.exceptions import Retry
 
@@ -130,6 +145,7 @@ def agentic_batch_row(
     from app.observability.constants import (
         CALLER_PORTAL,
         PATH_AGENTIC_CLI,
+        PATH_AGENTIC_CLI_V2,
         TASK_DOMESTIC_MAPPING,
     )
     from app.observability.context import LlmCallContext
@@ -138,10 +154,15 @@ def agentic_batch_row(
     from app.title_matching.agentic.runner import run_agentic_match
     from app.title_matching import sandbox_semaphore
 
+    is_v2 = variant == "v2"
     holder = None
     try:
         holder = sandbox_semaphore.acquire(timeout=limits.slot_wait_timeout())
         try:
+            # Pass `variant` ONLY for v2 so the v1 call is byte-identical to
+            # today's -- several live/e2e tests patch run_agentic_match with
+            # a narrow fake that has no `variant` parameter.
+            variant_kwarg = {"variant": "v2"} if is_v2 else {}
             result = run_agentic_match(
                 title,
                 show_date,
@@ -150,11 +171,12 @@ def agentic_batch_row(
                 use_poster_vision,
                 usage_ctx=LlmCallContext(
                     task_type=TASK_DOMESTIC_MAPPING,
-                    call_path=PATH_AGENTIC_CLI,
+                    call_path=PATH_AGENTIC_CLI_V2 if is_v2 else PATH_AGENTIC_CLI,
                     caller_type=CALLER_PORTAL,
                     job_id=job_id,
                     job_type="MovieTitleBatchJob",
                 ),
+                **variant_kwarg,
             )
         except AgenticThrottleError as exc:
             # MUST be checked before the generic `except AgenticError` below —
@@ -526,6 +548,14 @@ def enqueue_next_window(job_id: str, limit: int) -> int:
     is recorded as a failed row immediately via the existing failed-row path
     rather than silently never dispatched -- so ``processed`` still
     converges to ``total`` and the job can finalize.
+
+    The job's pipeline variant is read from the job row (NOT the cached row
+    args, whose format must stay stable across a deploy -- a v1 row-args
+    hash written before a deploy has exactly 4 elements, and appending a
+    5th would break `title, show_date, ticketing_url, use_poster_vision =
+    args` for any window still in flight) and forwarded to `agentic_batch_row`
+    as a Celery message kwarg. v1's publish call keeps its exact historical
+    shape (no `kwargs=` at all) so it stays byte-identical.
     """
     from app.database import engine
     from app.models import MovieTitleBatchJob
@@ -536,11 +566,14 @@ def enqueue_next_window(job_id: str, limit: int) -> int:
 
     with Session(engine) as session:
         frm, to = claim_row_window(session, MovieTitleBatchJob, job_id, limit)
+        job = session.get(MovieTitleBatchJob, job_id)
+        variant = _variant_of(job) if job is not None else "v1"
     if to <= frm:
         return 0
 
     indices = list(range(frm, to))
     args_by_index = _row_args_for(job_id, indices)
+    publish_kwargs = {"kwargs": {"variant": "v2"}} if variant == "v2" else {}
 
     published = 0
     for idx in indices:
@@ -564,6 +597,7 @@ def enqueue_next_window(job_id: str, limit: int) -> int:
         agentic_batch_row.apply_async(
             args=[job_id, idx, title, show_date, ticketing_url, use_poster_vision],
             queue=AGENTIC_QUEUE,
+            **publish_kwargs,
         )
         published += 1
     return published

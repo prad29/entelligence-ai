@@ -375,9 +375,9 @@ class ApiTitleMatchJob(SQLModel, table=True):
     MovieTitleIntlBatchJob (see external_match_task.py) — this surface needs
     durable, individually addressable rows for partial retrieval and
     row-scoped retry across a job that can run for over an hour, which the
-    existing xlsx + ephemeral-Redis-hash pipeline was never built for. Both
-    paths call the same run_agentic_match core, so matching logic itself
-    never forks.
+    existing xlsx + ephemeral-Redis-hash pipeline was never built for. A v1
+    job on either path calls the same run_agentic_match core; see
+    pipeline_variant below for how a v2 job picks its matcher instead.
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)

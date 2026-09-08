@@ -7,6 +7,13 @@ exactly as they are. This router delegates row processing to the same
 run_agentic_match core via app.tasks.external_match_task, so matching logic
 never forks even though job orchestration (durable per-row Postgres storage
 vs. xlsx + ephemeral Redis) is deliberately different.
+
+The v1 submit routes below are frozen: a caller wanting the v2 pipelines
+posts to /api/v2/singletitle or /api/v2/batchtitle instead (see
+external_title_match_v2.py, which reuses this module's _submit_job and
+schemas and differs only by stamping pipeline_variant="v2" on the job). The
+job status/results/retry routes below are NOT versioned and serve v1 and v2
+jobs alike.
 """
 
 from __future__ import annotations

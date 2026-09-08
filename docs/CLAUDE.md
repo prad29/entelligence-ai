@@ -35,9 +35,21 @@ Three-layer pipeline:
 
 ## Batch Title Matching
 
-Mode B (agentic) batch pipeline: upload a CSV/XLSX of movie titles, run one
-Claude-sandbox match per row, download an XLSX of results. Async Celery job +
-polling — never synchronous. Requires `AGENTIC_TITLE_MATCH_ENABLED=true`.
+Mode B (agentic) is the ONLY domestic title-matching pipeline (single and
+batch) — every request runs through a Claude-sandbox subprocess that does web
+research + DB search; there is no rule-based fallback. Batch: upload a
+CSV/XLSX of movie titles, run one Claude-sandbox match per row, download an
+XLSX of results. Async Celery job + polling — never synchronous. Requires
+`AGENTIC_TITLE_MATCH_ENABLED=true` (must be true in every deployment; when
+false, both `/single` and `/batch` return 400).
+
+A v2 pipeline (prefix `/api/v2/movie-title-match`) additionally weighs
+genre/cast/director/synopsis (not just title) and deterministically rejects a
+pick whose director AND synopsis are both empty (unless genre is "Sports" or
+"Concert/Special Events"), falling through to the next-closest candidate. v2
+batch jobs share the same `movietitlebatchjob` table as v1, distinguished by
+the nullable `pipeline_variant` column (`NULL`/`"v1"` vs `"v2"`) so the
+cross-pipeline fairness scheduler counts/windows/sweeps both identically.
 
 ### Endpoints (prefix `/api/v1/movie-title-match`)
 

@@ -7,14 +7,16 @@ which part of the pipeline ran and what the result was.
 Run with:
     pytest backend/tests/test_title_matching.py -v -s
 
+Note: the rule-based fuzzy/date-proximity fallback (CandidateGenerator,
+decision_engine.score_and_decide, TitleMatchEngine) was retired -- every
+domestic match now runs through the Claude agentic runner unconditionally
+(see test_agentic_mandatory.py for the regression fence). Their tests were
+removed here accordingly.
+
 Pipeline stages tested:
   Stage 0 — Normalizer (promo strip, mojibake, edition markers, event type, ordinal, franchise)
-  Stage 1 — CandidateGenerator (fuzzy, franchise map, alias lookup, ordinal constraints, token coverage)
   Stage 2 — OG image fetcher (T1 plain HTTP poster extract)
-  Stage 4 — Metadata Eliminator (date-window boost, edition penalty, recency boost)
-  Stage 5 — Decision Engine (composite score, AUTO_ACCEPT/REVIEW thresholds, parent_id resolution)
-  E2E     — TitleMatchEngine full pipeline
-  API     — /single endpoint (engine loaded / not loaded)
+  API     — /single endpoint (always agentic; run_agentic_match stubbed)
   Seed    — seed_from_rows upsert logic
 """
 
@@ -22,7 +24,6 @@ from __future__ import annotations
 
 import logging
 import textwrap
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -56,22 +57,6 @@ def _section(title: str) -> None:
     log.info("=" * 70)
     log.info(f"  {title}")
     log.info("=" * 70)
-
-
-# ─── helpers ──────────────────────────────────────────────────────────────────
-
-def _make_master_rows(entries: list[tuple]) -> list[dict]:
-    """entries: (id, title, release_date, cover_image, parent_id)"""
-    return [
-        {
-            "id": e[0],
-            "movie_title": e[1],
-            "release_date": e[2] if len(e) > 2 else None,
-            "cover_image": e[3] if len(e) > 3 else None,
-            "parent_id": e[4] if len(e) > 4 else None,
-        }
-        for e in entries
-    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,128 +199,6 @@ class TestNormalizer:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 1 — CANDIDATE GENERATOR
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestCandidateGenerator:
-    """Stage 1: produces up to 10 candidates via fuzzy, franchise map, alias."""
-
-    def setup_method(self):
-        _section("STAGE 1 — CANDIDATE GENERATOR")
-
-    @pytest.fixture
-    def master_rows(self):
-        return _make_master_rows([
-            (1,  "The Dark Knight",           "2008-07-18", None, None),
-            (2,  "The Dark Knight Rises",     "2012-07-20", None, None),
-            (3,  "Batman Begins",             "2005-06-15", None, None),
-            (4,  "Moana",                     "2016-11-23", None, None),
-            (5,  "Moana 2",                   "2024-11-27", None, None),
-            (14039, "Harry Potter and the Philosopher's Stone", "2001-11-16", None, None),
-            (14038, "Harry Potter and the Chamber of Secrets",  "2002-11-15", None, None),
-            (14061, "Harry Potter and the Prisoner of Azkaban", "2004-06-04", None, None),
-            (13868, "Toy Story",              "1995-11-22", None, None),
-            (14046, "Toy Story 2",            "1999-11-24", None, None),
-            (10731, "Toy Story 3",            "2010-06-18", None, None),
-            (105988, "Toy Story 4",           "2019-06-21", None, None),
-        ])
-
-    @pytest.fixture
-    def gen(self, master_rows):
-        from app.title_matching.candidate_generator import CandidateGenerator
-        return CandidateGenerator(master_rows, semantic_index=None)
-
-    def test_fuzzy_exact_hit(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        normalized = normalize_title("The Dark Knight")
-        results = gen.generate(normalized, {})
-        ids = [c.movie_master_id for c in results]
-        assert 1 in ids
-        _pass("Stage1/CandidateGen", "fuzzy_exact", f"ids={ids[:3]}")
-
-    def test_fuzzy_partial_match(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        normalized = normalize_title("Dark Knight")
-        results = gen.generate(normalized, {})
-        ids = [c.movie_master_id for c in results]
-        assert 1 in ids or 2 in ids
-        _pass("Stage1/CandidateGen", "fuzzy_partial", f"ids={ids[:3]}")
-
-    def test_franchise_map_harry_potter_3(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        normalized = normalize_title("HP 3")
-        results = gen.generate(normalized, {})
-        ids = [c.movie_master_id for c in results]
-        assert 14061 in ids
-        franchise_sources = [c.source for c in results if c.movie_master_id == 14061]
-        assert "franchise_map" in franchise_sources
-        _pass("Stage1/CandidateGen", "franchise_hp3", f"source=franchise_map id=14061")
-
-    def test_franchise_map_toy_story_4(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        normalized = normalize_title("Toy Story 4")
-        results = gen.generate(normalized, {})
-        ids = [c.movie_master_id for c in results]
-        assert 105988 in ids
-        _pass("Stage1/CandidateGen", "franchise_ts4", f"id=105988 ids={ids[:3]}")
-
-    def test_alias_lookup(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        aliases = {"dark knight": 1}
-        normalized = normalize_title("Dark Knight")
-        results = gen.generate(normalized, aliases)
-        alias_hits = [c for c in results if c.source == "alias"]
-        assert len(alias_hits) > 0
-        _pass("Stage1/CandidateGen", "alias_hit", f"alias_id={alias_hits[0].movie_master_id}")
-
-    def test_max_k_candidates(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        normalized = normalize_title("Toy Story")
-        results = gen.generate(normalized, {}, k=5)
-        assert len(results) <= 5
-        _pass("Stage1/CandidateGen", "max_k", f"count={len(results)} ≤ 5")
-
-    def test_ordinal_constraint_filters_wrong_installment(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        normalized = normalize_title("Toy Story 3")
-        results = gen.generate(normalized, {})
-        # Toy Story 1 has no ordinal conflict with query ordinal=3 BUT
-        # Toy Story 2 has ordinal 2 — should be filtered out when ordinal hard constraint applies
-        # This checks that ordinal 3 resolves to id 10731
-        ids = [c.movie_master_id for c in results]
-        assert 10731 in ids, f"Toy Story 3 (id 10731) not in candidates: {ids}"
-        _pass("Stage1/CandidateGen", "ordinal_constraint", f"ts3_id=10731 in {ids[:4]}")
-
-    def test_fuzzy_score_scaled(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        normalized = normalize_title("The Dark Knight")
-        results = gen.generate(normalized, {})
-        fuzzy_hits = [c for c in results if c.source == "fuzzy"]
-        if fuzzy_hits:
-            assert all(0.0 <= c.score <= 0.5 for c in fuzzy_hits), \
-                f"Fuzzy scores should be in 0–0.5 range: {[c.score for c in fuzzy_hits]}"
-        _pass("Stage1/CandidateGen", "fuzzy_score_range", f"scores={[round(c.score,3) for c in fuzzy_hits[:3]]}")
-
-    def test_alias_score_high(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        aliases = {"inception": 999}
-        # Add id 999 to gen's id_to_row manually
-        gen._id_to_row[999] = {"id": 999, "movie_title": "Inception", "release_date": "2010-07-16", "cover_image": None}
-        normalized = normalize_title("Inception")
-        results = gen.generate(normalized, aliases)
-        alias_hits = [c for c in results if c.source == "alias"]
-        assert alias_hits and alias_hits[0].score == 0.95
-        _pass("Stage1/CandidateGen", "alias_score_0.95", f"score={alias_hits[0].score}")
-
-    def test_no_candidates_for_gibberish(self, gen):
-        from app.title_matching.normalizer import normalize_title
-        normalized = normalize_title("xyzxyz qqqqqq zzzzz totally unknown title")
-        results = gen.generate(normalized, {})
-        # May return low-confidence results but should not crash
-        _pass("Stage1/CandidateGen", "gibberish_no_crash", f"count={len(results)}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # STAGE 2 — OG IMAGE FETCHER (T1)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -460,369 +323,52 @@ class TestOGImageFetcher:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 4 — METADATA ELIMINATOR
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestDecisionEngineStage4:
-    """Stage 4: date-window boost, edition marker filter, recency boost."""
-
-    def setup_method(self):
-        _section("STAGE 4 — METADATA ELIMINATOR")
-
-    def _candidate(self, mid: int, title: str, score: float, release: Optional[str] = None) -> object:
-        from app.title_matching.types import CandidateResult
-        return CandidateResult(
-            movie_master_id=mid,
-            movie_title=title,
-            release_date=release,
-            cover_image=None,
-            score=score,
-            source="fuzzy",
-        )
-
-    def _normalized(self, title: str) -> object:
-        from app.title_matching.normalizer import normalize_title
-        return normalize_title(title)
-
-    def test_date_boost_exact(self):
-        from app.title_matching.decision_engine import _date_boost
-        boost, label = _date_boost("2016-11-23", "2016-11-23")
-        assert boost == 0.30
-        assert label == "EXACT"
-        _pass("Stage4/DateBoost", "exact_match", f"boost={boost} label={label}")
-
-    def test_date_boost_near_within_30_days(self):
-        from app.title_matching.decision_engine import _date_boost
-        boost, label = _date_boost("2016-11-30", "2016-11-23")
-        assert boost == 0.15
-        assert label == "NEAR"
-        _pass("Stage4/DateBoost", "near_30_days", f"boost={boost} label={label}")
-
-    def test_date_boost_year_within_365(self):
-        from app.title_matching.decision_engine import _date_boost
-        boost, label = _date_boost("2017-05-01", "2016-11-23")
-        assert boost == 0.05
-        assert label == "YEAR"
-        _pass("Stage4/DateBoost", "year_window", f"boost={boost} label={label}")
-
-    def test_date_boost_none_when_no_dates(self):
-        from app.title_matching.decision_engine import _date_boost
-        boost, label = _date_boost(None, None)
-        assert boost == 0.0
-        assert label == "NONE"
-        _pass("Stage4/DateBoost", "no_dates", f"boost={boost}")
-
-    def test_date_boost_sentinel_release_date(self):
-        from app.title_matching.decision_engine import _date_boost
-        boost, label = _date_boost("2024-01-01", "0000-00-00")
-        assert boost == 0.0
-        _pass("Stage4/DateBoost", "sentinel_date", f"boost={boost} (0000 sentinel ignored)")
-
-    def test_edition_penalty_live_action_vs_animation(self):
-        from app.title_matching.decision_engine import _edition_penalty
-        from app.title_matching.normalizer import normalize_title
-        norm = normalize_title("Moana (Live Action)")
-        penalty = _edition_penalty(norm, "Moana Animated")
-        assert penalty == -0.20
-        _pass("Stage4/Edition", "live_action_vs_animation", f"penalty={penalty}")
-
-    def test_edition_no_penalty_without_live_action_marker(self):
-        from app.title_matching.decision_engine import _edition_penalty
-        from app.title_matching.normalizer import normalize_title
-        norm = normalize_title("Moana")
-        penalty = _edition_penalty(norm, "Moana Animated")
-        assert penalty == 0.0
-        _pass("Stage4/Edition", "no_live_action_no_penalty", f"penalty={penalty}")
-
-    def test_recency_boost_most_recent_wins(self):
-        from app.title_matching.decision_engine import _recency_boost
-        from app.title_matching.types import CandidateResult
-
-        old = CandidateResult(1, "Moana", "2016-11-23", None, 0.5, "fuzzy")
-        new = CandidateResult(2, "Moana 2", "2024-11-27", None, 0.5, "fuzzy")
-        candidates = [new, old]
-        # winner_idx=0 is "Moana 2" (most recent)
-        boost = _recency_boost(candidates, 0)
-        assert boost == 0.05
-        _pass("Stage4/Recency", "most_recent_gets_boost", f"boost={boost}")
-
-    def test_recency_no_boost_when_not_most_recent(self):
-        from app.title_matching.decision_engine import _recency_boost
-        from app.title_matching.types import CandidateResult
-
-        old = CandidateResult(1, "Moana", "2016-11-23", None, 0.5, "fuzzy")
-        new = CandidateResult(2, "Moana 2", "2024-11-27", None, 0.5, "fuzzy")
-        candidates = [old, new]
-        # winner_idx=0 is "Moana" (older) — someone else is more recent
-        boost = _recency_boost(candidates, 0)
-        assert boost == 0.0
-        _pass("Stage4/Recency", "older_no_boost", f"boost={boost}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STAGE 5 — DECISION ENGINE
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestDecisionEngineStage5:
-    """Stage 5: composite score → AUTO_ACCEPT / REVIEW, parent_id resolution."""
-
-    def setup_method(self):
-        _section("STAGE 5 — DECISION ENGINE")
-
-    def _make_id_to_row(self, entries: list[tuple]) -> dict:
-        return {
-            e[0]: {"id": e[0], "movie_title": e[1], "release_date": e[2], "parent_id": e[3] if len(e) > 3 else None}
-            for e in entries
-        }
-
-    def _candidate(self, mid: int, title: str, score: float, release: Optional[str] = None):
-        from app.title_matching.types import CandidateResult
-        return CandidateResult(mid, title, release, None, score, "fuzzy")
-
-    def test_auto_accept_above_threshold(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        norm = normalize_title("Inception")
-        candidates = [self._candidate(1, "Inception", 0.95, "2010-07-16")]
-        result = score_and_decide(norm, candidates, show_date=None, theater=None)
-        assert result.decision == "AUTO_ACCEPT"
-        _pass("Stage5/Decision", "auto_accept", f"score={result.confidence} decision={result.decision}")
-
-    def test_review_below_threshold(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        norm = normalize_title("Incepshun")
-        candidates = [self._candidate(1, "Inception", 0.35, "2010-07-16")]
-        result = score_and_decide(norm, candidates, show_date=None, theater=None)
-        assert result.decision == "REVIEW"
-        _pass("Stage5/Decision", "review_low_confidence", f"score={result.confidence}")
-
-    def test_review_non_movie_always_review(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        norm = normalize_title("Taylor Swift Eras Tour Concert")
-        candidates = [self._candidate(1, "Taylor Swift Concert", 0.95)]
-        result = score_and_decide(norm, candidates, show_date=None, theater=None)
-        assert "REVIEW" in result.decision
-        _pass("Stage5/Decision", "non_movie_always_review", f"decision={result.decision}")
-
-    def test_review_multi_film_always_review(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        norm = normalize_title("Marvel Marathon Double Feature")
-        candidates = [self._candidate(1, "Avengers", 0.95)]
-        result = score_and_decide(norm, candidates, show_date=None, theater=None)
-        assert "REVIEW" in result.decision
-        _pass("Stage5/Decision", "multi_film_always_review", f"decision={result.decision}")
-
-    def test_date_boost_pushes_to_auto_accept(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        norm = normalize_title("Moana")
-        # base score 0.65 + exact date boost 0.30 = 0.95 → AUTO_ACCEPT
-        candidates = [self._candidate(1, "Moana", 0.65, "2016-11-23")]
-        result = score_and_decide(norm, candidates, show_date="2016-11-23", theater=None)
-        assert result.decision == "AUTO_ACCEPT"
-        assert result.evidence["date_window"] == "EXACT"
-        _pass("Stage5/Decision", "date_boost_auto_accept", f"score={result.confidence} date={result.evidence['date_window']}")
-
-    def test_parent_id_resolved(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        id_to_row = self._make_id_to_row([
-            (101, "Batman", "2005-06-15", 100),    # parent_id=100
-            (100, "Batman Begins", "2005-06-15"),   # canonical
-        ])
-        norm = normalize_title("Batman")
-        candidates = [self._candidate(101, "Batman", 0.92)]
-        result = score_and_decide(norm, candidates, show_date=None, theater=None, id_to_row=id_to_row)
-        assert result.canonical_movie_id == 100
-        assert result.suggested_movie_id == 101
-        _pass("Stage5/Decision", "parent_id_resolved",
-              f"suggested={result.suggested_movie_id} canonical={result.canonical_movie_id}")
-
-    def test_no_candidates_returns_review(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        norm = normalize_title("Inception")
-        result = score_and_decide(norm, [], show_date=None, theater=None)
-        assert result.decision == "REVIEW"
-        assert result.confidence == 0.0
-        _pass("Stage5/Decision", "empty_candidates", f"decision={result.decision}")
-
-    def test_evidence_structure(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        norm = normalize_title("Inception")
-        candidates = [
-            self._candidate(1, "Inception", 0.92),
-            self._candidate(2, "Interstellar", 0.35),
-        ]
-        result = score_and_decide(norm, candidates, show_date=None, theater=None)
-        assert "fuzzy_top" in result.evidence
-        assert "date_window" in result.evidence
-        assert "eliminated" in result.evidence
-        _pass("Stage5/Decision", "evidence_keys", f"keys={list(result.evidence.keys())}")
-
-    def test_reasoning_non_empty(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-
-        norm = normalize_title("The Dark Knight")
-        candidates = [self._candidate(1, "The Dark Knight", 0.95, "2008-07-18")]
-        result = score_and_decide(norm, candidates, show_date=None, theater=None)
-        assert result.reasoning and len(result.reasoning) > 10
-        _pass("Stage5/Decision", "reasoning_non_empty", f"'{result.reasoning[:60]}…'")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# E2E — FULL PIPELINE (TitleMatchEngine)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestTitleMatchEngineE2E:
-    """End-to-end through TitleMatchEngine.match()."""
-
-    def setup_method(self):
-        _section("E2E — FULL PIPELINE")
-
-    @pytest.fixture
-    def engine(self):
-        from app.title_matching.candidate_generator import CandidateGenerator
-        from app.title_matching.engine import TitleMatchEngine
-
-        rows = _make_master_rows([
-            (1,    "Inception",               "2010-07-16", "https://img.example.com/inception.jpg", None),
-            (2,    "Interstellar",             "2014-11-07", None, None),
-            (3,    "The Dark Knight",          "2008-07-18", None, None),
-            (4,    "Moana",                    "2016-11-23", None, None),
-            (5,    "Moana 2",                  "2024-11-27", None, None),
-            (14039, "Harry Potter and the Philosopher's Stone", "2001-11-16", None, None),
-            (13868, "Toy Story",               "1995-11-22", None, None),
-            (105988, "Toy Story 4",            "2019-06-21", None, None),
-        ])
-        gen = CandidateGenerator(rows, semantic_index=None)
-        return TitleMatchEngine(gen, {})
-
-    def test_exact_match_inception(self, engine):
-        result = engine.match("Inception", show_date="2010-07-16")
-        assert result.suggested_movie_id == 1
-        assert result.confidence >= 0.80
-        _pass("E2E/Pipeline", "inception_exact",
-              f"id={result.suggested_movie_id} conf={result.confidence} decision={result.decision}")
-
-    def test_promo_stripped_before_match(self, engine):
-        result = engine.match("KIDSHOW: Toy Story 4")
-        assert result.suggested_movie_id == 105988
-        _pass("E2E/Pipeline", "promo_stripped", f"id={result.suggested_movie_id} conf={result.confidence}")
-
-    def test_harry_potter_franchise_map(self, engine):
-        result = engine.match("HP 1")
-        assert result.suggested_movie_id == 14039
-        _pass("E2E/Pipeline", "hp1_franchise_map", f"id={result.suggested_movie_id}")
-
-    def test_cover_image_attached(self, engine):
-        result = engine.match("Inception")
-        assert result.cover_image is not None
-        assert "inception" in result.cover_image.lower()
-        _pass("E2E/Pipeline", "cover_image", f"url={result.cover_image}")
-
-    def test_cover_image_noimage_filtered(self, engine):
-        # Replace Inception's cover_image with noimage sentinel
-        engine._id_to_row[1]["cover_image"] = "noimage.jpg"
-        result = engine.match("Inception")
-        assert result.cover_image is None
-        _pass("E2E/Pipeline", "noimage_filtered", "cover_image=None for noimage.jpg")
-
-    def test_ticketing_url_og_image_fetched(self, engine):
-        html = '<meta property="og:image" content="https://cdn.tickets.com/moana.jpg" />'
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = html
-
-        with patch(_T1_HTTPX_PATCH, return_value=mock_resp), \
-             patch("app.title_matching.evidence_cache.get", return_value=None), \
-             patch("app.title_matching.evidence_cache.set"):
-            result = engine.match("Moana", ticketing_url="https://tickets.example.com/moana")
-
-        assert result.ticketing_poster_url == "https://cdn.tickets.com/moana.jpg"
-        _pass("E2E/Pipeline", "ticketing_poster", f"url={result.ticketing_poster_url}")
-
-    def test_ticketing_url_none_skipped(self, engine):
-        result = engine.match("Moana", ticketing_url=None)
-        assert result.ticketing_poster_url is None
-        _pass("E2E/Pipeline", "no_ticketing_url", "ticketing_poster_url=None (skipped)")
-
-    def test_result_always_has_reasoning(self, engine):
-        result = engine.match("xyzxyz completely unknown qqqqqq")
-        assert result.reasoning and len(result.reasoning) > 5
-        _pass("E2E/Pipeline", "always_has_reasoning", f"'{result.reasoning[:60]}…'")
-
-    def test_multi_film_title_routes_to_review(self, engine):
-        result = engine.match("Marvel Marathon Double Feature")
-        assert "REVIEW" in result.decision
-        _pass("E2E/Pipeline", "multi_film_review", f"decision={result.decision}")
-
-    def test_live_action_vs_animation(self, engine):
-        result = engine.match("Moana (Live Action)")
-        # Should still find Moana; no animation candidates in this fixture
-        assert result.suggested_movie_id in (4, 5)
-        _pass("E2E/Pipeline", "live_action_match", f"id={result.suggested_movie_id}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # API — /single endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestAPIEndpoint:
-    """API-layer tests for POST /api/v1/movie-title-match/single."""
+    """API-layer tests for POST /api/v1/movie-title-match/single.
+
+    Every request now always goes through the Claude agentic runner (the
+    rule-based fallback was retired) — so `client` patches
+    runner.run_agentic_match with a stub and forces
+    AGENTIC_TITLE_MATCH_ENABLED on, rather than pre-building a fuzzy engine.
+    """
 
     def setup_method(self):
         _section("API — /single endpoint")
 
-    @pytest.fixture
-    def client_no_engine(self):
-        from fastapi.testclient import TestClient
-        from app.main import app
+    @staticmethod
+    def _stub_result(title: str, *_args, **_kwargs):
+        from app.title_matching.types import TitleMatchResult
 
-        app.state.title_match_engine = None
-        return TestClient(app)
-
-    @pytest.fixture
-    def client_with_engine(self):
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.title_matching.candidate_generator import CandidateGenerator
-        from app.title_matching.engine import TitleMatchEngine
-
-        rows = _make_master_rows([
-            (1, "Inception", "2010-07-16", None, None),
-            (2, "Interstellar", "2014-11-07", None, None),
-        ])
-        gen = CandidateGenerator(rows, semantic_index=None)
-        app.state.title_match_engine = TitleMatchEngine(gen, {})
-        return TestClient(app)
-
-    def test_engine_not_loaded_returns_review(self, client_no_engine):
-        resp = client_no_engine.post(
-            "/api/v1/movie-title-match/single",
-            json={"title": "Inception"}
+        movie_id = 2 if "Interstellar" in title else 1
+        return TitleMatchResult(
+            suggested_movie_id=movie_id,
+            suggested_movie_title=title,
+            canonical_movie_id=movie_id,
+            confidence=0.95,
+            decision="AUTO_ACCEPT",
+            reasoning="stubbed agentic match for test",
+            evidence={"agentic": True},
+            fired_ai=True,
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["decision"] == "REVIEW"
-        assert "seeded" in data["reasoning"].lower() or "not loaded" in data["reasoning"].lower()
-        _pass("API/single", "engine_not_loaded", f"decision={data['decision']}")
 
-    def test_engine_loaded_returns_match(self, client_with_engine):
-        resp = client_with_engine.post(
+    @pytest.fixture
+    def client(self, monkeypatch):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "AGENTIC_TITLE_MATCH_ENABLED", True)
+        with patch(
+            "app.title_matching.agentic.runner.run_agentic_match",
+            side_effect=self._stub_result,
+        ):
+            yield TestClient(app)
+
+    def test_match_returned(self, client):
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={"title": "Inception", "show_date": "2010-07-16"}
         )
@@ -834,16 +380,16 @@ class TestAPIEndpoint:
         _pass("API/single", "match_returned",
               f"id={data['suggested_movie_id']} conf={data['confidence']} decision={data['decision']}")
 
-    def test_missing_title_returns_422(self, client_no_engine):
-        resp = client_no_engine.post(
+    def test_missing_title_returns_422(self, client):
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={}
         )
         assert resp.status_code == 422
         _pass("API/single", "missing_title_422", f"status={resp.status_code}")
 
-    def test_optional_fields_accepted(self, client_with_engine):
-        resp = client_with_engine.post(
+    def test_optional_fields_accepted(self, client):
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={
                 "title": "Interstellar",
@@ -857,8 +403,8 @@ class TestAPIEndpoint:
         assert data["suggested_movie_id"] == 2
         _pass("API/single", "optional_fields", f"id={data['suggested_movie_id']}")
 
-    def test_response_has_all_required_keys(self, client_with_engine):
-        resp = client_with_engine.post(
+    def test_response_has_all_required_keys(self, client):
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={"title": "Inception"}
         )
@@ -869,42 +415,42 @@ class TestAPIEndpoint:
         assert not missing, f"Missing keys: {missing}"
         _pass("API/single", "response_schema", f"all {len(required)} required keys present")
 
-    def test_market_defaults_to_domestic_without_error(self, client_no_engine):
+    def test_market_defaults_to_domestic_without_error(self, client):
         """Omitting market entirely must be accepted (defaults to 'domestic')
         — same request shape as before this field existed."""
-        resp = client_no_engine.post(
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={"title": "Inception", "show_date": "2010-07-16"}
         )
         assert resp.status_code == 200
         _pass("API/single", "market_default_domestic", f"status={resp.status_code}")
 
-    def test_international_without_country_returns_422(self, client_no_engine):
-        resp = client_no_engine.post(
+    def test_international_without_country_returns_422(self, client):
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={"title": "Blue Beetle", "market": "international"}
         )
         assert resp.status_code == 422
         _pass("API/single", "intl_missing_country_422", f"status={resp.status_code}")
 
-    def test_international_with_blank_country_returns_422(self, client_no_engine):
-        resp = client_no_engine.post(
+    def test_international_with_blank_country_returns_422(self, client):
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={"title": "Blue Beetle", "market": "international", "country": "   "}
         )
         assert resp.status_code == 422
         _pass("API/single", "intl_blank_country_422", f"status={resp.status_code}")
 
-    def test_international_with_country_accepted(self, client_no_engine):
-        resp = client_no_engine.post(
+    def test_international_with_country_accepted(self, client):
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={"title": "Blue Beetle", "market": "international", "country": "France"}
         )
         assert resp.status_code == 200
         _pass("API/single", "intl_with_country_accepted", f"status={resp.status_code}")
 
-    def test_invalid_market_value_returns_422(self, client_no_engine):
-        resp = client_no_engine.post(
+    def test_invalid_market_value_returns_422(self, client):
+        resp = client.post(
             "/api/v1/movie-title-match/single",
             json={"title": "Inception", "market": "not-a-real-market"}
         )

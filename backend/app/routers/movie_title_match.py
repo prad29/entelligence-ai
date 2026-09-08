@@ -1,17 +1,20 @@
 import csv
 import io
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, model_validator
 from sqlmodel import Session
 
 from app.config import settings
 from app.database import get_session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/movie-title-match", tags=["movie-title-match"])
 
@@ -33,38 +36,65 @@ class TitleMatchRequest(BaseModel):
 
 
 @router.post("/single")
-async def match_single_title(
-    payload: TitleMatchRequest,
-    request: Request,
-    session: Session = Depends(get_session),
-):
-    engine = getattr(request.app.state, 'title_match_engine', None)
-    if engine is None:
-        return {
-            "suggested_movie_id": 0,
-            "suggested_movie_title": "Engine not loaded",
-            "canonical_movie_id": 0,
-            "confidence": 0.0,
-            "decision": "REVIEW",
-            "reasoning": (
-                "Movie Master has not been seeded yet. "
-                "Run: python app/cli.py seed-movie-master /path/to/dump.csv"
-            ),
-            "evidence": {},
-            "cover_image": None,
-            "ticketing_poster_url": None,
-            "fired_ai": False,
-        }
+async def match_single_title(payload: TitleMatchRequest):
+    if not settings.AGENTIC_TITLE_MATCH_ENABLED:
+        raise HTTPException(
+            status_code=400,
+            detail="Single title matching requires Mode B (agentic) to be enabled",
+        )
 
-    result = engine.match(
-        title=payload.title,
-        show_date=payload.show_date,
-        theater=payload.theater,
-        ticketing_url=payload.ticketing_url,
-        use_poster_vision=payload.use_poster_vision,
-        market=payload.market,
-        country=payload.country,
-    )
+    from app.title_matching.agentic import AgenticError
+    from app.title_matching.agentic.runner import run_agentic_match
+    from app.title_matching.evidence_fetcher import attach_to_result
+    from app.title_matching.types import TitleMatchResult
+
+    # No usage_ctx here on purpose: the portal's single-match path has no
+    # job_id and no API key, so runner._default_usage_ctx already builds the
+    # correct portal attribution from `market` alone.
+    try:
+        result = run_agentic_match(
+            payload.title,
+            payload.show_date,
+            payload.theater,
+            payload.ticketing_url,
+            use_poster_vision=payload.use_poster_vision,
+            market=payload.market,
+            country=payload.country,
+        )
+    except AgenticError as exc:
+        # Infra failure (sandbox unreachable/misconfigured, CLI non-zero exit,
+        # timeout, exhausted throttle budget, unparseable output). Return an
+        # honest no-match REVIEW shape rather than an error status -- and
+        # emphatically NOT a substituted "plausible" match: id stays 0,
+        # confidence stays 0.0, fired_ai=False. The exception type/message
+        # stay visible in reasoning/evidence so this is diagnosable straight
+        # from the response body. Server-side telemetry is unaffected --
+        # runner._log_sandbox_call already fired unconditionally before the
+        # raise.
+        logger.warning(
+            "single_match_agentic_error title=%r market=%s error_type=%s error=%s",
+            payload.title, payload.market, type(exc).__name__, exc,
+        )
+        result = TitleMatchResult(
+            suggested_movie_id=0,
+            suggested_movie_title="Unknown",
+            canonical_movie_id=0,
+            confidence=0.0,
+            decision="REVIEW",
+            reasoning=(
+                f"No match returned: the agentic matching pipeline failed with "
+                f"{type(exc).__name__}: {exc}. Manual review required."
+            ),
+            evidence={
+                "agentic": True,
+                "agentic_error": True,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+            fired_ai=False,
+        )
+
+    attach_to_result(result, payload.ticketing_url)
     return result.__dict__
 
 
@@ -340,7 +370,6 @@ async def get_master_count(session: Session = Depends(get_session)):
 @router.post("/master/seed")
 async def seed_master(
     file: UploadFile = File(...),
-    request: Request = None,
     session: Session = Depends(get_session),
 ):
     from app.models import MovieMaster
@@ -366,16 +395,6 @@ async def seed_master(
 
     existing_count = session.exec(select(func.count()).select_from(MovieMaster)).one()
     result = seed_from_rows(session, rows)
-
-    # Reload the title match engine in app state
-    if request is not None:
-        try:
-            from app.title_matching.loader import build_title_match_engine
-            from app.title_matching.engine import TitleMatchEngine
-            gen, aliases = build_title_match_engine(session)
-            request.app.state.title_match_engine = TitleMatchEngine(gen, aliases)
-        except Exception:
-            pass
 
     # Queue semantic index build whenever rows were inserted or updated
     if result["inserted"] > 0 or result["updated"] > 0:

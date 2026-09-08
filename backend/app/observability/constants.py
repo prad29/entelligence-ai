@@ -43,8 +43,14 @@ PATH_AGENTIC_CLI = "agentic_cli"
 # stream-json result event. Reusing bedrock_direct would make "which
 # extractor parses this row's usage" un-derivable from the log.
 PATH_BEDROCK_CONVERSE = "bedrock_converse"
+# Domestic agentic title-match v2 (metadata-aware matching + incomplete-
+# metadata guardrail) -- separate call_path so v1 vs. v2 cost/latency/decision
+# rates are splittable in the LLM usage dashboard without a backfill.
+PATH_AGENTIC_CLI_V2 = "agentic_cli_v2"
 
-CALL_PATHS: tuple[str, ...] = (PATH_BEDROCK_DIRECT, PATH_AGENTIC_CLI, PATH_BEDROCK_CONVERSE)
+CALL_PATHS: tuple[str, ...] = (
+    PATH_BEDROCK_DIRECT, PATH_AGENTIC_CLI, PATH_BEDROCK_CONVERSE, PATH_AGENTIC_CLI_V2,
+)
 
 # --- caller_type (spec §3 — no portal auth; portal is a single bucket) -------
 CALLER_PORTAL = "portal"

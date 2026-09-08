@@ -41,13 +41,17 @@ from app.title_matching.semantic_index import get_embedding
 logger = logging.getLogger(__name__)
 
 
-def _default_usage_ctx(market: str, country: Optional[str]) -> LlmCallContext:
+def _default_usage_ctx(
+    market: str, country: Optional[str], *, variant: str = "v1",
+) -> LlmCallContext:
     """Attribution for a caller that didn't supply one — the portal's
-    single-match path (app/title_matching/engine.py), which has no job to
-    attribute to."""
+    single-match route (routers/movie_title_match.py's /single, or
+    runner_v2.py for the v2 route), which has no job to attribute to."""
+    from app.observability.constants import PATH_AGENTIC_CLI_V2
+
     return LlmCallContext(
         task_type=TASK_DOMESTIC_MAPPING if market == "domestic" else TASK_INTL_MAPPING,
-        call_path=PATH_AGENTIC_CLI,
+        call_path=PATH_AGENTIC_CLI_V2 if variant == "v2" else PATH_AGENTIC_CLI,
         caller_type=CALLER_PORTAL,
         market=market,
         country=country,
@@ -112,25 +116,43 @@ def run_agentic_match(
     market: str = "domestic",
     country: Optional[str] = None,
     usage_ctx: Optional[LlmCallContext] = None,
+    *,
+    variant: str = "v1",
 ) -> TitleMatchResult:
+    if variant not in ("v1", "v2"):
+        raise ValueError(f"unknown variant: {variant!r}")
+    is_v2 = variant == "v2"
+
     _check_sandbox_reachable()
 
     # Pre-fetch DB candidates before calling the sandbox so the agent
     # never needs to call localhost (the sidecar can't reach compose services).
-    db_candidates = _fetch_db_candidates(title, market=market, country=country)
+    db_candidates = _fetch_db_candidates(
+        title, market=market, country=country, include_metadata=is_v2,
+    )
     vespa_candidates = _fetch_vespa_candidates(title, market=market)
 
     if use_poster_vision:
         _annotate_poster_availability(db_candidates)
 
-    prompt = build_prompt(
-        title, show_date, theater, ticketing_url,
-        db_candidates=db_candidates,
-        vespa_candidates=vespa_candidates,
-        use_poster_vision=use_poster_vision,
-        market=market,
-        country=country,
-    )
+    if is_v2:
+        from app.title_matching.agentic.prompt_builder_v2 import build_prompt_v2
+
+        prompt = build_prompt_v2(
+            title, show_date, theater, ticketing_url,
+            db_candidates=db_candidates,
+            vespa_candidates=vespa_candidates,
+            use_poster_vision=use_poster_vision,
+        )
+    else:
+        prompt = build_prompt(
+            title, show_date, theater, ticketing_url,
+            db_candidates=db_candidates,
+            vespa_candidates=vespa_candidates,
+            use_poster_vision=use_poster_vision,
+            market=market,
+            country=country,
+        )
 
     # Built-in WebSearch is unavailable under Bedrock (CLAUDE_CODE_USE_BEDROCK=1
     # drops it from the tool list entirely, regardless of --tools/--allowedTools).
@@ -150,7 +172,7 @@ def run_agentic_match(
     # but market/country are backfilled from this function's own arguments —
     # the runner is the single source of truth for those, so a call site can
     # never drift them out of sync with the prompt it actually built.
-    ctx = usage_ctx or _default_usage_ctx(market, country)
+    ctx = usage_ctx or _default_usage_ctx(market, country, variant=variant)
     if usage_ctx is not None:
         ctx = dataclasses.replace(
             ctx,
@@ -223,6 +245,13 @@ def run_agentic_match(
             )
             logger.warning("agentic_retry_failed title=%r error=%s", title, retry_exc)
 
+    if is_v2:
+        from app.title_matching.agentic.metadata_guardrail import apply_metadata_guardrail
+
+        result = apply_metadata_guardrail(
+            result, db_candidates, query_ordinal=normalize_title(title).ordinal,
+        )
+
     # If Claude identified the movie but couldn't match a DB id (id=0),
     # do a second DB lookup using Claude's identified movie_title.
     # This handles cases like "Graveyard Shift: CANNIBAL HOLOCAUST (New Restoration)"
@@ -238,6 +267,7 @@ def run_agentic_match(
         )
         post_hits = _post_lookup_search(
             result.suggested_movie_title, market, country, query_ordinal,
+            include_metadata=is_v2,
         )
 
         # International-only fallback: the agent may have guessed the "wrong"
@@ -253,7 +283,16 @@ def run_agentic_match(
             )
             post_hits = _post_lookup_search(
                 result.alternate_movie_title, market, country, query_ordinal,
+                include_metadata=is_v2,
             )
+
+        if is_v2 and post_hits:
+            # Close the loop the guardrail opened above: without this, the
+            # permissive trigram post-lookup could resurface exactly the row
+            # the guardrail just rejected for incomplete metadata.
+            from app.title_matching.agentic.metadata_guardrail import candidate_passes
+
+            post_hits = [h for h in post_hits if candidate_passes(h)]
 
         if post_hits:
             db_candidates = post_hits  # refresh for cover_image lookup below
@@ -560,6 +599,7 @@ def _post_lookup_search(
     market: str,
     country: Optional[str],
     query_ordinal: Optional[int],
+    *, include_metadata: bool = False,
 ) -> list[dict]:
     """Re-search the DB using a title Claude identified after finding no
     pre-fetch candidate (movie_master_id=0). Shared by the primary
@@ -568,7 +608,13 @@ def _post_lookup_search(
     """
     # Strip parentheticals (e.g. "The Odyssey (L'Odyssée)" -> "The Odyssey")
     post_query = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", claude_title).strip(" -:")
-    hits = _db_search(post_query or claude_title, market=market, country=country)
+    # `include_metadata` is passed ONLY when true so the v1 call to
+    # `_db_search` (and any test mock replacing it with a narrower signature)
+    # stays byte-identical to before this kwarg existed.
+    metadata_kwarg = {"include_metadata": True} if include_metadata else {}
+    hits = _db_search(
+        post_query or claude_title, market=market, country=country, **metadata_kwarg,
+    )
 
     # An ordinal is a hard constraint the agent may have already used to
     # reject a DB row (e.g. discarding a "Part 2" candidate for a "Part 5"
@@ -583,6 +629,7 @@ def _post_lookup_search(
 
 def _fetch_db_candidates(
     title: str, market: str = "domestic", country: Optional[str] = None,
+    *, include_metadata: bool = False,
 ) -> list[dict]:
     """Best-effort keyword pre-fetch via direct DB query (avoids HTTP self-call deadlock).
     Claude does the real identification — this just gives it a head start."""
@@ -593,14 +640,37 @@ def _fetch_db_candidates(
             if after:
                 bare = after
         bare = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", bare).strip(" -:")
-        return _db_search(bare or title, market=market, country=country)
+        metadata_kwarg = {"include_metadata": True} if include_metadata else {}
+        return _db_search(bare or title, market=market, country=country, **metadata_kwarg)
     except Exception as exc:
         logger.warning("db_candidate_fetch_failed title=%r error=%s", title, exc)
         return []
 
 
+def _truncate_synopsis(synopsis: Optional[str]) -> str:
+    """First AGENTIC_V2_SYNOPSIS_MAX_CHARS chars, cut at a word boundary.
+    Emptiness-preserving: a non-empty synopsis stays non-empty, so the
+    metadata guardrail's blank check is unaffected by truncation."""
+    text = (synopsis or "").strip()
+    limit = settings.AGENTIC_V2_SYNOPSIS_MAX_CHARS
+    if len(text) <= limit:
+        return text
+    truncated = text[:limit].rsplit(" ", 1)[0]
+    return f"{truncated}…"
+
+
+def _truncate_cast(cast_list: Optional[str]) -> str:
+    """First AGENTIC_V2_CAST_MAX_NAMES comma-separated names."""
+    text = (cast_list or "").strip()
+    if not text:
+        return text
+    names = [n.strip() for n in text.replace(";", ",").split(",") if n.strip()]
+    return ", ".join(names[: settings.AGENTIC_V2_CAST_MAX_NAMES])
+
+
 def _db_search(
     query: str, market: str = "domestic", country: Optional[str] = None,
+    *, include_metadata: bool = False,
 ) -> list[dict]:
     """Search Movie Master (or MovieMasterIntl, scoped by country) via direct DB query.
 
@@ -666,7 +736,7 @@ def _db_search(
                     for r in rows
                 ]
 
-            return [
+            row_dicts = [
                 {
                     "id": r.id,
                     "movie_title": r.movie_title,
@@ -675,6 +745,13 @@ def _db_search(
                 }
                 for r in rows
             ]
+            if include_metadata:
+                for d, r in zip(row_dicts, rows):
+                    d["genre"] = r.genre or ""
+                    d["director"] = r.director or ""
+                    d["cast_list"] = _truncate_cast(r.cast_list)
+                    d["synopsis"] = _truncate_synopsis(r.synopsis)
+            return row_dicts
     except Exception as exc:
         logger.warning("db_search_failed query=%r error=%s", query, exc)
         return []
@@ -779,8 +856,10 @@ async def run_agentic_match_async(
     market: str = "domestic",
     country: Optional[str] = None,
     usage_ctx: Optional[LlmCallContext] = None,
+    *,
+    variant: str = "v1",
 ) -> TitleMatchResult:
     return await asyncio.to_thread(
         run_agentic_match, title, show_date, theater, ticketing_url, use_poster_vision,
-        market, country, usage_ctx,
+        market, country, usage_ctx, variant=variant,
     )

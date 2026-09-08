@@ -198,28 +198,6 @@ class TestSemanticRetrievalE2E:
         elif 147057 in id_to_score:
             print(f"[PASS] id=147057 found, id=99999 'Love' not in top results")
 
-    def test_fuzzy_baseline_gets_it_wrong(self, test_rows):
-        """
-        Show the baseline: fuzzy-only returns 'Love' (id=99999), NOT id=147057.
-        This documents what we're fixing.
-        """
-        from app.title_matching.candidate_generator import CandidateGenerator
-        from app.title_matching.normalizer import normalize_title
-
-        gen = CandidateGenerator(test_rows, semantic_index=None)
-        normalized = normalize_title("Love Island Season Finale")
-        results = gen.generate(normalized, {})
-
-        ids = [c.movie_master_id for c in results]
-        top_id = results[0].movie_master_id if results else None
-        print(f"\n[BASELINE] Fuzzy-only top candidates: {ids}")
-        print(f"[BASELINE] Top result: id={top_id} (expected 147057, fuzzy gets it wrong)")
-
-        assert 147057 not in ids[:3], (
-            "Fuzzy already finds id=147057 in top 3 — semantic retrieval baseline check invalid"
-        )
-        print("[PASS] Confirmed: fuzzy does NOT find id=147057 — semantic is needed")
-
     def test_score_in_pipeline_range(self, fed_index, dim):
         """Semantic scores must be in [0, 0.6] for pipeline compatibility."""
         query_embedding = _unit_vec(dim, 147)
@@ -244,40 +222,3 @@ class TestSemanticRetrievalE2E:
         ids = [r[0] for r in results]
         assert 147057 not in ids
         print(f"[PASS] exclude_ids respected, results: {ids}")
-
-    def test_full_candidate_generator_with_semantic(self, test_rows, fed_index, dim):
-        """
-        Full CandidateGenerator integration: semantic fills remaining slots
-        after fuzzy, and id=147057 appears with source='semantic'.
-        """
-        from app.title_matching.candidate_generator import CandidateGenerator
-        from app.title_matching.normalizer import normalize_title
-
-        settings_mock = MagicMock()
-        settings_mock.VESPA_URL = VESPA_URL
-        settings_mock.EMBEDDING_DIMENSION = dim
-        settings_mock.EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
-        settings_mock.BEDROCK_REGION = "us-east-1"
-
-        query_vec = _unit_vec(dim, 147)
-        bedrock_client = _mock_bedrock_with_vecs([query_vec])
-
-        gen = CandidateGenerator(test_rows, semantic_index=fed_index)
-        normalized = normalize_title("Love Island Season Finale")
-
-        with patch("app.title_matching.semantic_index._get_bedrock_client", return_value=bedrock_client), \
-             patch("app.title_matching.semantic_index.get_embedding", return_value=query_vec):
-            results = gen.generate(normalized, {}, k=10)
-
-        ids = [c.movie_master_id for c in results]
-        sources = {c.movie_master_id: c.source for c in results}
-
-        print(f"\n[RESULT] CandidateGenerator results:")
-        for c in results:
-            print(f"  id={c.movie_master_id:>7}  score={c.score:.3f}  source={c.source}  title={c.movie_title}")
-
-        assert 147057 in ids, f"id=147057 not in candidates: {ids}"
-        assert sources.get(147057) == "semantic", (
-            f"id=147057 source should be 'semantic', got '{sources.get(147057)}'"
-        )
-        print(f"\n[PASS] id=147057 found with source='semantic'")

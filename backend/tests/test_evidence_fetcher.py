@@ -7,8 +7,10 @@ Covers:
   - T1HttpExtractor: OG image and metadata extraction via plain HTTP
   - T2HeadlessExtractor: Playwright-based headless extraction
   - EvidenceFetcher: orchestration with caching and tier escalation
-  - Stage 4 metadata checks: runtime, director, cast boosts in decision engine
-  - eliminated[].why field on score_and_decide
+
+Note: the Stage 4 metadata-check tests (runtime/director/cast boosts,
+eliminated[].why) lived in decision_engine.py, which was retired along with
+the rest of the rule-based fallback matcher -- removed here accordingly.
 
 Run with:
     pytest backend/tests/test_evidence_fetcher.py -v -s
@@ -507,99 +509,3 @@ class TestEvidenceFetcher:
         assert result.extraction_outcome in ("NOT_ATTEMPTED", "FAILED_T1", "FAILED_T2", "UNAVAILABLE")
         logger.info(f"[PASS] fetch_evidence never raises — outcome={result.extraction_outcome}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TestStage4MetadataChecks
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestStage4MetadataChecks:
-    """Tests for the Stage 4 metadata-check helpers in decision_engine.
-
-    _runtime_check/_director_check/_cast_check each return (boost, label) —
-    a float boost plus a diagnostic label string consumed by score_and_decide
-    for evidence tracking (see decision_engine.py:289-291).
-    """
-
-    def setup_method(self):
-        _section("TestStage4MetadataChecks")
-
-    def test_runtime_check_match_within_5min(self):
-        from app.title_matching.decision_engine import _runtime_check
-
-        boost, label = _runtime_check(120, 122)
-
-        assert boost > 0, f"Expected positive boost for runtime within 5 min, got {boost}"
-        logger.info(f"[PASS] runtime within 5 min → boost={boost} label={label}")
-
-    def test_runtime_check_mismatch(self):
-        from app.title_matching.decision_engine import _runtime_check
-
-        boost, label = _runtime_check(120, 135)
-
-        assert boost == 0, f"Expected 0 boost for runtime mismatch > 5 min, got {boost}"
-        logger.info(f"[PASS] runtime mismatch (15 min gap) → boost={boost} label={label}")
-
-    def test_runtime_check_unknown(self):
-        from app.title_matching.decision_engine import _runtime_check
-
-        boost, label = _runtime_check(None, 120)
-
-        assert boost == 0, f"Expected 0 when runtime is unknown (None), got {boost}"
-        logger.info(f"[PASS] runtime=None → boost={boost} label={label}")
-
-    def test_director_check_match(self):
-        from app.title_matching.decision_engine import _director_check
-
-        boost, label = _director_check("Christopher Nolan", "christopher nolan")
-
-        assert boost > 0, f"Expected positive boost for matching director, got {boost}"
-        logger.info(f"[PASS] director match (case-insensitive) → boost={boost} label={label}")
-
-    def test_director_check_mismatch(self):
-        from app.title_matching.decision_engine import _director_check
-
-        boost, label = _director_check("James Cameron", "Christopher Nolan")
-
-        assert boost == 0, f"Expected 0 boost for director mismatch, got {boost}"
-        logger.info(f"[PASS] director mismatch → boost={boost} label={label}")
-
-    def test_cast_check_overlap(self):
-        from app.title_matching.decision_engine import _cast_check
-
-        boost, label = _cast_check("Tom Hanks, Meg Ryan", "Meg Ryan, Gary Sinise")
-
-        assert boost > 0, f"Expected positive boost for overlapping cast, got {boost}"
-        logger.info(f"[PASS] cast overlap (Meg Ryan) → boost={boost} label={label}")
-
-    def test_cast_check_no_overlap(self):
-        from app.title_matching.decision_engine import _cast_check
-
-        boost, label = _cast_check("Tom Hanks", "Meryl Streep")
-
-        assert boost == 0, f"Expected 0 boost for no cast overlap, got {boost}"
-        logger.info(f"[PASS] no cast overlap → boost={boost} label={label}")
-
-    def test_eliminated_why_field_populated(self):
-        from app.title_matching.normalizer import normalize_title
-        from app.title_matching.decision_engine import score_and_decide
-        from app.title_matching.types import CandidateResult
-
-        norm = normalize_title("Inception")
-        candidates = [
-            CandidateResult(1, "Inception", "2010-07-16", None, 0.95, "fuzzy"),
-            CandidateResult(2, "Interstellar", "2014-11-07", None, 0.40, "fuzzy"),
-            CandidateResult(3, "Tenet", "2020-08-26", None, 0.20, "fuzzy"),
-        ]
-
-        result = score_and_decide(norm, candidates, show_date=None, theater=None)
-
-        eliminated = result.evidence.get("eliminated", [])
-        assert len(eliminated) > 0, "Expected at least one eliminated candidate"
-
-        first_eliminated = eliminated[0]
-        assert "why" in first_eliminated, f"'why' key missing from eliminated[0]: {first_eliminated}"
-        why_text = first_eliminated["why"]
-        assert isinstance(why_text, str) and len(why_text) > 0, (
-            f"eliminated[0]['why'] should be a non-empty string, got: {why_text!r}"
-        )
-        logger.info(f"[PASS] eliminated[0].why = '{why_text[:60]}'")

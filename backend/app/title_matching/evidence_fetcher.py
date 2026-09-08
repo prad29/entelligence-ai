@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from app.title_matching import evidence_cache, platform_router
 from app.title_matching.evidence_types import EvidenceResult, ExtractionTier
 from app.title_matching.extractors.t1_http import T1HttpExtractor
 from app.title_matching.extractors.t2_headless import T2HeadlessExtractor, T3GeoProxyExtractor
+
+if TYPE_CHECKING:
+    from app.title_matching.types import TitleMatchResult
 
 logger = logging.getLogger(__name__)
 
@@ -61,3 +65,25 @@ def fetch_evidence(url: str, country_code: Optional[str] = None) -> EvidenceResu
     except Exception:
         logger.exception("evidence_fetch_error url=%s", url)
         return EvidenceResult(extraction_outcome="NOT_ATTEMPTED")
+
+
+def attach_to_result(result: "TitleMatchResult", ticketing_url: Optional[str]) -> None:
+    """Best-effort ticketing-page enrichment. Mutates `result` in place and
+    NEVER raises — carried over verbatim from the deleted
+    TitleMatchEngine.match()'s "Stage 2" block.
+
+    Populates TitleMatchResult.ticketing_poster_url and .page_metadata, which
+    frontend/src/pages/movie-title-matching/MovieTitleMatchCard.tsx actively
+    renders (poster fallback image + the extraction/metadata panel). The
+    agentic runner does not populate either field on its own, so without this
+    call that panel goes permanently blank.
+    """
+    if not ticketing_url:
+        return
+    try:
+        evidence = fetch_evidence(ticketing_url)
+        if evidence.ticketing_poster_url:
+            result.ticketing_poster_url = evidence.ticketing_poster_url
+        result.page_metadata = dataclasses.asdict(evidence)
+    except Exception as exc:
+        logger.debug("evidence_fetch_skipped url=%s error=%s", ticketing_url, exc)

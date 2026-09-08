@@ -153,3 +153,52 @@ confirmed still running on the fully shared `runner.py`/`prompt_builder.py`.
 - International v1, the external API's international path, and intl v1
   batch all remain exactly as they were — including the stale-confidence
   bug — by deliberate choice.
+
+## Follow-up (same day): external API v2 dispatch surface
+
+Closes part of the last open item above — the external API's markets are no
+longer pinned to v1. Branch `feat/external-title-match-v2` off `stage`
+(5 commits).
+
+The external, API-key-authenticated surface
+(`app/routers/external_title_match.py` + `app/tasks/external_match_task.py`)
+is the primary traffic surface for this product and had no v2 at all:
+`external_match_row` hardcoded `run_agentic_match`, so every external caller
+in both markets missed both v2 pipelines.
+
+**Decision: URL-versioned, not a header flag.** New router
+`external_title_match_v2.py` exposing `POST /api/v2/singletitle` and
+`POST /api/v2/batchtitle`. Which pipeline a caller integrated against belongs
+in the endpoint — visible in access logs, Swagger and their own client code —
+not hidden in a header. v1's two route bodies are unchanged.
+
+- Reuses the existing `apititlematchjob`/`apititlematchrow` tables via a new
+  nullable `pipeline_variant` column (migration `b1c2d3e4f5a6`, revising
+  `a1b2c3d4e5f7`), the same discriminator pattern as the two batch job
+  tables. NULL == v1.
+- Reuses v1's schemas and `_submit_job`, which gained a keyword-only
+  `pipeline_variant=None`. That's job-orchestration reuse; no
+  matching-decision code is shared, and nothing new is shared *between
+  markets*.
+- Job status/results/retry stay shared and unversioned on
+  `/api/v1/external/jobs/{job_id}*` — lookup is by `job_id` + `api_key_id`,
+  never by variant, and no semantics differ. There are deliberately no
+  `/api/v2/external/jobs/*` routes.
+- The split resolves in exactly one place: `external_match_row`'s branch over
+  `(job.market, job.pipeline_variant)`, dispatching to `run_agentic_match`
+  (v1, either market), `run_agentic_match_v2` (domestic v2) or
+  `run_agentic_match_intl_v2(country=...)` (intl v2). Unlike the two internal
+  batch row tasks, **no `variant` Celery kwarg** — this task already re-reads
+  its job row from Postgres for every row, so the variant is free and there
+  is no stale-worker-unexpected-kwarg failure mode to guard against.
+- Unrecognised/missing variants degrade to v1, so there is never an
+  unhandled branch.
+
+Verification: 738 passed, 3 skipped with the same three pre-existing
+environmental deselects as above (no new exclusions needed); all 5 commits
+independently `import app.main`-able; `/api/v2/singletitle` and
+`/api/v2/batchtitle` confirmed present in `/openapi.json` with no
+`/api/v2/external/jobs/*` leakage. New tests in
+`backend/tests/test_external_title_match_v2.py` (39), including a v1
+regression test and a migration upgrade/downgrade round-trip — the latter is
+a new pattern here, as no existing test in this repo touched alembic.

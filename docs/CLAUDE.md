@@ -146,6 +146,45 @@ which runs an actual `agentic`-queue worker subprocess to prove the chord
 callback fires exactly once after a retried member succeeds. The eager-mode
 data-flow test is `backend/tests/test_batch_e2e.py`.
 
+### External API (`singletitle` / `batchtitle`)
+
+A third, API-key-authenticated surface (`x-api-key` on every request), parallel
+to the internal Excel-upload flow above and gated behind
+`EXTERNAL_API_ENABLED`. Router `app/routers/external_title_match.py`, Celery
+tasks `app/tasks/external_match_task.py`, durable per-row storage in
+`apititlematchjob` / `apititlematchrow` (keyed by client-supplied `row_uuid`)
+rather than xlsx + an ephemeral Redis hash, because this surface needs
+individually addressable rows for partial retrieval and row-scoped retry.
+
+**Choosing a pipeline is a matter of which URL you post to, not a header or a
+request field:**
+
+- `POST /api/v1/singletitle`, `POST /api/v1/batchtitle` — v1 matching, for both
+  `type=domestic` and `type=international`. Unchanged and frozen.
+- `POST /api/v2/singletitle`, `POST /api/v2/batchtitle` — v2 matching
+  (`app/routers/external_title_match_v2.py`). Identical request bodies, query
+  params, auth, row limits and 202-plus-polling flow as v1; `type=domestic`
+  runs domestic v2 and `type=international` runs the standalone international
+  v2 pipeline.
+
+Both surfaces write to the same tables, distinguished only by the nullable
+`apititlematchjob.pipeline_variant` column (`NULL`/`"v1"` vs `"v2"`) — the same
+discriminator pattern as `movietitlebatchjob` / `movietitleintlbatchjob`. So
+the job endpoints are **shared and unversioned**: `GET
+/api/v1/external/jobs/{job_id}`, `.../results` and `POST .../retry` serve v1
+and v2 jobs identically (lookup is by `job_id` + `api_key_id`, never by
+variant), and there are deliberately no `/api/v2/external/jobs/*` routes. A
+retried row re-runs on whatever pipeline its job was submitted with.
+
+The v1/v2/market split resolves in exactly one place —
+`external_match_row`'s branch over `(job.market, job.pipeline_variant)` —
+which reads the variant off the job row it already loads for every row, so
+there is no `variant` Celery kwarg anywhere on this path. Windowed dispatch,
+retry, counters and finalize are all variant-agnostic. Tests:
+`backend/tests/test_external_title_match_v2.py` (dispatch matrix + a
+regression test that v1 submissions still create `NULL`-variant jobs) and
+`backend/tests/test_external_match_task.py` (the row/job lifecycle).
+
 ## International Amenity Detection
 
 Sibling module to the domestic detection engine above, built for international

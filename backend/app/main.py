@@ -8,6 +8,7 @@ from app.routers import settings as settings_router
 from app.routers import movie_detect, movie_formats, movie_review, movie_jobs
 from app.routers import movie_title_match
 from app.routers import movie_title_match_v2
+from app.routers import movie_title_match_intl_v2
 from app.routers import external_title_match
 from app.routers import deleted_showtimes
 from app.routers import intl_detect, intl_amenities, intl_jobs
@@ -23,6 +24,28 @@ app = FastAPI(
     description="Detect cinema screen formats from amenity strings.",
     version="0.3.0",
     openapi_tags=[
+        {
+            "name": "movie-title-match-v2",
+            "description": (
+                "Domestic-only v2 title matching (prefix /api/v2/movie-title-match). Same "
+                "endpoint shapes as v1 (/api/v1/movie-title-match), but the match additionally "
+                "weighs genre/cast/director/synopsis and deterministically rejects a pick whose "
+                "director AND synopsis are both empty (unless genre is Sports or Concert/Special "
+                "Events). v1 is untouched and remains the default for existing integrations."
+            ),
+        },
+        {
+            "name": "movie-title-match-intl-v2",
+            "description": (
+                "International-only v2 title matching (prefix /api/v2/intl-movie-title-match, "
+                "country required on every request). A fully standalone pipeline that never "
+                "calls the shared v1 orchestrator: country-scoped Vespa search (in both the "
+                "exact and semantic search paths), a deterministic country-consistency "
+                "guardrail, anniversary/re-release date-arithmetic rules, and an independent "
+                "Bedrock verification pass over the model's first pick. International v1 "
+                "(market=international on the v1 endpoints) is untouched."
+            ),
+        },
         {
             "name": "external-title-match",
             "description": (
@@ -69,6 +92,7 @@ app.include_router(movie_review.router)
 app.include_router(movie_jobs.router)
 app.include_router(movie_title_match.router)
 app.include_router(movie_title_match_v2.router)
+app.include_router(movie_title_match_intl_v2.router)
 app.include_router(deleted_showtimes.router)
 app.include_router(intl_detect.router)
 app.include_router(intl_amenities.router)

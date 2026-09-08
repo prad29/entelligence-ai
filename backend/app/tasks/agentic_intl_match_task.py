@@ -50,6 +50,14 @@ def _get_redis():
     return redis.Redis.from_url(settings.REDIS_URL)
 
 
+def _variant_of(job) -> str:
+    """Which matching pipeline processes this job's rows. Mirrors
+    agentic_match_task._variant_of's identical shape -- None/missing/an
+    unrecognised value all degrade to "v1" (fail-safe)."""
+    value = getattr(job, "pipeline_variant", None)
+    return "v2" if value == "v2" else "v1"
+
+
 def _movie_exists(session: Session, movie_id: int) -> bool:
     from app.models import MovieMasterIntl
 
@@ -95,16 +103,24 @@ def agentic_intl_batch_row(
     ticketing_url: Optional[str] = None,
     country: Optional[str] = None,
     use_poster_vision: bool = False,
+    variant: str = "v1",
 ) -> None:
     """Process a single international batch row. theater is ALWAYS None,
     matching the domestic batch path (the upload schema has no theater
-    column). A single row failing only marks that row failed."""
+    column). A single row failing only marks that row failed.
+
+    `variant` selects the matching pipeline (v1's shared run_agentic_match,
+    or v2's standalone run_agentic_match_intl_v2) -- see enqueue_next_window,
+    which learns it once per window from the job row and forwards it via a
+    Celery message kwarg rather than the cached row-args.
+    """
     from celery.exceptions import Retry
 
     from app.database import engine
     from app.observability.constants import (
         CALLER_PORTAL,
         PATH_AGENTIC_CLI,
+        PATH_AGENTIC_CLI_V2,
         TASK_INTL_MAPPING,
     )
     from app.observability.context import LlmCallContext
@@ -113,26 +129,38 @@ def agentic_intl_batch_row(
     from app.title_matching.agentic.runner import run_agentic_match
     from app.title_matching import sandbox_semaphore
 
+    is_v2 = variant == "v2"
     holder = None
     try:
         holder = sandbox_semaphore.acquire(timeout=limits.slot_wait_timeout())
         try:
-            result = run_agentic_match(
-                title,
-                show_date,
-                None,  # theater: always None in the batch path
-                ticketing_url,
-                use_poster_vision,
-                market="international",
-                country=country,
-                usage_ctx=LlmCallContext(
-                    task_type=TASK_INTL_MAPPING,
-                    call_path=PATH_AGENTIC_CLI,
-                    caller_type=CALLER_PORTAL,
-                    job_id=job_id,
-                    job_type="MovieTitleIntlBatchJob",
-                ),
+            usage_ctx = LlmCallContext(
+                task_type=TASK_INTL_MAPPING,
+                call_path=PATH_AGENTIC_CLI_V2 if is_v2 else PATH_AGENTIC_CLI,
+                caller_type=CALLER_PORTAL,
+                job_id=job_id,
+                job_type="MovieTitleIntlBatchJob",
             )
+            if is_v2:
+                from app.title_matching.agentic.runner_intl_v2 import run_agentic_match_intl_v2
+
+                result = run_agentic_match_intl_v2(
+                    title, show_date, None, ticketing_url,
+                    country=country,
+                    use_poster_vision=use_poster_vision,
+                    usage_ctx=usage_ctx,
+                )
+            else:
+                result = run_agentic_match(
+                    title,
+                    show_date,
+                    None,  # theater: always None in the batch path
+                    ticketing_url,
+                    use_poster_vision,
+                    market="international",
+                    country=country,
+                    usage_ctx=usage_ctx,
+                )
         except AgenticThrottleError as exc:
             # MUST be checked before the generic `except AgenticError` below
             # — see agentic_match_task.agentic_batch_row's identical branch.
@@ -431,7 +459,11 @@ def _row_args_for(job_id: str, indices: list[int]) -> dict[int, list]:
 
 
 def enqueue_next_window(job_id: str, limit: int) -> int:
-    """See agentic_match_task.enqueue_next_window's identical docstring."""
+    """See agentic_match_task.enqueue_next_window's identical docstring --
+    same rationale for reading the variant from the job row (not the cached
+    row args, whose 4-element... here 5-element shape must stay stable
+    across a deploy) and forwarding it as a Celery message kwarg so v1's
+    publish call keeps its exact historical shape (no kwargs= at all)."""
     from app.database import engine
     from app.models import MovieTitleIntlBatchJob
     from app.title_matching.dispatch_window import claim_row_window
@@ -441,11 +473,14 @@ def enqueue_next_window(job_id: str, limit: int) -> int:
 
     with Session(engine) as session:
         frm, to = claim_row_window(session, MovieTitleIntlBatchJob, job_id, limit)
+        job = session.get(MovieTitleIntlBatchJob, job_id)
+        variant = _variant_of(job) if job is not None else "v1"
     if to <= frm:
         return 0
 
     indices = list(range(frm, to))
     args_by_index = _row_args_for(job_id, indices)
+    publish_kwargs = {"kwargs": {"variant": "v2"}} if variant == "v2" else {}
 
     published = 0
     for idx in indices:
@@ -469,6 +504,7 @@ def enqueue_next_window(job_id: str, limit: int) -> int:
         agentic_intl_batch_row.apply_async(
             args=[job_id, idx, title, show_date, ticketing_url, country, use_poster_vision],
             queue=AGENTIC_QUEUE,
+            **publish_kwargs,
         )
         published += 1
     return published

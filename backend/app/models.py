@@ -230,6 +230,12 @@ class MovieTitleIntlBatchJob(SQLModel, table=True):
     # rationale, kept symmetrical across the domestic/international split.
     dispatched: int = Field(default=0)
     finalize_claimed_at: Optional[datetime] = None
+    # Which matching pipeline processes this job's rows. NULL/absent == "v1"
+    # (every job created before v2 existed). International v2 reuses this
+    # SAME table via this discriminator (not a third table) -- mirrors
+    # MovieTitleBatchJob.pipeline_variant's identical rationale: the
+    # cross-pipeline fairness scheduler needs zero changes either way.
+    pipeline_variant: Optional[str] = None
 
 
 class MovieMasterSyncJob(SQLModel, table=True):

@@ -21,6 +21,12 @@ RUN mkdir -p /home/claude/.claude && \
 EOF
 RUN chown -R claude:claude /home/claude/.claude
 
+# International sandbox profile's settings.json -- copied alongside the
+# domestic one above; SETTINGS_PATH (server.js) selects which is actually
+# used at runtime, so this file is a no-op unless a service sets that env var.
+COPY settings.intl.json /home/claude/.claude/settings.intl.json
+RUN chown -R claude:claude /home/claude/.claude
+
 WORKDIR /app
 COPY package.json .
 RUN npm install
@@ -32,6 +38,7 @@ COPY mcp-servers/movieweb/package.json mcp-servers/movieweb/package.json
 RUN cd mcp-servers/movieweb && npm install --omit=dev
 COPY mcp-servers/movieweb/server.js mcp-servers/movieweb/server.js
 COPY mcp-config.json mcp-config.json
+COPY mcp-config.intl.json mcp-config.intl.json
 
 RUN chown -R claude:claude /app
 

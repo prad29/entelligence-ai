@@ -43,13 +43,43 @@ XLSX of results. Async Celery job + polling — never synchronous. Requires
 `AGENTIC_TITLE_MATCH_ENABLED=true` (must be true in every deployment; when
 false, both `/single` and `/batch` return 400).
 
-A v2 pipeline (prefix `/api/v2/movie-title-match`) additionally weighs
-genre/cast/director/synopsis (not just title) and deterministically rejects a
-pick whose director AND synopsis are both empty (unless genre is "Sports" or
-"Concert/Special Events"), falling through to the next-closest candidate. v2
-batch jobs share the same `movietitlebatchjob` table as v1, distinguished by
-the nullable `pipeline_variant` column (`NULL`/`"v1"` vs `"v2"`) so the
-cross-pipeline fairness scheduler counts/windows/sweeps both identically.
+A domestic v2 pipeline (prefix `/api/v2/movie-title-match`) additionally
+weighs genre/cast/director/synopsis (not just title) and deterministically
+rejects a pick whose director AND synopsis are both empty (unless genre is
+"Sports" or "Concert/Special Events"), falling through to the next-closest
+candidate. v2 batch jobs share the same `movietitlebatchjob` table as v1,
+distinguished by the nullable `pipeline_variant` column (`NULL`/`"v1"` vs
+`"v2"`) so the cross-pipeline fairness scheduler counts/windows/sweeps both
+identically.
+
+An international v2 pipeline (prefix `/api/v2/intl-movie-title-match`,
+`country` required on every request) is a **fully standalone module** — it
+never calls the shared `run_agentic_match`. It restores country-aware Vespa
+matching (a `country` field on the `movie_master_intl` schema, filtered at
+query time), the anniversary/re-release date arithmetic, and a deterministic
+country-consistency guardrail (MovieMasterIntl has no director/cast/synopsis
+columns, so this is intl v2's analogue of domestic v2's metadata guardrail),
+plus an independent Bedrock Converse verification pass that re-checks the
+first pass's pick. International v1 (`market="international"` on the
+existing `/single`/`/batch` endpoints) is untouched by any of this — it keeps
+running the original shared pipeline, including a known stale-confidence-
+after-post-lookup bug that v2 fixes only for itself (domestic v2 gets its
+own, differently-tuned copy of the same fix — the two are deliberately
+independent modules with no shared code, since sharing this exact logic
+between markets is what caused a prior production regression).
+
+Domestic and international v2 also use **separate `claude-sandbox`
+containers** (`claude-sandbox` / `claude-sandbox-intl`), differentiated by
+baked-in MCP/model config (env-driven, same image) — NOT for concurrency
+isolation. The sandbox semaphore and `celery-agentic-worker` pool stay fully
+shared across every market/version by deliberate choice; international v2
+competes for the same informal round-robin capacity domestic/intl-v1/the
+external API already share today.
+
+**Deploy note**: after a fresh deploy, run
+`python app/cli.py rebuild-semantic-index-intl --force-deploy --backfill-country`
+once — without it, intl v2's Vespa country filter matches nothing (existing
+indexed docs have no `country` attribute until the backfill re-feeds them).
 
 ### Endpoints (prefix `/api/v1/movie-title-match`)
 

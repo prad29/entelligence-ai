@@ -15,6 +15,12 @@ schema movie_master_intl {
             indexing: summary
         }
 
+        field country type string {
+            indexing: attribute | summary
+            attribute: fast-search
+            match: exact
+        }
+
         field embedding type tensor<float>(x[1024]) {
             indexing: attribute | index | summary
             index {

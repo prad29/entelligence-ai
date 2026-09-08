@@ -7,6 +7,13 @@ exactly as they are. This router delegates row processing to the same
 run_agentic_match core via app.tasks.external_match_task, so matching logic
 never forks even though job orchestration (durable per-row Postgres storage
 vs. xlsx + ephemeral Redis) is deliberately different.
+
+The v1 submit routes below are frozen: a caller wanting the v2 pipelines
+posts to /api/v2/singletitle or /api/v2/batchtitle instead (see
+external_title_match_v2.py, which reuses this module's _submit_job and
+schemas and differs only by stamping pipeline_variant="v2" on the job). The
+job status/results/retry routes below are NOT versioned and serve v1 and v2
+jobs alike.
 """
 
 from __future__ import annotations
@@ -71,7 +78,20 @@ def _submit_job(
     db_update: bool,
     api_key: ApiKey,
     session: Session,
+    *,
+    pipeline_variant: Optional[str] = None,
 ) -> dict:
+    """Shared row-validation + job-creation + dispatch plumbing for both the
+    /api/v1 and /api/v2 submit surfaces (external_title_match_v2.py imports
+    this).
+
+    `pipeline_variant` is the ONLY difference between the two surfaces, and it
+    defaults to None so this function's v1 callers below are unchanged: a v1
+    submission still creates a job with pipeline_variant NULL, which
+    external_match_row reads as "v1". This is job-orchestration plumbing, not
+    matching logic — the two markets' v2 matching pipelines remain fully
+    isolated from each other and from v1 downstream in external_match_row.
+    """
     max_rows = api_key.max_rows_per_batch
     if max_rows is None:
         from app.config import settings
@@ -92,6 +112,7 @@ def _submit_job(
         market=market,
         db_update=db_update,
         rows_total=len(rows),
+        pipeline_variant=pipeline_variant,
     )
     session.add(job)
     session.flush()  # obtain job.id before building rows

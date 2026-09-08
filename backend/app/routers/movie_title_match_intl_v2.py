@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlmodel import Session
 
 from app.config import settings
@@ -14,30 +14,38 @@ from app.database import engine as db_engine
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v2/movie-title-match", tags=["movie-title-match-v2"])
+router = APIRouter(prefix="/api/v2/intl-movie-title-match", tags=["movie-title-match-intl-v2"])
 
 
-class TitleMatchV2Request(BaseModel):
+class TitleMatchIntlV2Request(BaseModel):
     title: str
+    country: str                          # REQUIRED, non-blank
     theater: Optional[str] = None
     show_date: Optional[str] = None       # YYYY-MM-DD
     ticketing_url: Optional[str] = None
     use_poster_vision: bool = False
 
+    @model_validator(mode="after")
+    def _require_non_blank_country(self) -> "TitleMatchIntlV2Request":
+        if not (self.country or "").strip():
+            raise ValueError("country is required and must be non-blank")
+        return self
+
 
 @router.post(
     "/single",
-    summary="Submit one domestic title for v2 (metadata-aware) matching",
+    summary="Submit one international title for v2 (country-aware) matching",
     description=(
-        "Domestic-only. Same synchronous contract as /api/v1/movie-title-match/single, but the "
-        "match additionally weighs genre/cast/director/synopsis against the listing, not just "
-        "title text, and deterministically rejects a pick whose director AND synopsis are both "
-        "empty (unless genre is Sports or Concert/Special Events). On an agentic-pipeline "
-        "failure this still returns 200 with an honest suggested_movie_id=0 / REVIEW result "
-        "rather than an error status."
+        "International-only; country is required and must be non-blank. A fully standalone "
+        "pipeline (never calls the shared v1 orchestrator): country-scoped Vespa semantic "
+        "search, a deterministic country-consistency guardrail (auto-swaps in the "
+        "next-best same-country candidate if the model's own pick is from the wrong country), "
+        "anniversary/re-release date-arithmetic rules, and an independent Bedrock verification "
+        "pass that re-checks the first pick. On an agentic-pipeline failure this still returns "
+        "200 with an honest suggested_movie_id=0 / REVIEW result rather than an error status."
     ),
 )
-async def match_single_title_v2(payload: TitleMatchV2Request):
+async def match_single_title_intl_v2(payload: TitleMatchIntlV2Request):
     if not settings.AGENTIC_TITLE_MATCH_ENABLED:
         raise HTTPException(
             status_code=400,
@@ -45,25 +53,26 @@ async def match_single_title_v2(payload: TitleMatchV2Request):
         )
 
     from app.title_matching.agentic import AgenticError
-    from app.title_matching.agentic.runner_v2 import run_agentic_match_v2_async
+    from app.title_matching.agentic.runner_intl_v2 import run_agentic_match_intl_v2_async
     from app.title_matching.evidence_fetcher import attach_to_result
     from app.title_matching.types import TitleMatchResult
 
     try:
-        result = await run_agentic_match_v2_async(
+        result = await run_agentic_match_intl_v2_async(
             payload.title,
             payload.show_date,
             payload.theater,
             payload.ticketing_url,
+            country=payload.country,
             use_poster_vision=payload.use_poster_vision,
         )
     except AgenticError as exc:
-        # Same honest-no-match-at-200 contract as v1's /single -- see that
-        # route for the full rationale. pipeline_variant marks this as a v2
-        # failure so it's distinguishable in the response body.
+        # Same honest-no-match-at-200 contract as domestic v2's /single --
+        # see that route for the full rationale. pipeline_variant marks this
+        # as an intl v2 failure so it's distinguishable in the response body.
         logger.warning(
-            "single_match_v2_agentic_error title=%r error_type=%s error=%s",
-            payload.title, type(exc).__name__, exc,
+            "single_match_intl_v2_agentic_error title=%r country=%s error_type=%s error=%s",
+            payload.title, payload.country, type(exc).__name__, exc,
         )
         result = TitleMatchResult(
             suggested_movie_id=0,
@@ -80,7 +89,7 @@ async def match_single_title_v2(payload: TitleMatchV2Request):
                 "agentic_error": True,
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
-                "pipeline_variant": "v2",
+                "pipeline_variant": "intl_v2",
             },
             fired_ai=False,
         )
@@ -91,15 +100,16 @@ async def match_single_title_v2(payload: TitleMatchV2Request):
 
 @router.post(
     "/batch",
-    summary="Upload a batch of domestic titles for v2 matching",
+    summary="Upload a batch of international titles for v2 matching",
     description=(
-        "Domestic-only. Mirrors /api/v1/movie-title-match/batch's multipart upload contract "
-        "(same columns, same async Celery-job-plus-polling flow) but every row is dispatched "
-        "through the v2 (metadata-aware) pipeline via the shared movietitlebatchjob table's "
-        "pipeline_variant column, not a separate table. Poll GET /batch/{job_id} for status."
+        "International-only. Same multipart upload / async Celery-job-plus-polling contract as "
+        "v1's international batch flow (market=international on /api/v1/movie-title-match/batch), "
+        "but every row is dispatched through the standalone v2 (country-aware, rerank-verified) "
+        "pipeline via the shared movietitleintlbatchjob table's pipeline_variant column, not a "
+        "second table. Poll GET /batch/{job_id} for status."
     ),
 )
-async def upload_batch_v2(
+async def upload_batch_intl_v2(
     file: UploadFile = File(...),
     use_poster_vision: str = Form("false"),
 ):
@@ -110,8 +120,8 @@ async def upload_batch_v2(
         )
 
     from app.title_matching import batch_io, batch_storage
-    from app.models import MovieTitleBatchJob
-    from app.tasks.agentic_match_task import dispatch_batch_task
+    from app.models import MovieTitleIntlBatchJob
+    from app.tasks.agentic_intl_match_task import dispatch_intl_batch_task
 
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
@@ -121,7 +131,7 @@ async def upload_batch_v2(
     contents = await file.read()
 
     try:
-        _headers, rows = batch_io.parse_upload(contents, ext, market="domestic")
+        _headers, rows = batch_io.parse_upload(contents, ext, market="international")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -139,7 +149,7 @@ async def upload_batch_v2(
     batch_storage.put_bytes(upload_key, contents)
 
     with Session(db_engine) as db_session:
-        job = MovieTitleBatchJob(
+        job = MovieTitleIntlBatchJob(
             id=job_id,
             status="queued",
             total=row_count,
@@ -150,20 +160,19 @@ async def upload_batch_v2(
         db_session.add(job)
         db_session.commit()
 
-    dispatch_batch_task.delay(job_id)
+    dispatch_intl_batch_task.delay(job_id)
 
     return {"job_id": job_id}
 
 
-def _get_v2_job(job_id: str):
-    from app.models import MovieTitleBatchJob
-    from app.tasks.agentic_match_task import _variant_of
+def _get_intl_v2_job(job_id: str):
+    from app.models import MovieTitleIntlBatchJob
+    from app.tasks.agentic_intl_match_task import _variant_of
 
     with Session(db_engine) as session:
-        job = session.get(MovieTitleBatchJob, job_id)
+        job = session.get(MovieTitleIntlBatchJob, job_id)
         if job is None or _variant_of(job) != "v2":
             raise HTTPException(status_code=404, detail="Job not found")
-        # Detach values we need after the session closes.
         return {
             "id": job.id,
             "status": job.status,
@@ -180,11 +189,11 @@ def _get_v2_job(job_id: str):
 
 @router.get(
     "/batch/{job_id}",
-    summary="Poll v2 batch job status and progress",
-    description="Same status/progress shape as v1's GET /batch/{job_id}, scoped to v2 jobs only.",
+    summary="Poll international v2 batch job status and progress",
+    description="Same status/progress shape as v1's GET /batch/{job_id}, scoped to intl v2 jobs only.",
 )
-async def get_batch_job_v2(job_id: str):
-    job = _get_v2_job(job_id)
+async def get_batch_job_intl_v2(job_id: str):
+    job = _get_intl_v2_job(job_id)
     progress = (job["processed"] / job["total"]) if job["total"] > 0 else 0
 
     return {
@@ -197,7 +206,7 @@ async def get_batch_job_v2(job_id: str):
         "no_match": job["no_match"],
         "failed": job["failed"],
         "output_url": (
-            f"/api/v2/movie-title-match/batch/{job['id']}/download"
+            f"/api/v2/intl-movie-title-match/batch/{job['id']}/download"
             if job["status"] == "completed" and job["output_path"]
             else None
         ),
@@ -207,16 +216,16 @@ async def get_batch_job_v2(job_id: str):
 
 @router.get(
     "/batch/{job_id}/download",
-    summary="Download completed v2 batch results as XLSX",
+    summary="Download completed international v2 batch results as XLSX",
     description=(
         "Same XLSX-download contract as v1's /batch/{job_id}/download. 400 if the job isn't "
         "completed yet, 410 if the job's TTL has expired, 404 if the output file is missing."
     ),
 )
-async def download_batch_job_v2(job_id: str) -> Response:
+async def download_batch_job_intl_v2(job_id: str) -> Response:
     from app.title_matching import batch_storage
 
-    job = _get_v2_job(job_id)
+    job = _get_intl_v2_job(job_id)
 
     if job["status"] != "completed":
         raise HTTPException(status_code=400, detail="Job not completed")
@@ -233,6 +242,6 @@ async def download_batch_job_v2(job_id: str) -> Response:
         content=contents,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="movie_title_match_v2_results_{job_id[:8]}.xlsx"'
+            "Content-Disposition": f'attachment; filename="movie_title_match_intl_v2_results_{job_id[:8]}.xlsx"'
         },
     )

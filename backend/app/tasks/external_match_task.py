@@ -7,9 +7,18 @@ pattern (Phase 5 — the chord is gone; see enqueue_next_window/scheduler_state
 below), but with durable Postgres row storage (ApiTitleMatchRow, keyed by
 client-supplied row_uuid) instead of xlsx output + an ephemeral Redis hash —
 this surface needs individually addressable rows for partial retrieval and
-row-scoped retry across a job that can run for over an hour. Both this
-module and agentic_match_task.py call the same run_agentic_match core, so
-matching logic itself never forks.
+row-scoped retry across a job that can run for over an hour.
+
+Which matcher a row runs on is decided in exactly ONE place -- the
+(market, variant) branch in external_match_row -- from job.market and
+job.pipeline_variant, both read from the job row this task already loads on
+every row. v1 rows (pipeline_variant NULL/"v1", i.e. everything submitted
+through /api/v1) still call the same shared run_agentic_match core as
+agentic_match_task.py; "v2" rows (submitted through /api/v2, see
+app/routers/external_title_match_v2.py) call the market's standalone v2
+runner instead. Everything else in this module -- windowed dispatch, the
+retry path, counters, finalize -- is variant-agnostic and touches no
+matching logic at all.
 
 Unlike domestic/international, ApiTitleMatchRow has no integer `dispatched`
 cursor -- its per-row `status` column IS the dispatch state, with a
@@ -59,6 +68,22 @@ def _movie_exists(session: Session, market: str, movie_id: int) -> bool:
     model = MovieMasterIntl if market == "international" else MovieMaster
     row = session.exec(select(model.id).where(model.id == movie_id)).first()
     return row is not None
+
+
+def _variant_of(job) -> str:
+    """Which matching pipeline processes this job's rows. None/missing/an
+    unrecognised value all degrade to "v1" (fail-safe: never an unhandled
+    branch) -- includes every job created before the /api/v2 submit surface
+    existed, since ApiTitleMatchJob.pipeline_variant is a nullable column
+    added later. Same shape as agentic_match_task._variant_of.
+
+    Deliberately NOT threaded through as a Celery apply_async kwarg the way
+    the two internal batch row tasks do it: external_match_row already loads
+    its job row from Postgres on every single row, so the variant is
+    available for free with no publish-side plumbing to keep in sync.
+    """
+    value = getattr(job, "pipeline_variant", None)
+    return "v2" if value == "v2" else "v1"
 
 
 def _bump_job_counters(session: Session, job_id: str, **increments: int) -> None:
@@ -354,6 +379,11 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
     """Process a single ApiTitleMatchRow. theater is always None — the
     external contract has no theater field, matching the internal batch
     path's convention.
+
+    The (market, pipeline_variant) pair selects one of three fully isolated
+    matchers -- see the dispatch branch below. This is the ONLY place the
+    external surface's v1/v2 split exists; every other function in this module
+    is pure row/job bookkeeping and is variant-agnostic by construction.
     """
     from celery.exceptions import Retry
 
@@ -362,6 +392,7 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
     from app.observability.constants import (
         CALLER_EXTERNAL_API,
         PATH_AGENTIC_CLI,
+        PATH_AGENTIC_CLI_V2,
         TASK_DOMESTIC_MAPPING,
         TASK_INTL_MAPPING,
     )
@@ -381,6 +412,10 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
         # Read inside the existing session block — the only place this job row
         # is loaded, so per-key cost attribution (spec §3) costs no extra query.
         api_key_id = job.api_key_id if job is not None else None
+        # Same free ride for the pipeline selector: no Celery kwarg needed
+        # (see _variant_of). A missing job degrades to v1, matching `market`'s
+        # existing fallback above.
+        variant = _variant_of(job) if job is not None else "v1"
         input_data = json.loads(row.input_json)
         # attempts > 0 means a prior attempt already counted this row into
         # rows_processed (and, on failure, rows_failed) — this run must
@@ -399,24 +434,63 @@ def external_match_row(self, job_id: str, row_id: int) -> None:
     try:
         holder = sandbox_semaphore.acquire(timeout=limits.slot_wait_timeout())
         try:
-            result = run_agentic_match(
-                title,
-                show_date,
-                None,  # theater: not part of the external contract
-                ticketing_url,
-                market=market,
-                country=country,
-                usage_ctx=LlmCallContext(
-                    task_type=(
-                        TASK_DOMESTIC_MAPPING if market == "domestic" else TASK_INTL_MAPPING
-                    ),
-                    call_path=PATH_AGENTIC_CLI,
-                    caller_type=CALLER_EXTERNAL_API,
-                    api_key_id=api_key_id,
-                    job_id=job_id,
-                    job_type="ApiTitleMatchJob",
+            is_v2 = variant == "v2"
+            # task_type stays the market's mapping type for both variants
+            # (cost still rolls up per market); the variant is distinguished on
+            # call_path, matching how agentic_match_task/agentic_intl_match_task
+            # tag their own v2 usage so per-pipeline cost stays comparable
+            # across the internal and external surfaces.
+            usage_ctx = LlmCallContext(
+                task_type=(
+                    TASK_DOMESTIC_MAPPING if market == "domestic" else TASK_INTL_MAPPING
                 ),
+                call_path=PATH_AGENTIC_CLI_V2 if is_v2 else PATH_AGENTIC_CLI,
+                caller_type=CALLER_EXTERNAL_API,
+                api_key_id=api_key_id,
+                job_id=job_id,
+                job_type="ApiTitleMatchJob",
             )
+            # The external surface's ONLY pipeline branch. Each v2 runner is
+            # imported lazily inside its own arm so a v1 row never imports
+            # either v2 module, and a domestic row never imports the
+            # international pipeline (or vice versa) -- the two markets' v2
+            # matching logic shares no code by construction, per the
+            # regression that motivated splitting them.
+            if is_v2 and market == "international":
+                from app.title_matching.agentic.runner_intl_v2 import (
+                    run_agentic_match_intl_v2,
+                )
+
+                result = run_agentic_match_intl_v2(
+                    title,
+                    show_date,
+                    None,  # theater: not part of the external contract
+                    ticketing_url,
+                    country=country,
+                    usage_ctx=usage_ctx,
+                )
+            elif is_v2:
+                from app.title_matching.agentic.runner_v2 import run_agentic_match_v2
+
+                # Domestic v2 takes no market/country -- an international v2
+                # call is unrepresentable through it by design.
+                result = run_agentic_match_v2(
+                    title,
+                    show_date,
+                    None,  # theater: not part of the external contract
+                    ticketing_url,
+                    usage_ctx=usage_ctx,
+                )
+            else:
+                result = run_agentic_match(
+                    title,
+                    show_date,
+                    None,  # theater: not part of the external contract
+                    ticketing_url,
+                    market=market,
+                    country=country,
+                    usage_ctx=usage_ctx,
+                )
         except AgenticThrottleError as exc:
             # MUST be checked before the generic `except AgenticError` below
             # — same ordering rationale as the internal batch row tasks.

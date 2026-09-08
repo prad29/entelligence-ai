@@ -122,8 +122,16 @@ def run_agentic_match(
     if variant not in ("v1", "v2"):
         raise ValueError(f"unknown variant: {variant!r}")
     is_v2 = variant == "v2"
+    if is_v2 and market != "domestic":
+        raise ValueError(
+            "runner.run_agentic_match(variant='v2') is domestic-only; "
+            "international v2 has its own orchestrator (runner_intl_v2.py)"
+        )
 
-    _check_sandbox_reachable()
+    from app.title_matching.agentic.sandbox_target import sandbox_url_for
+
+    sandbox_url = sandbox_url_for(market, variant=variant)
+    _check_sandbox_reachable(sandbox_url=sandbox_url)
 
     # Pre-fetch DB candidates before calling the sandbox so the agent
     # never needs to call localhost (the sidecar can't reach compose services).
@@ -182,7 +190,7 @@ def run_agentic_match(
 
     started = time.monotonic()
     try:
-        stdout = _call_sandbox(prompt, tools)
+        stdout = _call_sandbox(prompt, tools, sandbox_url=sandbox_url)
     except BaseException as exc:
         _log_sandbox_call(
             ctx, "", started,
@@ -210,7 +218,7 @@ def run_agentic_match(
         )
         retry_started = time.monotonic()
         try:
-            stdout2 = _call_sandbox(retry_prompt, tools)
+            stdout2 = _call_sandbox(retry_prompt, tools, sandbox_url=sandbox_url)
             result = parse_agent_output(stdout2)
             _log_sandbox_call(
                 ctx, stdout2, retry_started, retry_count=1, decision=result.decision
@@ -311,6 +319,11 @@ def run_agentic_match(
             # mapped title, making an otherwise-correct match look wrong in
             # any downstream title-string comparison.
             result.suggested_movie_title = best["movie_title"]
+            if is_v2:
+                from app.title_matching.agentic.post_lookup_v2 import (
+                    apply_domestic_v2_post_lookup_resolution,
+                )
+                result = apply_domestic_v2_post_lookup_resolution(result, best)
             logger.info(
                 "agentic_post_lookup_hit id=%d title=%r",
                 best["id"], best["movie_title"],
@@ -458,11 +471,15 @@ def _throttle_backoff_seconds(attempt: int) -> float:
     return base * (2**attempt) * random.uniform(0.5, 1.5)
 
 
-def _post_sandbox(prompt: str, tools: str) -> dict:
+def _post_sandbox(prompt: str, tools: str, *, sandbox_url: Optional[str] = None) -> dict:
     """POST to the claude-sandbox sidecar and return the parsed response
     body dict (stdout/stderr/exit_code/timed_out/serper_calls). Raw HTTP-call
     plumbing only — no throttle/error interpretation lives here; that's
     `_call_sandbox`'s job, so it can retry this call in a loop.
+
+    `sandbox_url` is a keyword-only override (None = settings.CLAUDE_SANDBOX_URL,
+    today's behavior unchanged) letting international v2 route to a separate
+    sandbox container — see sandbox_target.py.
     """
     payload = json.dumps({
         "prompt": prompt,
@@ -471,7 +488,8 @@ def _post_sandbox(prompt: str, tools: str) -> dict:
         "timeout_seconds": settings.AGENTIC_TIMEOUT_SECONDS,
     }).encode()
 
-    url = f"{settings.CLAUDE_SANDBOX_URL.rstrip('/')}/run"
+    base = (sandbox_url or settings.CLAUDE_SANDBOX_URL).rstrip("/")
+    url = f"{base}/run"
     req = urllib.request.Request(
         url,
         data=payload,
@@ -490,9 +508,12 @@ def _post_sandbox(prompt: str, tools: str) -> dict:
         )
 
 
-def _call_sandbox(prompt: str, tools: str) -> str:
+def _call_sandbox(prompt: str, tools: str, *, sandbox_url: Optional[str] = None) -> str:
     """POST to the claude-sandbox sidecar and return raw stdout, retrying
     in-process on a detected Bedrock throttle.
+
+    `sandbox_url` is forwarded to `_post_sandbox` unchanged — see that
+    function's docstring.
 
     Side channel: also stashes the response's `serper_calls` list (spec §7 —
     the movieweb MCP server's web_search/web_fetch call log for this
@@ -528,7 +549,7 @@ def _call_sandbox(prompt: str, tools: str) -> str:
         _call_sandbox.last_serper_calls = []
 
         attempt_started = time.monotonic()
-        body = _post_sandbox(prompt, tools)
+        body = _post_sandbox(prompt, tools, sandbox_url=sandbox_url)
         elapsed = time.monotonic() - attempt_started
 
         exit_code = body.get("exit_code", -1)
@@ -575,9 +596,14 @@ def _call_sandbox(prompt: str, tools: str) -> str:
     raise AgenticSubprocessError("agentic sandbox retry loop exited without a result")
 
 
-def _check_sandbox_reachable() -> None:
-    """Fail fast with a clear message if the sandbox sidecar isn't up."""
-    url = f"{settings.CLAUDE_SANDBOX_URL.rstrip('/')}/health"
+def _check_sandbox_reachable(*, sandbox_url: Optional[str] = None) -> None:
+    """Fail fast with a clear message if the sandbox sidecar isn't up.
+
+    `sandbox_url` overrides settings.CLAUDE_SANDBOX_URL (None = today's
+    behavior unchanged) — see sandbox_target.py.
+    """
+    base = (sandbox_url or settings.CLAUDE_SANDBOX_URL).rstrip("/")
+    url = f"{base}/health"
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             data = json.loads(resp.read())
@@ -588,7 +614,7 @@ def _check_sandbox_reachable() -> None:
                 )
     except URLError as exc:
         raise AgenticConfigError(
-            f"claude-sandbox not reachable at {settings.CLAUDE_SANDBOX_URL}. "
+            f"claude-sandbox not reachable at {base}. "
             "Start it with: docker compose up claude-sandbox. "
             f"Error: {exc}"
         )

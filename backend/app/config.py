@@ -97,6 +97,29 @@ class Settings(BaseSettings):
     AGENTIC_V2_CAST_MAX_NAMES: int = 6
     AGENTIC_V2_FALLTHROUGH_MIN_TITLE_SIMILARITY: int = 80
 
+    # --- International v2 sandbox -------------------------------------------
+    # A second claude-sandbox sidecar (docker-compose.yml's claude-sandbox-intl),
+    # international-v2-only, differentiated from the domestic sandbox by
+    # baked-in MCP config/model defaults -- NOT by concurrency: the semaphore
+    # and worker pool stay fully shared across every market/variant (see
+    # sandbox_target.py). "" == not deployed: intl v2 falls back to
+    # CLAUDE_SANDBOX_URL, so this whole seam is inert until the service exists.
+    CLAUDE_SANDBOX_URL_INTL: str = ""
+    # Opt-in switch to ALSO move intl v1 traffic onto the intl sandbox. Default
+    # False = intl v1 provably untouched by this project.
+    AGENTIC_INTL_V1_USE_INTL_SANDBOX: bool = False
+
+    # --- International v2 pipeline -------------------------------------------
+    # Independent verification pass (a direct Bedrock Converse call, not a
+    # second claude-sandbox subprocess) that re-checks the first pass's pick.
+    AGENTIC_INTL_V2_RERANK_ENABLED: bool = True
+    AGENTIC_INTL_V2_RERANK_MODEL: str = ""          # "" == AGENTIC_CLAUDE_MODEL
+    AGENTIC_INTL_V2_RERANK_MAX_CONFIDENCE: float = 0.97
+    # off | log_only | enforce -- mirrors AGENTIC_V2_METADATA_GUARDRAIL_MODE.
+    # The deterministic country-consistency check (MovieMasterIntl has no
+    # director/synopsis, so this is intl v2's analogue of the metadata guardrail).
+    AGENTIC_INTL_V2_COUNTRY_GUARDRAIL_MODE: str = "enforce"
+
     # Production MySQL DB — source of truth for Movie Master sync (fq_movie_master /
     # fq_movie_master_intl). Empty defaults let the app boot cleanly where prod DB
     # access isn't configured (e.g. CI, local dev without the sync feature).

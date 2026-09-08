@@ -43,13 +43,43 @@ XLSX of results. Async Celery job + polling — never synchronous. Requires
 `AGENTIC_TITLE_MATCH_ENABLED=true` (must be true in every deployment; when
 false, both `/single` and `/batch` return 400).
 
-A v2 pipeline (prefix `/api/v2/movie-title-match`) additionally weighs
-genre/cast/director/synopsis (not just title) and deterministically rejects a
-pick whose director AND synopsis are both empty (unless genre is "Sports" or
-"Concert/Special Events"), falling through to the next-closest candidate. v2
-batch jobs share the same `movietitlebatchjob` table as v1, distinguished by
-the nullable `pipeline_variant` column (`NULL`/`"v1"` vs `"v2"`) so the
-cross-pipeline fairness scheduler counts/windows/sweeps both identically.
+A domestic v2 pipeline (prefix `/api/v2/movie-title-match`) additionally
+weighs genre/cast/director/synopsis (not just title) and deterministically
+rejects a pick whose director AND synopsis are both empty (unless genre is
+"Sports" or "Concert/Special Events"), falling through to the next-closest
+candidate. v2 batch jobs share the same `movietitlebatchjob` table as v1,
+distinguished by the nullable `pipeline_variant` column (`NULL`/`"v1"` vs
+`"v2"`) so the cross-pipeline fairness scheduler counts/windows/sweeps both
+identically.
+
+An international v2 pipeline (prefix `/api/v2/intl-movie-title-match`,
+`country` required on every request) is a **fully standalone module** — it
+never calls the shared `run_agentic_match`. It restores country-aware Vespa
+matching (a `country` field on the `movie_master_intl` schema, filtered at
+query time), the anniversary/re-release date arithmetic, and a deterministic
+country-consistency guardrail (MovieMasterIntl has no director/cast/synopsis
+columns, so this is intl v2's analogue of domestic v2's metadata guardrail),
+plus an independent Bedrock Converse verification pass that re-checks the
+first pass's pick. International v1 (`market="international"` on the
+existing `/single`/`/batch` endpoints) is untouched by any of this — it keeps
+running the original shared pipeline, including a known stale-confidence-
+after-post-lookup bug that v2 fixes only for itself (domestic v2 gets its
+own, differently-tuned copy of the same fix — the two are deliberately
+independent modules with no shared code, since sharing this exact logic
+between markets is what caused a prior production regression).
+
+Domestic and international v2 also use **separate `claude-sandbox`
+containers** (`claude-sandbox` / `claude-sandbox-intl`), differentiated by
+baked-in MCP/model config (env-driven, same image) — NOT for concurrency
+isolation. The sandbox semaphore and `celery-agentic-worker` pool stay fully
+shared across every market/version by deliberate choice; international v2
+competes for the same informal round-robin capacity domestic/intl-v1/the
+external API already share today.
+
+**Deploy note**: after a fresh deploy, run
+`python app/cli.py rebuild-semantic-index-intl --force-deploy --backfill-country`
+once — without it, intl v2's Vespa country filter matches nothing (existing
+indexed docs have no `country` attribute until the backfill re-feeds them).
 
 ### Endpoints (prefix `/api/v1/movie-title-match`)
 
@@ -115,6 +145,45 @@ real-broker chord + per-member retry interaction is covered by
 which runs an actual `agentic`-queue worker subprocess to prove the chord
 callback fires exactly once after a retried member succeeds. The eager-mode
 data-flow test is `backend/tests/test_batch_e2e.py`.
+
+### External API (`singletitle` / `batchtitle`)
+
+A third, API-key-authenticated surface (`x-api-key` on every request), parallel
+to the internal Excel-upload flow above and gated behind
+`EXTERNAL_API_ENABLED`. Router `app/routers/external_title_match.py`, Celery
+tasks `app/tasks/external_match_task.py`, durable per-row storage in
+`apititlematchjob` / `apititlematchrow` (keyed by client-supplied `row_uuid`)
+rather than xlsx + an ephemeral Redis hash, because this surface needs
+individually addressable rows for partial retrieval and row-scoped retry.
+
+**Choosing a pipeline is a matter of which URL you post to, not a header or a
+request field:**
+
+- `POST /api/v1/singletitle`, `POST /api/v1/batchtitle` — v1 matching, for both
+  `type=domestic` and `type=international`. Unchanged and frozen.
+- `POST /api/v2/singletitle`, `POST /api/v2/batchtitle` — v2 matching
+  (`app/routers/external_title_match_v2.py`). Identical request bodies, query
+  params, auth, row limits and 202-plus-polling flow as v1; `type=domestic`
+  runs domestic v2 and `type=international` runs the standalone international
+  v2 pipeline.
+
+Both surfaces write to the same tables, distinguished only by the nullable
+`apititlematchjob.pipeline_variant` column (`NULL`/`"v1"` vs `"v2"`) — the same
+discriminator pattern as `movietitlebatchjob` / `movietitleintlbatchjob`. So
+the job endpoints are **shared and unversioned**: `GET
+/api/v1/external/jobs/{job_id}`, `.../results` and `POST .../retry` serve v1
+and v2 jobs identically (lookup is by `job_id` + `api_key_id`, never by
+variant), and there are deliberately no `/api/v2/external/jobs/*` routes. A
+retried row re-runs on whatever pipeline its job was submitted with.
+
+The v1/v2/market split resolves in exactly one place —
+`external_match_row`'s branch over `(job.market, job.pipeline_variant)` —
+which reads the variant off the job row it already loads for every row, so
+there is no `variant` Celery kwarg anywhere on this path. Windowed dispatch,
+retry, counters and finalize are all variant-agnostic. Tests:
+`backend/tests/test_external_title_match_v2.py` (dispatch matrix + a
+regression test that v1 submissions still create `NULL`-variant jobs) and
+`backend/tests/test_external_match_task.py` (the row/job lifecycle).
 
 ## International Amenity Detection
 

@@ -14,6 +14,11 @@ const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio
 const { z } = require('zod')
 
 const SERPER_API_KEY = process.env.SERPER_API_KEY || ''
+// Locale bias for international deployments (gl=country, hl=language) --
+// empty on the domestic sandbox, so its search body is byte-identical to
+// before this existed.
+const DEFAULT_GL = process.env.SERPER_DEFAULT_GL || ''
+const DEFAULT_HL = process.env.SERPER_DEFAULT_HL || ''
 const SEARCH_URL = 'https://google.serper.dev/search'
 const SCRAPE_URL = 'https://scrape.serper.dev'
 const REQUEST_TIMEOUT_MS = 20_000
@@ -111,12 +116,19 @@ server.registerTool(
     inputSchema: {
       query: z.string().min(1).describe('The search query string'),
       num: z.number().int().min(1).max(20).optional().describe('Number of results to return (default 8)'),
+      gl: z.string().optional().describe('Optional 2-letter country code to bias results (e.g. "de", "br")'),
+      hl: z.string().optional().describe('Optional 2-letter language code to bias results (e.g. "de", "pt")'),
     },
   },
-  async ({ query, num }) => {
+  async ({ query, num, gl, hl }) => {
     const started = Date.now()
     try {
-      const data = await postJson(SEARCH_URL, { q: query, num: num || 8 })
+      const body = { q: query, num: num || 8 }
+      const effGl = gl || DEFAULT_GL
+      const effHl = hl || DEFAULT_HL
+      if (effGl) body.gl = effGl
+      if (effHl) body.hl = effHl
+      const data = await postJson(SEARCH_URL, body)
       logSerperCall('search', true, Date.now() - started)
       const organic = Array.isArray(data.organic) ? data.organic : []
       const results = organic.slice(0, num || 8).map((r) => ({

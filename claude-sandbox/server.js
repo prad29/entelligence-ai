@@ -17,6 +17,17 @@ const PORT = parseInt(process.env.CLAUDE_SANDBOX_PORT || '3100', 10)
 const DEFAULT_TIMEOUT_MS = parseInt(process.env.CLAUDE_DEFAULT_TIMEOUT_MS || '90000', 10)
 const MAX_TIMEOUT_MS = 300_000
 
+// Market-profile knobs -- same image for both claude-sandbox and
+// claude-sandbox-intl, differentiated purely by env so the `claude` CLI
+// version and the movieweb MCP server can never drift between markets.
+// Every default below reproduces today's domestic behavior byte-for-byte
+// when unset.
+const SANDBOX_PROFILE = process.env.SANDBOX_PROFILE || 'domestic'
+const MCP_CONFIG_PATH = process.env.MCP_CONFIG_PATH || '/app/mcp-config.json'
+const SETTINGS_PATH = process.env.SETTINGS_PATH || '/home/claude/.claude/settings.json'
+const DEFAULT_MODEL = process.env.CLAUDE_DEFAULT_MODEL || ''
+const EXTRA_ALLOWED_TOOLS = process.env.EXTRA_ALLOWED_TOOLS || ''
+
 function claudeAvailable() {
   try {
     execSync('which claude', { stdio: 'ignore' })
@@ -53,12 +64,16 @@ function runClaude({ prompt, model, tools, timeoutMs }) {
       // needed (--strict-mcp-config bypasses the .mcp.json approval gate
       // entirely, which otherwise leaves a server stuck "pending" forever
       // in a one-shot --print session).
-      '--mcp-config', '/app/mcp-config.json',
+      '--mcp-config', MCP_CONFIG_PATH,
       '--strict-mcp-config',
     ]
 
-    if (model) {
-      args.push('--model', model)
+    // Container-level model default, independent of the request body -- lets
+    // a sandbox profile pin a model without every caller having to pass one.
+    // A caller-supplied `model` still wins.
+    const effectiveModel = model || DEFAULT_MODEL
+    if (effectiveModel) {
+      args.push('--model', effectiveModel)
     }
 
     // --tools only restricts/enables built-in tools and does not affect MCP
@@ -71,13 +86,16 @@ function runClaude({ prompt, model, tools, timeoutMs }) {
     if (tools !== undefined && tools !== null) {
       args.push('--tools', tools)
     }
-    args.push('--allowedTools', MOVIEWEB_TOOLS)
+    const allowedTools = EXTRA_ALLOWED_TOOLS
+      ? `${MOVIEWEB_TOOLS},${EXTRA_ALLOWED_TOOLS}`
+      : MOVIEWEB_TOOLS
+    args.push('--allowedTools', allowedTools)
 
     // Seed ephemeral home with baked-in settings so permissions apply cleanly
     try {
       const fs = require('fs')
       fs.mkdirSync(`${ephemeralHome}/.claude`, { recursive: true })
-      fs.copyFileSync('/home/claude/.claude/settings.json', `${ephemeralHome}/.claude/settings.json`)
+      fs.copyFileSync(SETTINGS_PATH, `${ephemeralHome}/.claude/settings.json`)
     } catch {}
 
     const proc = spawn('claude', args, {
@@ -182,7 +200,7 @@ function send(res, status, body) {
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
-    return send(res, 200, { status: 'ok', claude_available: claudeAvailable() })
+    return send(res, 200, { status: 'ok', claude_available: claudeAvailable(), profile: SANDBOX_PROFILE })
   }
 
   if (req.method === 'POST' && req.url === '/run') {
@@ -203,6 +221,7 @@ const server = http.createServer(async (req, res) => {
 
     console.log(JSON.stringify({
       event: 'run_start',
+      profile: SANDBOX_PROFILE,
       model: model || 'default',
       tools: tools || 'none',
       timeout_ms: timeoutMs,
@@ -225,6 +244,6 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(JSON.stringify({ event: 'server_start', port: PORT }))
+  console.log(JSON.stringify({ event: 'server_start', port: PORT, profile: SANDBOX_PROFILE }))
   console.log(JSON.stringify({ event: 'claude_check', available: claudeAvailable() }))
 })

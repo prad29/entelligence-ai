@@ -46,19 +46,25 @@ above. What changes between them:
 
 **Everything else — the core ranking logic — is identical for both.**
 
-## …except for the new v2 pipeline, which is domestic-only
+## …except for v2, which exists for both markets now — but as two entirely separate builds
 
-Separately, there's now a **second, newer version of the domestic pipeline**
-(called "v2") that adds a bunch of new rules on top of the shared ones —
-genre, cast, director, and plot synopsis are now used as extra evidence, not
-just the title. **v2 only exists for domestic right now — international
-still runs the older rule set only.** So today:
+There's now a **second, newer version of the pipeline** ("v2") for both
+domestic and international — but they are not the same code, and they don't
+share the same extra rules. Domestic v2 adds genre/cast/director/synopsis
+weighing. International v2 adds country-aware semantic search, anniversary/
+re-release date math, and a second "double-check" pass — none of which apply
+to domestic, since domestic doesn't have the same country/re-release
+problems international does. v1 (the original pipeline) is untouched by any
+of this, for both markets — it's still there, still running exactly as
+before, for anyone not using the new `/v2` endpoints.
 
 | | Domestic | International |
 |---|---|---|
 | Shared/original rules (see below) | ✅ | ✅ |
-| International-only rules (title translation, country scoping) | — | ✅ |
-| v2 metadata rules (genre/cast/director/synopsis) | ✅ (new, optional endpoint) | — (not built yet) |
+| International-only v1 rules (title translation, country scoping) | — | ✅ |
+| v2 metadata rules (genre/cast/director/synopsis) | ✅ | — (the DB has no director/cast/synopsis columns for international titles at all) |
+| v2 country-aware search + anniversary rules + double-check pass | — (not applicable) | ✅ |
+| v1 pipeline, untouched | ✅ still available | ✅ still available |
 
 ## The rules, spelled out
 
@@ -128,6 +134,39 @@ rules are added on top:
    the result for human review either way, since Claude didn't actually
    choose that swapped-in row itself.
 
+### Rules that only apply to international v2 (the newest addition)
+
+International's database has no director, cast, or synopsis fields at all —
+so the domestic v2 rules above can't apply here. Instead, international v2
+adds a different set of rules, aimed at the problems international listings
+actually have:
+
+1. **The country search is now genuinely scoped, everywhere — not just in
+   the exact-match database search, but in the "fuzzy" semantic search too.**
+   Previously the semantic search didn't know about countries at all, so it
+   could surface a French release when the listing was actually from
+   Germany. Now both search paths are country-filtered.
+2. **A candidate from the wrong country is now automatically rejected —
+   double-checked by code, not just asked of Claude.** If Claude picks a
+   row from the wrong country anyway, the system catches it and swaps in
+   the next-best candidate that's actually in the right country.
+3. **Anniversary and re-release screenings get real date math, not
+   guesswork.** If a listing is for a "25th Anniversary" screening, the
+   system computes the actual anniversary year from the release date and
+   checks how close the candidate's date is to the show date, instead of
+   trusting whatever ordinal happens to be in a database row's title (which
+   might be stale, from a previous year's campaign).
+4. **A second, independent pass double-checks the first pick.** After
+   Claude makes its initial choice, a separate check re-examines that pick
+   against the same candidate list and can confirm it, overrule it with a
+   better one, or say "no real match" — catching cases where the reasoning
+   was right but the actual answer reported doesn't match that reasoning.
+5. **A genuine best-effort match, even when nothing fits.** If Claude is
+   confident about which real movie a listing refers to but no database row
+   fits it, the system now also tries an "anniversary version" of the title
+   (e.g. "Shrek 25th Anniversary") as an extra guess, on top of the usual
+   English/local title guesses — so a follow-up search has more to try.
+
 ## Examples
 
 **Example 1 — ordinal hard rule (applies to both domestic and intl)**
@@ -155,3 +194,15 @@ the system reports "no match" rather than confidently picking one of two
 junk rows. Compare this to `"EPL Matchday 36: Liverpool vs Chelsea"`, genre
 `"Sports"`, also with no director/synopsis — that one is fine and gets
 matched normally, because Sports is explicitly exempt.
+
+**Example 4 — international v2's anniversary math and country check**
+Input: `"Harry Potter und der Orden des Phoenix"`, Germany, showing on
+2026-08-29. The database has a row release-dated 2026-08-28 — one day off
+— alongside the plain 2007 original and an unrelated France-scoped
+candidate. International v2 computes the anniversary (2026 − 2007 = 19
+years), sees the 1-day date match is decisive on its own, picks the dated
+row with high confidence, and automatically discards the France-scoped
+candidate regardless of how well its title matches, since it's the wrong
+country for this listing.
+
+

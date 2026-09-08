@@ -230,6 +230,12 @@ class MovieTitleIntlBatchJob(SQLModel, table=True):
     # rationale, kept symmetrical across the domestic/international split.
     dispatched: int = Field(default=0)
     finalize_claimed_at: Optional[datetime] = None
+    # Which matching pipeline processes this job's rows. NULL/absent == "v1"
+    # (every job created before v2 existed). International v2 reuses this
+    # SAME table via this discriminator (not a third table) -- mirrors
+    # MovieTitleBatchJob.pipeline_variant's identical rationale: the
+    # cross-pipeline fairness scheduler needs zero changes either way.
+    pipeline_variant: Optional[str] = None
 
 
 class MovieMasterSyncJob(SQLModel, table=True):
@@ -369,9 +375,9 @@ class ApiTitleMatchJob(SQLModel, table=True):
     MovieTitleIntlBatchJob (see external_match_task.py) — this surface needs
     durable, individually addressable rows for partial retrieval and
     row-scoped retry across a job that can run for over an hour, which the
-    existing xlsx + ephemeral-Redis-hash pipeline was never built for. Both
-    paths call the same run_agentic_match core, so matching logic itself
-    never forks.
+    existing xlsx + ephemeral-Redis-hash pipeline was never built for. A v1
+    job on either path calls the same run_agentic_match core; see
+    pipeline_variant below for how a v2 job picks its matcher instead.
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
@@ -394,6 +400,20 @@ class ApiTitleMatchJob(SQLModel, table=True):
     # here — external already has per-row ApiTitleMatchRow.status as its
     # dispatch state, so there's nothing for a cursor to duplicate.
     finalize_claimed_at: Optional[datetime] = None
+    # Which matching pipeline processes this job's rows. NULL/absent == "v1"
+    # (every job created before the /api/v2 submit surface existed). "v2"
+    # routes each row through the market-appropriate v2 runner
+    # (runner_v2.run_agentic_match_v2 for domestic,
+    # runner_intl_v2.run_agentic_match_intl_v2 for international) -- see
+    # external_match_task.external_match_row's dispatch branch. Set only by
+    # app/routers/external_title_match_v2.py; the v1 router leaves it NULL.
+    #
+    # A discriminator column on this SHARED table (not a fourth job table),
+    # mirroring MovieTitleBatchJob/MovieTitleIntlBatchJob.pipeline_variant's
+    # identical rationale: job status/results/retry semantics are byte-for-byte
+    # identical between v1 and v2 jobs, so the endpoints serving them (and the
+    # row/job bookkeeping in external_match_task) need zero changes.
+    pipeline_variant: Optional[str] = Field(default=None, index=False)
 
 
 class ApiTitleMatchRow(SQLModel, table=True):

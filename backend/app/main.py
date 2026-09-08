@@ -10,6 +10,7 @@ from app.routers import movie_title_match
 from app.routers import movie_title_match_v2
 from app.routers import movie_title_match_intl_v2
 from app.routers import external_title_match
+from app.routers import external_title_match_v2
 from app.routers import deleted_showtimes
 from app.routers import intl_detect, intl_amenities, intl_jobs
 from app.routers import usage
@@ -58,6 +59,21 @@ app = FastAPI(
             ),
         },
         {
+            "name": "external-title-match-v2",
+            "description": (
+                "v2-pipeline dispatch surface for the external title-matching API: POST "
+                "/api/v2/singletitle and POST /api/v2/batchtitle. Same request bodies, same "
+                "x-api-key auth, same row limits and same 202-plus-polling flow as the v1 "
+                "routes above — the URL is the pipeline selector, not a header or flag. A v2 "
+                "submission routes each row through the market-appropriate v2 pipeline "
+                "(domestic v2's metadata weighing for type=domestic, the standalone "
+                "international v2 pipeline for type=international) instead of the shared v1 "
+                "matcher. There are deliberately NO /api/v2 job endpoints: status, results and "
+                "retry stay on /api/v1/external/jobs/{job_id}* and serve v1 and v2 jobs "
+                "identically, since a job's variant changes only which matcher runs its rows."
+            ),
+        },
+        {
             "name": "lobby-check",
             "description": (
                 "External, API-key-authenticated surface for cinema-lobby marketing-material "
@@ -101,6 +117,11 @@ app.include_router(usage.router)
 
 if settings.EXTERNAL_API_ENABLED:
     app.include_router(external_title_match.router)
+    # Same gate as v1 deliberately: v2 is the same external API surface with a
+    # different matching pipeline, and its jobs are polled through v1's job
+    # endpoints — exposing /api/v2/singletitle while /api/v1/external/jobs was
+    # switched off would leave callers unable to read their own results.
+    app.include_router(external_title_match_v2.router)
 
 if settings.LOBBY_CHECK_ENABLED:
     app.include_router(lobby_check.router)

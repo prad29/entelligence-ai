@@ -71,7 +71,20 @@ def _submit_job(
     db_update: bool,
     api_key: ApiKey,
     session: Session,
+    *,
+    pipeline_variant: Optional[str] = None,
 ) -> dict:
+    """Shared row-validation + job-creation + dispatch plumbing for both the
+    /api/v1 and /api/v2 submit surfaces (external_title_match_v2.py imports
+    this).
+
+    `pipeline_variant` is the ONLY difference between the two surfaces, and it
+    defaults to None so this function's v1 callers below are unchanged: a v1
+    submission still creates a job with pipeline_variant NULL, which
+    external_match_row reads as "v1". This is job-orchestration plumbing, not
+    matching logic — the two markets' v2 matching pipelines remain fully
+    isolated from each other and from v1 downstream in external_match_row.
+    """
     max_rows = api_key.max_rows_per_batch
     if max_rows is None:
         from app.config import settings
@@ -92,6 +105,7 @@ def _submit_job(
         market=market,
         db_update=db_update,
         rows_total=len(rows),
+        pipeline_variant=pipeline_variant,
     )
     session.add(job)
     session.flush()  # obtain job.id before building rows

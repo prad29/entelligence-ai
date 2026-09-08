@@ -47,6 +47,7 @@ services:
       DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
       VESPA_URL: http://vespa:8080
       CLAUDE_SANDBOX_URL: http://claude-sandbox:3100
+      CLAUDE_SANDBOX_URL_INTL: http://claude-sandbox-intl:3100
     env_file: .env
     depends_on:
       db:
@@ -57,6 +58,12 @@ services:
         condition: service_healthy
       claude-sandbox:
         condition: service_healthy
+      # service_started, NOT service_healthy -- deliberately weaker than the
+      # domestic sandbox's condition: an intl-sandbox outage must not stop the
+      # API from serving domestic traffic. An unhealthy intl box surfaces as
+      # AgenticConfigError on intl-v2 requests only (honest-no-match 200).
+      claude-sandbox-intl:
+        condition: service_started
 
   celery-worker:
     build: ./backend
@@ -87,6 +94,7 @@ services:
       VESPA_URL: http://vespa:8080
       REDIS_URL: redis://redis:6379/0
       CLAUDE_SANDBOX_URL: http://claude-sandbox:3100
+      CLAUDE_SANDBOX_URL_INTL: http://claude-sandbox-intl:3100
     depends_on:
       db:
         condition: service_healthy
@@ -94,6 +102,8 @@ services:
         condition: service_healthy
       claude-sandbox:
         condition: service_healthy
+      claude-sandbox-intl:
+        condition: service_started
 
   celery-deleted-showtimes-worker:
     build: ./backend
@@ -188,6 +198,47 @@ services:
       SERPER_API_KEY: "${SERPER_API_KEY:-}"
     ports:
       - "3100:3100"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3100/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  claude-sandbox-intl:
+    # Same image/Dockerfile as claude-sandbox -- the market profile is selected
+    # purely by env (SANDBOX_PROFILE / MCP_CONFIG_PATH / SETTINGS_PATH /
+    # CLAUDE_DEFAULT_MODEL / EXTRA_ALLOWED_TOOLS), so the CLI version and the
+    # movieweb MCP server can never drift between markets. This is NOT a
+    # concurrency-isolation mechanism -- the sandbox_semaphore and
+    # celery-agentic-worker pool stay fully shared across every market/version
+    # (see app/title_matching/agentic/sandbox_target.py); this container exists
+    # only to let international v2 use different baked-in tools/model/settings.
+    build: ./claude-sandbox
+    environment:
+      CLAUDE_SANDBOX_PORT: "3100"
+      CLAUDE_DEFAULT_TIMEOUT_MS: "90000"
+      DISABLE_AUTOUPDATER: "1"
+      CLAUDE_NO_AUTO_UPDATE: "1"
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+      SERPER_API_KEY: "${SERPER_API_KEY:-}"
+      SANDBOX_PROFILE: "intl"
+      MCP_CONFIG_PATH: "/app/mcp-config.intl.json"
+      SETTINGS_PATH: "/home/claude/.claude/settings.intl.json"
+      # Sandbox-level model default, independent of the POST body. Empty =
+      # whatever the request asks for (today: settings.AGENTIC_CLAUDE_MODEL).
+      CLAUDE_DEFAULT_MODEL: "${AGENTIC_INTL_CLAUDE_MODEL:-}"
+      EXTRA_ALLOWED_TOOLS: "${AGENTIC_INTL_EXTRA_ALLOWED_TOOLS:-}"
+      # Serper locale bias (gl=country, hl=language) so international web
+      # research is not US-biased. Empty = identical body to the domestic box.
+      SERPER_DEFAULT_GL: "${SERPER_DEFAULT_GL_INTL:-}"
+      SERPER_DEFAULT_HL: "${SERPER_DEFAULT_HL_INTL:-}"
+    ports:
+      - "3101:3100"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3100/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]

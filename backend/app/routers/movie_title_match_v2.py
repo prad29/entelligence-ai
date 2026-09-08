@@ -25,7 +25,18 @@ class TitleMatchV2Request(BaseModel):
     use_poster_vision: bool = False
 
 
-@router.post("/single")
+@router.post(
+    "/single",
+    summary="Submit one domestic title for v2 (metadata-aware) matching",
+    description=(
+        "Domestic-only. Same synchronous contract as /api/v1/movie-title-match/single, but the "
+        "match additionally weighs genre/cast/director/synopsis against the listing, not just "
+        "title text, and deterministically rejects a pick whose director AND synopsis are both "
+        "empty (unless genre is Sports or Concert/Special Events). On an agentic-pipeline "
+        "failure this still returns 200 with an honest suggested_movie_id=0 / REVIEW result "
+        "rather than an error status."
+    ),
+)
 async def match_single_title_v2(payload: TitleMatchV2Request):
     if not settings.AGENTIC_TITLE_MATCH_ENABLED:
         raise HTTPException(
@@ -78,15 +89,20 @@ async def match_single_title_v2(payload: TitleMatchV2Request):
     return result.__dict__
 
 
-@router.post("/batch")
+@router.post(
+    "/batch",
+    summary="Upload a batch of domestic titles for v2 matching",
+    description=(
+        "Domestic-only. Mirrors /api/v1/movie-title-match/batch's multipart upload contract "
+        "(same columns, same async Celery-job-plus-polling flow) but every row is dispatched "
+        "through the v2 (metadata-aware) pipeline via the shared movietitlebatchjob table's "
+        "pipeline_variant column, not a separate table. Poll GET /batch/{job_id} for status."
+    ),
+)
 async def upload_batch_v2(
     file: UploadFile = File(...),
     use_poster_vision: str = Form("false"),
 ):
-    """Domestic-only v2 batch upload -- mirrors v1's /batch exactly, except
-    every row is dispatched through the v2 (metadata-aware) matching pipeline
-    via the shared MovieTitleBatchJob.pipeline_variant discriminator, not a
-    separate job table. See agentic_match_task.py's two variant seams."""
     if not settings.AGENTIC_TITLE_MATCH_ENABLED:
         raise HTTPException(
             status_code=400,
@@ -162,7 +178,11 @@ def _get_v2_job(job_id: str):
         }
 
 
-@router.get("/batch/{job_id}")
+@router.get(
+    "/batch/{job_id}",
+    summary="Poll v2 batch job status and progress",
+    description="Same status/progress shape as v1's GET /batch/{job_id}, scoped to v2 jobs only.",
+)
 async def get_batch_job_v2(job_id: str):
     job = _get_v2_job(job_id)
     progress = (job["processed"] / job["total"]) if job["total"] > 0 else 0
@@ -185,7 +205,14 @@ async def get_batch_job_v2(job_id: str):
     }
 
 
-@router.get("/batch/{job_id}/download")
+@router.get(
+    "/batch/{job_id}/download",
+    summary="Download completed v2 batch results as XLSX",
+    description=(
+        "Same XLSX-download contract as v1's /batch/{job_id}/download. 400 if the job isn't "
+        "completed yet, 410 if the job's TTL has expired, 404 if the output file is missing."
+    ),
+)
 async def download_batch_job_v2(job_id: str) -> Response:
     from app.title_matching import batch_storage
 

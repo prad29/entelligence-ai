@@ -32,7 +32,19 @@ class TitleMatchIntlV2Request(BaseModel):
         return self
 
 
-@router.post("/single")
+@router.post(
+    "/single",
+    summary="Submit one international title for v2 (country-aware) matching",
+    description=(
+        "International-only; country is required and must be non-blank. A fully standalone "
+        "pipeline (never calls the shared v1 orchestrator): country-scoped Vespa semantic "
+        "search, a deterministic country-consistency guardrail (auto-swaps in the "
+        "next-best same-country candidate if the model's own pick is from the wrong country), "
+        "anniversary/re-release date-arithmetic rules, and an independent Bedrock verification "
+        "pass that re-checks the first pick. On an agentic-pipeline failure this still returns "
+        "200 with an honest suggested_movie_id=0 / REVIEW result rather than an error status."
+    ),
+)
 async def match_single_title_intl_v2(payload: TitleMatchIntlV2Request):
     if not settings.AGENTIC_TITLE_MATCH_ENABLED:
         raise HTTPException(
@@ -86,16 +98,21 @@ async def match_single_title_intl_v2(payload: TitleMatchIntlV2Request):
     return result.__dict__
 
 
-@router.post("/batch")
+@router.post(
+    "/batch",
+    summary="Upload a batch of international titles for v2 matching",
+    description=(
+        "International-only. Same multipart upload / async Celery-job-plus-polling contract as "
+        "v1's international batch flow (market=international on /api/v1/movie-title-match/batch), "
+        "but every row is dispatched through the standalone v2 (country-aware, rerank-verified) "
+        "pipeline via the shared movietitleintlbatchjob table's pipeline_variant column, not a "
+        "second table. Poll GET /batch/{job_id} for status."
+    ),
+)
 async def upload_batch_intl_v2(
     file: UploadFile = File(...),
     use_poster_vision: str = Form("false"),
 ):
-    """International v2 batch upload -- mirrors v1's /batch/intl-equivalent
-    upload flow, except every row is dispatched through the v2 (country-
-    aware, rerank-verified) matching pipeline via the shared
-    MovieTitleIntlBatchJob.pipeline_variant discriminator, not a second
-    table. See agentic_intl_match_task.py's two variant seams."""
     if not settings.AGENTIC_TITLE_MATCH_ENABLED:
         raise HTTPException(
             status_code=400,
@@ -170,7 +187,11 @@ def _get_intl_v2_job(job_id: str):
         }
 
 
-@router.get("/batch/{job_id}")
+@router.get(
+    "/batch/{job_id}",
+    summary="Poll international v2 batch job status and progress",
+    description="Same status/progress shape as v1's GET /batch/{job_id}, scoped to intl v2 jobs only.",
+)
 async def get_batch_job_intl_v2(job_id: str):
     job = _get_intl_v2_job(job_id)
     progress = (job["processed"] / job["total"]) if job["total"] > 0 else 0
@@ -193,7 +214,14 @@ async def get_batch_job_intl_v2(job_id: str):
     }
 
 
-@router.get("/batch/{job_id}/download")
+@router.get(
+    "/batch/{job_id}/download",
+    summary="Download completed international v2 batch results as XLSX",
+    description=(
+        "Same XLSX-download contract as v1's /batch/{job_id}/download. 400 if the job isn't "
+        "completed yet, 410 if the job's TTL has expired, 404 if the output file is missing."
+    ),
+)
 async def download_batch_job_intl_v2(job_id: str) -> Response:
     from app.title_matching import batch_storage
 

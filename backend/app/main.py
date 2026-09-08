@@ -25,6 +25,28 @@ app = FastAPI(
     version="0.3.0",
     openapi_tags=[
         {
+            "name": "movie-title-match-v2",
+            "description": (
+                "Domestic-only v2 title matching (prefix /api/v2/movie-title-match). Same "
+                "endpoint shapes as v1 (/api/v1/movie-title-match), but the match additionally "
+                "weighs genre/cast/director/synopsis and deterministically rejects a pick whose "
+                "director AND synopsis are both empty (unless genre is Sports or Concert/Special "
+                "Events). v1 is untouched and remains the default for existing integrations."
+            ),
+        },
+        {
+            "name": "movie-title-match-intl-v2",
+            "description": (
+                "International-only v2 title matching (prefix /api/v2/intl-movie-title-match, "
+                "country required on every request). A fully standalone pipeline that never "
+                "calls the shared v1 orchestrator: country-scoped Vespa search (in both the "
+                "exact and semantic search paths), a deterministic country-consistency "
+                "guardrail, anniversary/re-release date-arithmetic rules, and an independent "
+                "Bedrock verification pass over the model's first pick. International v1 "
+                "(market=international on the v1 endpoints) is untouched."
+            ),
+        },
+        {
             "name": "external-title-match",
             "description": (
                 "External, API-key-authenticated surface for movie title matching. Submit one "

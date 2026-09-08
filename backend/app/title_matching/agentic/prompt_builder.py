@@ -38,6 +38,12 @@ Step 2 — ANALYSE DB CANDIDATES
   Review the pre-fetched keyword and semantic candidates provided below.
   If ordinal detected: discard any candidate with a different ordinal (hard constraint).
   If "Live Action": discard all animated versions.
+  If a show date is given and a candidate's release_date is more than 2 years AFTER
+    that show date, treat the candidate as implausible for this listing — a real
+    showtime almost never maps to a release more than 2 years in the future. Only
+    select such a candidate if your confidence in it is ≥ 0.90; otherwise prefer the
+    next-best candidate, or return no match (movie_master_id 0) if none plausible
+    remain.
 
 {poster_vision_step}
 Step 4 — EARLY EXIT
@@ -96,6 +102,8 @@ what confirms this pick, why auto-accept or review>",
   If the DB candidates list is empty, set movie_master_id to 0 and explain in reasoning.
   {master_id_zero_rule}
 - Ordinals are a hard constraint — never suggest Part 2 for a Part 1 query
+- A candidate released more than 2 years after the show date needs confidence ≥ 0.90
+  to be selected — otherwise treat it as implausible and prefer another candidate.
 - "Live Action" means the input refers to a live-action remake. In the DB the live-action
   version is often stored without that suffix (e.g. "Moana (2026)" IS the live-action remake —
   the year disambiguates it from the animated original). Match the most recent or date-aligned

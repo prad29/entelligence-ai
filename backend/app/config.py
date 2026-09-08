@@ -25,7 +25,13 @@ class Settings(BaseSettings):
     COHERE_EMBED_BATCH_SIZE: int = 96
     SEMANTIC_SEARCH_ENABLED: bool = True
 
-    # Mode B — Agentic title matching
+    # Mode B — Agentic title matching. This is the ONLY domestic single/batch
+    # matching path (the rule-based fuzzy/date-proximity fallback was retired
+    # -- it could not reliably disambiguate same-titled rows from different
+    # eras, e.g. a 90s original vs. a 2025 remake, without web research). This
+    # flag is therefore no longer "which algorithm to use" -- it is "is the
+    # Claude sandbox sidecar provisioned for this deployment". When false,
+    # /single and /batch both return 400 rather than silently matching.
     AGENTIC_TITLE_MATCH_ENABLED: bool = False
     AGENTIC_CLAUDE_MODEL: str = "us.anthropic.claude-sonnet-5"
     AGENTIC_TIMEOUT_SECONDS: int = 90
@@ -80,6 +86,16 @@ class Settings(BaseSettings):
     # shared filesystem; a local /tmp path written by one is invisible to another.
     AGENTIC_BATCH_S3_BUCKET: str = ""
     AGENTIC_BATCH_S3_REGION: str = "us-east-1"
+
+    # Domestic agentic title-match v2 (metadata-aware matching + incomplete-
+    # metadata guardrail). "enforce" swaps out a rejected pick for the next
+    # passing candidate; "log_only" records what the guardrail would have
+    # done without changing the result (rollback lever); "off" disables the
+    # guardrail entirely (emergency kill switch).
+    AGENTIC_V2_METADATA_GUARDRAIL_MODE: str = "enforce"
+    AGENTIC_V2_SYNOPSIS_MAX_CHARS: int = 400
+    AGENTIC_V2_CAST_MAX_NAMES: int = 6
+    AGENTIC_V2_FALLTHROUGH_MIN_TITLE_SIMILARITY: int = 80
 
     # Production MySQL DB — source of truth for Movie Master sync (fq_movie_master /
     # fq_movie_master_intl). Empty defaults let the app boot cleanly where prod DB

@@ -22,7 +22,8 @@ _FETCH_BATCH_SIZE = 5000
 
 _DOMESTIC_COLUMNS = (
     "id", "movie_title", "release_date", "cover_image", "director",
-    "`cast`", "running_time", "parent_id", "search_tags", "title_tag", "short_name",
+    "`cast`", "genre", "synopsis",
+    "running_time", "parent_id", "search_tags", "title_tag", "short_name",
 )
 
 _INTL_COLUMNS = (

@@ -71,6 +71,14 @@ class MovieTitleBatchJob(SQLModel, table=True):
     # active starting Phase 4, running alongside the still-active chord.
     dispatched: int = Field(default=0)
     finalize_claimed_at: Optional[datetime] = None
+    # Which matching pipeline processes this job's rows. NULL/absent == "v1"
+    # (every job created before v2 existed). "v2" routes each row through
+    # runner.run_agentic_match(variant="v2") -- metadata-aware prompt +
+    # deterministic incomplete-metadata guardrail. A discriminator column on
+    # this SHARED table (not a second table) so the cross-pipeline scheduler
+    # (agentic_scheduler_task) counts, windows, sweeps and stall-logs v2 jobs
+    # identically with zero changes there.
+    pipeline_variant: Optional[str] = None
 
 
 class AmenityMapping(SQLModel, table=True):
@@ -177,6 +185,8 @@ class MovieMaster(SQLModel, table=True):
     cover_image: Optional[str] = None
     director: Optional[str] = None
     cast_list: Optional[str] = None
+    genre: Optional[str] = None
+    synopsis: Optional[str] = None
     running_time: Optional[int] = None
     parent_id: Optional[int] = None
     search_tags: Optional[str] = None

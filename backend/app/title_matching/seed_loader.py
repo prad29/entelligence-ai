@@ -14,6 +14,8 @@ _IMDB_ALIASES = ("imdb_id", "imdb", "IMDB_ID")
 _COVER_ALIASES = ("cover_image", "poster", "image_url", "CoverImage")
 _DIRECTOR_ALIASES = ("director", "Director")
 _CAST_ALIASES = ("cast", "Cast", "cast_list")
+_GENRE_ALIASES = ("genre", "Genre")
+_SYNOPSIS_ALIASES = ("synopsis", "Synopsis")
 _RUNTIME_ALIASES = ("running_time", "runtime", "RunningTime", "duration")
 _PARENT_ALIASES = ("parent_id", "ParentID")
 _TAGS_ALIASES = ("search_tags", "SearchTags", "tags")
@@ -65,6 +67,8 @@ def _upsert_rows(session: Session, rows: list[dict]) -> dict:
             existing.cover_image = _pick(row, _COVER_ALIASES)
             existing.director = _pick(row, _DIRECTOR_ALIASES)
             existing.cast_list = _pick(row, _CAST_ALIASES)
+            existing.genre = _pick(row, _GENRE_ALIASES)
+            existing.synopsis = _pick(row, _SYNOPSIS_ALIASES)
             existing.running_time = _to_int(_pick(row, _RUNTIME_ALIASES))
             existing.parent_id = _to_int(_pick(row, _PARENT_ALIASES))
             existing.search_tags = _pick(row, _TAGS_ALIASES)
@@ -81,6 +85,8 @@ def _upsert_rows(session: Session, rows: list[dict]) -> dict:
                 cover_image=_pick(row, _COVER_ALIASES),
                 director=_pick(row, _DIRECTOR_ALIASES),
                 cast_list=_pick(row, _CAST_ALIASES),
+                genre=_pick(row, _GENRE_ALIASES),
+                synopsis=_pick(row, _SYNOPSIS_ALIASES),
                 running_time=_to_int(_pick(row, _RUNTIME_ALIASES)),
                 parent_id=_to_int(_pick(row, _PARENT_ALIASES)),
                 search_tags=_pick(row, _TAGS_ALIASES),

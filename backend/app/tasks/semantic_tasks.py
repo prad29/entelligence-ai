@@ -80,7 +80,7 @@ _READY_KEY_INTL = "semantic_index_intl:ready"
     default_retry_delay=60,
     acks_late=True,
 )
-def build_semantic_index_intl_task(self):
+def build_semantic_index_intl_task(self, force: bool = False, force_deploy: bool = False):
     """
     Build (or resume) the Vespa semantic index for international master rows.
 
@@ -88,6 +88,12 @@ def build_semantic_index_intl_task(self):
     the separate movie_master_intl document type — run independently of
     the domestic index build so international seeding/indexing never
     touches or waits on domestic index state.
+
+    force=True re-embeds/re-feeds every row (ignoring the normal ID-diff),
+    needed once after a schema change (e.g. the `country` field) so already-
+    indexed docs pick it up. force_deploy=True forces a Vespa app redeploy
+    first, needed once after editing movie_master_intl.sd itself. Both
+    default to False for the normal incremental-reseed path.
     """
     try:
         from sqlmodel import Session, select
@@ -104,12 +110,15 @@ def build_semantic_index_intl_task(self):
                 "id": r.id,
                 "movie_title": r.movie_title,
                 "release_date": r.release_date,
+                "country": r.country,
             }
             for r in rows
         ]
 
         logger.info("semantic_task_intl: starting index build for %d rows", len(master_rows))
-        index = build_semantic_index_intl(master_rows, settings)
+        index = build_semantic_index_intl(
+            master_rows, settings, force=force, force_deploy=force_deploy,
+        )
 
         if index is not None:
             import redis as redis_lib

@@ -36,6 +36,25 @@ services:
       retries: 6
       start_period: 30s
 
+  claude-sandbox-intl:
+    # Same image as claude-sandbox -- the market profile is selected purely
+    # by env (SANDBOX_PROFILE/MCP_CONFIG_PATH/SETTINGS_PATH), so the CLI
+    # version and the movieweb MCP server can never drift between markets.
+    # NOT a concurrency-isolation mechanism -- see docker-compose.yml.
+    image: ${ECR_CLAUDE_SANDBOX}:${IMAGE_TAG}
+    restart: unless-stopped
+    env_file: /app/.env.prod
+    environment:
+      SANDBOX_PROFILE: "intl"
+      MCP_CONFIG_PATH: "/app/mcp-config.intl.json"
+      SETTINGS_PATH: "/home/claude/.claude/settings.intl.json"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3100/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
   backend:
     image: ${ECR_BACKEND}:${IMAGE_TAG}
     restart: unless-stopped
@@ -49,6 +68,10 @@ services:
         condition: service_healthy
       claude-sandbox:
         condition: service_healthy
+      # service_started, NOT service_healthy -- an intl-sandbox outage must
+      # not stop the API from serving domestic traffic (see docker-compose.yml).
+      claude-sandbox-intl:
+        condition: service_started
 
   celery-worker:
     image: ${ECR_BACKEND}:${IMAGE_TAG}
@@ -77,6 +100,8 @@ services:
         condition: service_healthy
       claude-sandbox:
         condition: service_healthy
+      claude-sandbox-intl:
+        condition: service_started
 
   celery-deleted-showtimes-worker:
     image: ${ECR_BACKEND}:${IMAGE_TAG}

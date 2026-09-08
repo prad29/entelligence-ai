@@ -319,6 +319,11 @@ def run_agentic_match(
             # mapped title, making an otherwise-correct match look wrong in
             # any downstream title-string comparison.
             result.suggested_movie_title = best["movie_title"]
+            if is_v2:
+                from app.title_matching.agentic.post_lookup_v2 import (
+                    apply_domestic_v2_post_lookup_resolution,
+                )
+                result = apply_domestic_v2_post_lookup_resolution(result, best)
             logger.info(
                 "agentic_post_lookup_hit id=%d title=%r",
                 best["id"], best["movie_title"],

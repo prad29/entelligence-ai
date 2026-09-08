@@ -8,6 +8,7 @@ from app.routers import settings as settings_router
 from app.routers import movie_detect, movie_formats, movie_review, movie_jobs
 from app.routers import movie_title_match
 from app.routers import movie_title_match_v2
+from app.routers import movie_title_match_intl_v2
 from app.routers import external_title_match
 from app.routers import deleted_showtimes
 from app.routers import intl_detect, intl_amenities, intl_jobs
@@ -69,6 +70,7 @@ app.include_router(movie_review.router)
 app.include_router(movie_jobs.router)
 app.include_router(movie_title_match.router)
 app.include_router(movie_title_match_v2.router)
+app.include_router(movie_title_match_intl_v2.router)
 app.include_router(deleted_showtimes.router)
 app.include_router(intl_detect.router)
 app.include_router(intl_amenities.router)

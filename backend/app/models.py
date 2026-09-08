@@ -400,6 +400,20 @@ class ApiTitleMatchJob(SQLModel, table=True):
     # here — external already has per-row ApiTitleMatchRow.status as its
     # dispatch state, so there's nothing for a cursor to duplicate.
     finalize_claimed_at: Optional[datetime] = None
+    # Which matching pipeline processes this job's rows. NULL/absent == "v1"
+    # (every job created before the /api/v2 submit surface existed). "v2"
+    # routes each row through the market-appropriate v2 runner
+    # (runner_v2.run_agentic_match_v2 for domestic,
+    # runner_intl_v2.run_agentic_match_intl_v2 for international) -- see
+    # external_match_task.external_match_row's dispatch branch. Set only by
+    # app/routers/external_title_match_v2.py; the v1 router leaves it NULL.
+    #
+    # A discriminator column on this SHARED table (not a fourth job table),
+    # mirroring MovieTitleBatchJob/MovieTitleIntlBatchJob.pipeline_variant's
+    # identical rationale: job status/results/retry semantics are byte-for-byte
+    # identical between v1 and v2 jobs, so the endpoints serving them (and the
+    # row/job bookkeeping in external_match_task) need zero changes.
+    pipeline_variant: Optional[str] = Field(default=None, index=False)
 
 
 class ApiTitleMatchRow(SQLModel, table=True):

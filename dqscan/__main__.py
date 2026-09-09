@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import datetime
 import logging
 import sys
 
@@ -70,9 +71,27 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    if args.from_date > args.to_date:
+    # Parse (not string-compare) --from/--to: raw string comparison silently
+    # misorders non-zero-padded dates (e.g. "2026-1-1" > "2026-01-02" is True
+    # even though Jan 1 is before Jan 2), and a malformed date would otherwise
+    # reach the DB as a bound param and fail there with a much less clear error.
+    try:
+        from_date = datetime.date.fromisoformat(args.from_date)
+    except ValueError:
+        print(f"error: --from ({args.from_date!r}) is not a valid YYYY-MM-DD date", file=sys.stderr)
+        return 1
+    try:
+        to_date = datetime.date.fromisoformat(args.to_date)
+    except ValueError:
+        print(f"error: --to ({args.to_date!r}) is not a valid YYYY-MM-DD date", file=sys.stderr)
+        return 1
+    if from_date > to_date:
         print(f"error: --from ({args.from_date}) is after --to ({args.to_date})", file=sys.stderr)
         return 1
+    # Normalize to zero-padded ISO strings so the SQL bound params are always
+    # well-formed, regardless of how the caller spelled the input.
+    args.from_date = from_date.isoformat()
+    args.to_date = to_date.isoformat()
 
     config = load_config(args.config_path)
     scan_overrides = {}

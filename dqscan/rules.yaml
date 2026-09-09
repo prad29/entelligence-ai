@@ -99,6 +99,17 @@ rules:
   detail_columns: [theater_id, theater_name]
   message: "theater name missing"
 
+- id: PRES_AUDITORIUM
+  name: auditorium blank
+  class: presence
+  severity: medium
+  status: active
+  requires: [auditorium]
+  expr: "auditorium IS NULL OR TRIM(auditorium) = ''"
+  detail_columns: [theater_id, auditorium]
+  message: "auditorium missing"
+  note: "No canonical form beyond non-blank -- '2', '02' and 'imax' are all confirmed valid values, so this rule only checks presence, not shape."
+
 - id: FMT_RUNNING_DATE
   name: running_date not equal to date of last_updates
   class: cross_column
@@ -354,27 +365,25 @@ rules:
   name: source_flag outside known set
   class: domain
   severity: medium
-  status: dormant
-  blocked_by: Q4
+  status: active
   requires: [source_flag]
-  allowed: []
+  allowed: [2, 4]
   column: source_flag
   detail_columns: [source_flag, circuit_name]
   message: "unexpected source_flag value"
-  note: "Sample holds 2 and 4 only."
+  note: "2 = circuits, 4 = fandango (confirmed Q4)."
 
 - id: DOM_LANGUAGE_FORMAT
   name: language_format outside known set
   class: domain
   severity: medium
-  status: dormant
-  blocked_by: Q5
+  status: active
   requires: [language_format]
-  allowed: []
+  allowed: ["NA", "English Dubbed"]
   column: language_format
   detail_columns: [language_format, movie_format, screen_format]
   message: "unexpected language_format value"
-  note: "Sample holds the literal NA and English Dubbed."
+  note: "NA is a valid value, not a missing-data marker. language_format can never legitimately be IMAX -- that's a screen_format value (confirmed Q5)."
 
 - id: DOM_DMA
   name: dma not in the canonical market list

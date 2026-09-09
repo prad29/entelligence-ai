@@ -24,13 +24,18 @@ def write_report(run_result: RunResult, out_path: str) -> None:
     summary_ws.title = "Run summary"
     _write_summary_sheet(summary_ws, run_result)
 
-    calibration_ws = wb.create_sheet("Needs calibration")
-    _write_calibration_sheet(calibration_ws, run_result)
+    used_names = {"Run summary"}
 
-    dormant_ws = wb.create_sheet("Dormant rules")
-    _write_dormant_sheet(dormant_ws, run_result)
+    if run_result.meta.include_calibration:
+        calibration_ws = wb.create_sheet("Needs calibration")
+        _write_calibration_sheet(calibration_ws, run_result)
+        used_names.add("Needs calibration")
 
-    used_names = {"Run summary", "Needs calibration", "Dormant rules"}
+    if run_result.meta.include_dormant:
+        dormant_ws = wb.create_sheet("Dormant rules")
+        _write_dormant_sheet(dormant_ws, run_result)
+        used_names.add("Dormant rules")
+
     for outcome in run_result.outcomes:
         if outcome.run_status not in ("active", "calibration"):
             continue

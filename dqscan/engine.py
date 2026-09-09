@@ -143,6 +143,8 @@ def run(
         pack_version=str(pack_meta["version"]),
         calibration_threshold=config.scan.calibration_threshold,
         detail_row_cap=config.scan.detail_row_cap,
+        include_calibration=config.scan.include_calibration,
+        include_dormant=config.scan.include_dormant,
         extent_note=extent_note,
     )
     result = RunResult(meta=meta, outcomes=outcomes)

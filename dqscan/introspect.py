@@ -1,4 +1,4 @@
-"""Schema introspection for movie_shows, used to guard rules against
+"""Schema introspection for movies_shows, used to guard rules against
 columns that don't exist in a given environment."""
 
 from __future__ import annotations

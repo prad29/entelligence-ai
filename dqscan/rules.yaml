@@ -1,5 +1,5 @@
 version: 1
-table: movie_shows
+table: movies_shows
 row_id: id
 grain: [mm_id, running_date]
 window_column: date_sh

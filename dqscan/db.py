@@ -1,4 +1,4 @@
-"""Single choke point for all SQL execution against movie_shows.
+"""Single choke point for all SQL execution against movies_shows.
 
 Every statement passes through assert_read_only_sql before it touches the
 DB — no bypass flag, by design, since this module is the safety boundary

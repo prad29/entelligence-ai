@@ -77,6 +77,8 @@ class ScanMeta:
     pack_version: str
     calibration_threshold: float
     detail_row_cap: int
+    include_calibration: bool = True
+    include_dormant: bool = False
     extent_note: str = ""
 
 

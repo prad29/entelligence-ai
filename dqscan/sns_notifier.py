@@ -21,7 +21,7 @@ from pathlib import Path
 
 import boto3
 
-from dqscan.emailer import _summarize
+from dqscan.emailer import _summarize, build_subject
 from dqscan.models import RunResult
 
 logger = logging.getLogger("dqscan.sns_notifier")
@@ -63,7 +63,7 @@ def publish_report_notification(
     failure, same contract as emailer.send_report_email.
     """
     meta = run_result.meta
-    subject = f"dqscan report: {meta.schema} {meta.from_date}..{meta.to_date}"[:100]  # SNS Subject hard cap
+    subject = build_subject(run_result)[:100]  # SNS Subject hard cap
 
     download_url = _upload_report(
         xlsx_path, s3_bucket=s3_bucket, s3_prefix=s3_prefix, schema=meta.schema, aws_region=aws_region

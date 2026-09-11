@@ -25,6 +25,13 @@ _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 _SEVERITY_DISPLAY = {"critical": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
 
 
+def build_subject(run_result: RunResult) -> str:
+    """Shared subject line for both the SES and SNS paths, so a report
+    reads the same regardless of which channel delivered it."""
+    meta = run_result.meta
+    return f"Movie Shows Error Report {meta.from_date} - {meta.to_date}"
+
+
 def _summarize(run_result: RunResult) -> str:
     """Fixed-template email body: greeting, scan stats, one "Severity -"
     section per severity with "issue description - count" bullets (no
@@ -91,11 +98,8 @@ def send_report_email(
     e.g. MessageRejected if `sender` isn't a verified identity -- so a cron
     wrapper can log/alert on it rather than this module silently swallowing it.
     """
-    meta = run_result.meta
-    subject = f"dqscan report: {meta.schema} {meta.from_date}..{meta.to_date}"
-
     msg = MIMEMultipart()
-    msg["Subject"] = subject
+    msg["Subject"] = build_subject(run_result)
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
 

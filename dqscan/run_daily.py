@@ -66,8 +66,25 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "e.g. dqscan/.state/last_run_<schema>.json -- so dev/prod configs "
         "never share, and silently corrupt, one another's incremental window)",
     )
+    parser.add_argument(
+        "--recipients", dest="recipients", default=None,
+        help="comma-separated email addresses, overriding config.email.recipients for this run only "
+        "(the config file itself is never touched)",
+    )
+    parser.add_argument(
+        "--from", dest="from_date", default=None,
+        help="override the auto-computed window start (YYYY-MM-DD); requires --to too. "
+        "State still advances to now() on success, same as a normal incremental run.",
+    )
+    parser.add_argument(
+        "--to", dest="to_date", default=None,
+        help="override the auto-computed window end (YYYY-MM-DD); requires --from too.",
+    )
     parser.add_argument("--debug", action="store_true", help="log every SQL statement at DEBUG level")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if bool(args.from_date) != bool(args.to_date):
+        parser.error("--from and --to must be given together")
+    return args
 
 
 def _prune_old_reports(reports_dir: Path, retention_days: int) -> None:
@@ -95,9 +112,12 @@ def main(argv: list[str] | None = None) -> int:
     state_path = args.state_path or (state.DEFAULT_STATE_PATH.parent / f"last_run_{config.database.schema}.json")
 
     now = datetime.now()
-    last_end = state.read_last_run_end(state_path)
-    from_date = (last_end or (now - timedelta(days=_DEFAULT_LOOKBACK_DAYS))).strftime(_DATE_FORMAT)
-    to_date = now.strftime(_DATE_FORMAT)
+    if args.from_date and args.to_date:
+        from_date, to_date = args.from_date, args.to_date
+    else:
+        last_end = state.read_last_run_end(state_path)
+        from_date = (last_end or (now - timedelta(days=_DEFAULT_LOOKBACK_DAYS))).strftime(_DATE_FORMAT)
+        to_date = now.strftime(_DATE_FORMAT)
 
     if from_date > to_date:
         logger.info("Nothing new since last run (from=%s, to=%s); skipping", from_date, to_date)
@@ -110,11 +130,12 @@ def main(argv: list[str] | None = None) -> int:
     run_result = engine.run(config, from_date=from_date, to_date=to_date, out_path=str(out_path))
 
     if config.email.enabled:
+        recipients = args.recipients.split(",") if args.recipients else config.email.recipients
         emailer.send_report_email(
             run_result,
             str(out_path),
             sender=config.email.sender,
-            recipients=config.email.recipients,
+            recipients=recipients,
             aws_region=config.email.aws_region,
         )
     else:

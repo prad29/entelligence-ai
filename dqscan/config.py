@@ -27,6 +27,13 @@ _SCAN_DEFAULTS = {
     "query_timeout_seconds": 60,
 }
 
+_EMAIL_DEFAULTS = {
+    "enabled": False,
+    "sender": "",
+    "recipients": [],
+    "aws_region": "us-east-1",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class DatabaseConfig:
@@ -48,9 +55,18 @@ class ScanConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EmailConfig:
+    enabled: bool
+    sender: str
+    recipients: list[str]
+    aws_region: str
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     database: DatabaseConfig
     scan: ScanConfig
+    email: EmailConfig
 
 
 def _interpolate(value):
@@ -99,6 +115,21 @@ def _build_scan_config(raw: dict) -> ScanConfig:
     )
 
 
+def _build_email_config(raw: dict) -> EmailConfig:
+    merged = {**_EMAIL_DEFAULTS, **raw}
+    enabled = bool(merged["enabled"])
+    if enabled and not merged["sender"]:
+        raise ValueError("email.sender is required when email.enabled is true")
+    if enabled and not merged["recipients"]:
+        raise ValueError("email.recipients is required (non-empty) when email.enabled is true")
+    return EmailConfig(
+        enabled=enabled,
+        sender=merged["sender"],
+        recipients=list(merged["recipients"]),
+        aws_region=merged["aws_region"],
+    )
+
+
 def load_config(path: str = "config.yaml") -> Config:
     # Do not override real environment (e.g. CI/deploy) with .env placeholders.
     load_dotenv()
@@ -110,4 +141,5 @@ def load_config(path: str = "config.yaml") -> Config:
 
     database = _build_database_config(raw.get("database") or {})
     scan = _build_scan_config(raw.get("scan") or {})
-    return Config(database=database, scan=scan)
+    email = _build_email_config(raw.get("email") or {})
+    return Config(database=database, scan=scan, email=email)

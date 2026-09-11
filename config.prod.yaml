@@ -1,0 +1,25 @@
+database:
+  host: ${PROD_DB_HOST}
+  port: ${PROD_DB_PORT}
+  user: ${PROD_DB_USERNAME}
+  password: ${PROD_DB_PASSWORD}
+  schema: ${PROD_DB_DATABASE}
+scan:
+  window_column: date_sh
+  detail_row_cap: 500
+  calibration_threshold: 0.20
+  include_calibration: true
+  include_dormant: false
+  query_timeout_seconds: 60
+email:
+  enabled: true
+  # reports@enttelligence.com is not yet a verified SES sender identity (nor
+  # is the enttelligence.com domain) -- sends will fail with MessageRejected
+  # until either the domain or this exact address is verified in SES. See
+  # dqscan/emailer.py.
+  sender: reports@enttelligence.com
+  # Update this list once the real distribution is decided -- currently just
+  # the address used for the initial test send.
+  recipients:
+    - souveek.pradhan@enttelligence.com
+  aws_region: us-east-1

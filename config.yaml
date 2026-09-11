@@ -11,3 +11,8 @@ scan:
   include_calibration: true
   include_dormant: false
   query_timeout_seconds: 60
+email:
+  enabled: false
+  sender: reports@enttelligence.com
+  recipients: []
+  aws_region: us-east-1

@@ -82,8 +82,8 @@ async def upload_batch(
     if row_count == 0:
         raise HTTPException(status_code=400, detail="File has no data rows")
 
-    if workers < 1 or workers > 16:
-        raise HTTPException(status_code=400, detail="workers must be between 1 and 16")
+    if workers < 1 or workers > 4:
+        raise HTTPException(status_code=400, detail="workers must be between 1 and 4")
 
     from app.models import DeletedShowtimeJob
 

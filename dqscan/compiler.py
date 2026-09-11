@@ -75,11 +75,6 @@ def gate_rules(rules: list[Rule], existing_columns: set[str]) -> tuple[list[Rule
             )
             continue
 
-        if rule.rule_class == "cross_table":
-            reason = _format_blocked_by(rule.blocked_by) or "declared dormant in rule pack"
-            dormant_outcomes.append(RuleOutcome(rule=rule, run_status="dormant", dormant_reason=reason))
-            continue
-
         if rule.rule_class == "domain" and not rule.allowed:
             logger.warning("Rule %s is a domain rule with an empty allowed list", rule.id)
             dormant_outcomes.append(
@@ -249,11 +244,6 @@ def compile_rule(
     ca_provinces: list[str],
     detail_row_cap: int,
 ) -> CompiledRule:
-    if rule.rule_class == "cross_table":
-        raise NotImplementedError(
-            f"rule {rule.id} is class cross_table; gate_rules must route these to dormant, not compile_rule"
-        )
-
     window = _window_clause(window_column)
 
     match rule.rule_class:
@@ -267,7 +257,13 @@ def compile_rule(
                 rule, table=table, window=window, allowlist_regex=allowlist_regex,
                 ca_provinces=ca_provinces, cap=detail_row_cap,
             )
-        case "custom":
+        case "custom" | "cross_table":
+            # cross_table is compiled identically to custom: both are a raw
+            # `sql:` SELECT (here, one that joins another schema's master
+            # table) wrapped in the same COUNT(*)/LIMIT shape. The declared
+            # class is kept distinct in rules.yaml purely for report
+            # readability (the "Class" column), not because the SQL shape
+            # differs.
             compiled = _compile_custom_rule(
                 rule, table=table, window=window, allowlist_regex=allowlist_regex,
                 ca_provinces=ca_provinces, cap=detail_row_cap,

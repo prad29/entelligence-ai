@@ -679,30 +679,99 @@ rules:
   name: theater fields disagree with mqproduction.theater
   class: cross_table
   severity: high
-  status: dormant
-  blocked_by: [Q17, Q18, Q19, Q20]
-  requires: [theater_id]
-  detail_columns: [theater_id, theater_name, theater_city, theater_state, dma]
+  status: active
+  requires: [theater_id, theater_name, theater_city, theater_state]
+  detail_columns: [theater_id, theater_name, theater_city, theater_state]
   message: "theater details do not match the master record"
-  note: "Needs the exact schema name, table name and join key. In the sample all 81 theaters were internally consistent, so this rule may be built and never fire."
+  note: >
+    Join confirmed: CAST(theater_id AS UNSIGNED) = mqproduction.theater.theater_id
+    (98.8% resolve rate, verified against real data). Deliberately excludes dma:
+    movies_shows.dma and theater.theater_market disagree on ~1% of rows, but most
+    of that is a naming-convention difference (a city-level dma vs. a broader
+    market name for the same theater, e.g. "Lafayette IN" vs "Indianapolis"), not
+    a real defect -- comparing it here would produce more noise than signal.
+  sql: |
+    SELECT ms.id, ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id,
+           ms.theater_name AS ms_theater_name, t.theater_name AS master_theater_name,
+           ms.theater_city AS ms_theater_city, t.theater_city AS master_theater_city,
+           ms.theater_state AS ms_theater_state, t.theater_state AS master_theater_state
+    FROM {{table}} ms
+    JOIN mqproduction.theater t ON CAST(ms.theater_id AS UNSIGNED) = t.theater_id
+    WHERE {{window}}
+      AND (ms.theater_name <> t.theater_name
+           OR ms.theater_city <> t.theater_city
+           OR ms.theater_state <> t.theater_state)
 
 - id: XTAB_CIRCUIT_MASTER
   name: circuit_name disagrees with mqproduction.theater_circuit
   class: cross_table
   severity: medium
-  status: dormant
-  blocked_by: [Q17, Q21]
-  requires: [circuit_name]
-  detail_columns: [circuit_name, theater_id, theater_name]
+  status: active
+  requires: [theater_id, circuit_name]
+  detail_columns: [theater_id, circuit_name]
   message: "circuit does not match the circuit master"
+  note: >
+    Join confirmed via the FK path: theater_id -> mqproduction.theater.circuit_id
+    -> mqproduction.theater_circuit.circuit_id (98.7% resolve rate). NOT a direct
+    string match against movies_shows.circuit_name -- that field is unreliable on
+    its own (verified: 60/1380 rows in a 1-day sample hold a theater name or junk
+    like "IMAX" instead of an actual circuit), which is exactly what this rule
+    now catches.
+  sql: |
+    SELECT ms.id, ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id,
+           ms.circuit_name AS ms_circuit_name, tc.circuit_name AS master_circuit_name
+    FROM {{table}} ms
+    JOIN mqproduction.theater t ON CAST(ms.theater_id AS UNSIGNED) = t.theater_id
+    JOIN mqproduction.theater_circuit tc ON t.circuit_id = tc.circuit_id
+    WHERE {{window}}
+      AND ms.circuit_name <> tc.circuit_name
 
 - id: XTAB_MOVIE_MASTER
-  name: title, studio or release date disagrees with fq_movie_master
+  name: title matched fq_movie_master but studio or release date disagrees
   class: cross_table
   severity: high
-  status: dormant
-  blocked_by: [Q17, Q18]
+  status: active
   requires: [title, studio_name, release_date]
   detail_columns: [title, studio_name, release_date]
-  message: "film details do not match the film master"
-  note: "Several titles carry suffixes such as (2026) or (Premiere Event). An exact string join will report those as missing films."
+  message: "film details do not match the film master despite an exact title match"
+  note: >
+    Only fires for rows whose title DID join to fq_movie_master.movie_title --
+    this is the real-corruption check. See XTAB_MOVIE_MASTER_COVERAGE for the
+    separate, expected-to-fire, low-severity count of titles with no master
+    match at all (sports/events/re-releases).
+  sql: |
+    SELECT ms.id, ms.mm_id, ms.date_sh, ms.running_date, ms.title,
+           ms.studio_name AS ms_studio_name, mm.studio_name AS master_studio_name,
+           ms.release_date AS ms_release_date, mm.release_date AS master_release_date
+    FROM {{table}} ms
+    JOIN mqproduction.fq_movie_master mm ON ms.title = mm.movie_title
+    WHERE {{window}}
+      AND (
+        COALESCE(ms.studio_name, '') <> COALESCE(mm.studio_name, '')
+        OR COALESCE(
+             DATE(CASE WHEN CAST(ms.release_date AS CHAR) LIKE '0000-00-00%' THEN NULL ELSE ms.release_date END), '1900-01-01'
+           ) <> COALESCE(
+             DATE(CASE WHEN CAST(mm.release_date AS CHAR) LIKE '0000-00-00%' THEN NULL ELSE mm.release_date END), '1900-01-01'
+           )
+      )
+
+- id: XTAB_MOVIE_MASTER_COVERAGE
+  name: title has no fq_movie_master match at all
+  class: cross_table
+  severity: low
+  status: active
+  requires: [title]
+  detail_columns: [title]
+  message: "title did not match any fq_movie_master record by exact string join"
+  note: >
+    Expected to fire on a meaningful share of rows -- verified 27% of distinct
+    titles in a 1-day sample had no exact movie_title match, almost entirely
+    sports broadcasts, special/private events, and re-release title variants
+    (e.g. "The Passion of the Christ (2026)"), not data defects. Informational
+    coverage count, not a hard finding -- see XTAB_MOVIE_MASTER for the
+    higher-severity check on rows that DID match but disagree on studio/release.
+  sql: |
+    SELECT ms.id, ms.mm_id, ms.date_sh, ms.running_date, ms.title
+    FROM {{table}} ms
+    LEFT JOIN mqproduction.fq_movie_master mm ON ms.title = mm.movie_title
+    WHERE {{window}} AND mm.movie_title IS NULL

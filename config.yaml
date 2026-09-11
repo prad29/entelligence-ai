@@ -12,7 +12,10 @@ scan:
   include_dormant: false
   query_timeout_seconds: 60
 email:
-  enabled: false
-  sender: reports@enttelligence.com
-  recipients: []
+  enabled: true
+  # souveek.pradhan@enttelligence.com is SES-verified today; reports@ is not
+  # yet (see dqscan/emailer.py) -- switch this once that's verified.
+  sender: souveek.pradhan@enttelligence.com
+  recipients:
+    - souveek.pradhan@enttelligence.com
   aws_region: us-east-1

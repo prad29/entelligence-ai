@@ -273,7 +273,7 @@ function DeletedShowtimesCheck() {
                     <input
                       type="number"
                       min={1}
-                      max={16}
+                      max={4}
                       value={options.workers}
                       onChange={(e) => setOptions({ ...options, workers: Number(e.target.value) || 1 })}
                       className="h-9 w-24 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#4A9FD4]/30 focus:border-[#4A9FD4]"

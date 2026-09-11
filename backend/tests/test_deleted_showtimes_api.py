@@ -155,7 +155,7 @@ def test_upload_with_advanced_options_persists_them():
             "strict_screen_count": "true",
             "theater_verify": "strict",
             "fallback": "off",
-            "workers": "8",
+            "workers": "2",
         },
     )
     assert resp.status_code == 200
@@ -164,7 +164,7 @@ def test_upload_with_advanced_options_persists_them():
     assert job.strict_screen_count is True
     assert job.theater_verify == "strict"
     assert job.fallback == "off"
-    assert job.workers == 8
+    assert job.workers == 2
 
 
 def test_upload_missing_required_column_returns_400():

@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
 
 from dqscan.config import DatabaseConfig
 
@@ -27,9 +27,17 @@ _LEADING_SELECT = re.compile(r"^(\s*)(SELECT)\b", re.IGNORECASE)
 
 
 def get_engine(db_config: DatabaseConfig, *, read_timeout_seconds: int | None = None) -> Engine:
-    url = (
-        f"mysql+pymysql://{db_config.user}:{db_config.password}"
-        f"@{db_config.host}:{db_config.port}/{db_config.schema}"
+    # URL.create escapes user/password -- a raw f-string interpolation breaks
+    # the moment a password contains an unescaped URL-special character (e.g.
+    # "@", ":", "/"), since the parser can no longer tell where the
+    # credentials end and the host begins.
+    url = URL.create(
+        "mysql+pymysql",
+        username=db_config.user,
+        password=db_config.password,
+        host=db_config.host,
+        port=db_config.port,
+        database=db_config.schema,
     )
     connect_args = {}
     if read_timeout_seconds:

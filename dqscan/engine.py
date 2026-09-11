@@ -88,6 +88,7 @@ def run(
                 allowlist_regex=pack_meta["allowlist_regex"],
                 ca_provinces=pack_meta["ca_provinces"],
                 detail_row_cap=config.scan.detail_row_cap,
+                existing_columns=existing_columns,
             )
         except (KeyError, ValueError, TypeError, NotImplementedError) as exc:
             logger.exception("Rule %s failed to compile", rule.id)

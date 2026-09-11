@@ -644,12 +644,17 @@ rules:
   requires: [mm_id, running_date, available, actual_available, ticket_availability, total_seats]
   detail_columns: [mm_id, running_date, available, actual_available]
   message: "seat change does not match the movement in the absolute count"
-  note: "Reconciled on 100% of comparable sample rows. The single strongest check in the pack."
+  note: >
+    Reconciled on 100% of comparable sample rows. The single strongest check in
+    the pack. Deliberately has no `id` column reference -- prod's movies_shows
+    has no id column at all (dev's does); the ORDER BY tiebreak isn't load-
+    bearing since rules.yaml's own grain declaration ([mm_id, running_date])
+    already guarantees at most one row per partition value.
   sql: |
-    SELECT id, mm_id, running_date, available, actual_available, prev_actual_available
+    SELECT mm_id, running_date, available, actual_available, prev_actual_available
     FROM (
-      SELECT id, mm_id, running_date, available, actual_available,
-             LAG(actual_available) OVER (PARTITION BY mm_id ORDER BY running_date, id) AS prev_actual_available
+      SELECT mm_id, running_date, available, actual_available,
+             LAG(actual_available) OVER (PARTITION BY mm_id ORDER BY running_date) AS prev_actual_available
       FROM {{table}}
       WHERE {{window}} AND ticket_availability <> 'Crawdads' AND total_seats IS NOT NULL
     ) w
@@ -666,7 +671,7 @@ rules:
   message: "showtime was not crawled every day between first and last sighting"
   note: "May be normal depending on how the crawl is scheduled. Question 9."
   sql: |
-    SELECT MIN(id) AS id, mm_id,
+    SELECT mm_id,
            MIN(running_date) AS first_seen, MAX(running_date) AS last_seen,
            COUNT(DISTINCT running_date) AS days_present,
            DATEDIFF(MAX(running_date), MIN(running_date)) + 1 AS days_expected
@@ -691,7 +696,7 @@ rules:
     market name for the same theater, e.g. "Lafayette IN" vs "Indianapolis"), not
     a real defect -- comparing it here would produce more noise than signal.
   sql: |
-    SELECT ms.id, ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id,
+    SELECT ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id,
            ms.theater_name AS ms_theater_name, t.theater_name AS master_theater_name,
            ms.theater_city AS ms_theater_city, t.theater_city AS master_theater_city,
            ms.theater_state AS ms_theater_state, t.theater_state AS master_theater_state
@@ -718,7 +723,7 @@ rules:
     like "IMAX" instead of an actual circuit), which is exactly what this rule
     now catches.
   sql: |
-    SELECT ms.id, ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id,
+    SELECT ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id,
            ms.circuit_name AS ms_circuit_name, tc.circuit_name AS master_circuit_name
     FROM {{table}} ms
     JOIN mqproduction.theater t ON CAST(ms.theater_id AS UNSIGNED) = t.theater_id
@@ -740,7 +745,7 @@ rules:
     separate, expected-to-fire, low-severity count of titles with no master
     match at all (sports/events/re-releases).
   sql: |
-    SELECT ms.id, ms.mm_id, ms.date_sh, ms.running_date, ms.title,
+    SELECT ms.mm_id, ms.date_sh, ms.running_date, ms.title,
            ms.studio_name AS ms_studio_name, mm.studio_name AS master_studio_name,
            ms.release_date AS ms_release_date, mm.release_date AS master_release_date
     FROM {{table}} ms
@@ -771,7 +776,7 @@ rules:
     coverage count, not a hard finding -- see XTAB_MOVIE_MASTER for the
     higher-severity check on rows that DID match but disagree on studio/release.
   sql: |
-    SELECT ms.id, ms.mm_id, ms.date_sh, ms.running_date, ms.title
+    SELECT ms.mm_id, ms.date_sh, ms.running_date, ms.title
     FROM {{table}} ms
     LEFT JOIN mqproduction.fq_movie_master mm ON ms.title = mm.movie_title
     WHERE {{window}} AND mm.movie_title IS NULL

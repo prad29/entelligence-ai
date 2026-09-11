@@ -122,8 +122,19 @@ def _window_clause(window_column: str) -> str:
     return f"{window_column} >= :from_date AND {window_column} <= :to_date"
 
 
-def _detail_select_columns(detail_columns: list[str], *, prefix: str = "") -> str:
-    identity = [f"{prefix}{col}" for col in _IDENTITY_COLUMNS]
+def _detail_select_columns(
+    detail_columns: list[str], *, prefix: str = "", existing_columns: Optional[set[str]] = None
+) -> str:
+    # Identity columns are a convenience projection, not a contract -- not
+    # every environment's movies_shows has all of them (e.g. prod has no
+    # `id`). Filtering against existing_columns turns a hard SQL error into
+    # just a narrower (but still correct) detail row, matching how
+    # gate_rules already degrades missing REQUIRED columns to dormant
+    # instead of crashing.
+    identity_names = _IDENTITY_COLUMNS if existing_columns is None else [
+        c for c in _IDENTITY_COLUMNS if c in existing_columns
+    ]
+    identity = [f"{prefix}{col}" for col in identity_names]
     extra = [col for col in detail_columns if col not in _IDENTITY_COLUMNS]
     return ", ".join(identity + extra)
 
@@ -149,13 +160,14 @@ def _condition_for_rule(
 
 
 def _compile_expr_or_domain_rule(
-    rule: Rule, *, table: str, window: str, allowlist_regex: str, ca_provinces: list[str], cap: int
+    rule: Rule, *, table: str, window: str, allowlist_regex: str, ca_provinces: list[str], cap: int,
+    existing_columns: Optional[set[str]] = None,
 ) -> CompiledRule:
     condition, params = _condition_for_rule(
         rule, allowlist_regex=allowlist_regex, ca_provinces=ca_provinces, param_prefix="allowed"
     )
     count_sql = f"SELECT COUNT(*) FROM {table} WHERE {window} AND ({condition})"
-    cols = _detail_select_columns(rule.detail_columns)
+    cols = _detail_select_columns(rule.detail_columns, existing_columns=existing_columns)
     # cap + 1, not cap: lets the engine tell "exactly cap findings" apart
     # from "truncated at cap" without a second query.
     detail_sql = f"SELECT {cols} FROM {table} WHERE {window} AND ({condition}) LIMIT {cap + 1}"
@@ -195,7 +207,8 @@ def compile_batch(
 
 
 def _compile_cross_row_rule(
-    rule: Rule, *, table: str, window: str, allowlist_regex: str, ca_provinces: list[str], cap: int
+    rule: Rule, *, table: str, window: str, allowlist_regex: str, ca_provinces: list[str], cap: int,
+    existing_columns: Optional[set[str]] = None,
 ) -> CompiledRule:
     group_by = ", ".join(rule.group_by)
     having = _substitute_placeholders(rule.having, allowlist_regex=allowlist_regex, ca_provinces=ca_provinces)
@@ -212,7 +225,7 @@ def _compile_cross_row_rule(
     )
     count_sql = f"SELECT COUNT(*) FROM ( {subquery} ) g"
 
-    cols = _detail_select_columns(rule.detail_columns, prefix="t.")
+    cols = _detail_select_columns(rule.detail_columns, prefix="t.", existing_columns=existing_columns)
     detail_sql = (
         f"SELECT {cols} "
         f"FROM {table} t "
@@ -243,6 +256,7 @@ def compile_rule(
     allowlist_regex: str,
     ca_provinces: list[str],
     detail_row_cap: int,
+    existing_columns: Optional[set[str]] = None,
 ) -> CompiledRule:
     window = _window_clause(window_column)
 
@@ -250,12 +264,12 @@ def compile_rule(
         case "presence" | "format" | "cross_column" | "domain":
             compiled = _compile_expr_or_domain_rule(
                 rule, table=table, window=window, allowlist_regex=allowlist_regex,
-                ca_provinces=ca_provinces, cap=detail_row_cap,
+                ca_provinces=ca_provinces, cap=detail_row_cap, existing_columns=existing_columns,
             )
         case "cross_row":
             compiled = _compile_cross_row_rule(
                 rule, table=table, window=window, allowlist_regex=allowlist_regex,
-                ca_provinces=ca_provinces, cap=detail_row_cap,
+                ca_provinces=ca_provinces, cap=detail_row_cap, existing_columns=existing_columns,
             )
         case "custom" | "cross_table":
             # cross_table is compiled identically to custom: both are a raw

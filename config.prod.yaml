@@ -12,14 +12,20 @@ scan:
   include_dormant: false
   query_timeout_seconds: 60
 email:
-  enabled: true
+  enabled: false
   # reports@enttelligence.com is not yet a verified SES sender identity (nor
-  # is the enttelligence.com domain) -- sends will fail with MessageRejected
+  # is the enttelligence.com domain) -- sends would fail with MessageRejected
   # until either the domain or this exact address is verified in SES. See
-  # dqscan/emailer.py.
+  # dqscan/emailer.py. Switched off in favor of sns below.
   sender: reports@enttelligence.com
-  # Update this list once the real distribution is decided -- currently just
-  # the address used for the initial test send.
   recipients:
     - souveek.pradhan@enttelligence.com
+  aws_region: us-east-1
+sns:
+  enabled: true
+  # A SEPARATE topic from config.yaml's dev one -- prod subscribers must
+  # never see dev-run test noise, and vice versa.
+  topic_arn: arn:aws:sns:us-east-1:690602674396:dqscan-reports-prod
+  s3_bucket: erica-datastore
+  s3_prefix: dqscan-reports-prod
   aws_region: us-east-1

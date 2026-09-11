@@ -30,7 +30,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from dqscan import emailer, engine, state
+from dqscan import emailer, engine, sns_notifier, state
 from dqscan.config import load_config
 
 logger = logging.getLogger("dqscan.run_daily")
@@ -138,12 +138,25 @@ def main(argv: list[str] | None = None) -> int:
             recipients=recipients,
             aws_region=config.email.aws_region,
         )
-    else:
-        logger.info("email.enabled is false; report written to %s but not emailed", out_path)
+
+    if config.sns.enabled:
+        # No --recipients equivalent here by design: SNS subscribers self-
+        # manage through the topic, not through this job's arguments.
+        sns_notifier.publish_report_notification(
+            run_result,
+            str(out_path),
+            topic_arn=config.sns.topic_arn,
+            s3_bucket=config.sns.s3_bucket,
+            s3_prefix=config.sns.s3_prefix,
+            aws_region=config.sns.aws_region,
+        )
+
+    if not config.email.enabled and not config.sns.enabled:
+        logger.info("email and sns are both disabled; report written to %s but not sent", out_path)
 
     # Only advance state, and only prune, after a fully successful run
-    # (scan + email) -- a failure anywhere above must leave the window
-    # untouched so the next run retries it.
+    # (scan + notification) -- a failure anywhere above must leave the
+    # window untouched so the next run retries it.
     state.write_last_run_end(now, state_path)
     _prune_old_reports(REPORTS_DIR, REPORT_RETENTION_DAYS)
 

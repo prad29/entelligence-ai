@@ -12,10 +12,21 @@ scan:
   include_dormant: false
   query_timeout_seconds: 60
 email:
-  enabled: true
-  # souveek.pradhan@enttelligence.com is SES-verified today; reports@ is not
-  # yet (see dqscan/emailer.py) -- switch this once that's verified.
+  enabled: false
+  # souveek.pradhan@enttelligence.com is SES-verified; reports@ is not (see
+  # dqscan/emailer.py). Switched off in favor of sns below -- SES email from
+  # a bare-verified address (no domain/DKIM) was landing in spam.
   sender: souveek.pradhan@enttelligence.com
   recipients:
     - souveek.pradhan@enttelligence.com
+  aws_region: us-east-1
+sns:
+  enabled: true
+  # Dedicated topic, not the pre-existing error-report-alerts topic (that
+  # one already has its own unrelated subscriber). Subscribers self-manage
+  # via this topic -- add/remove people with `aws sns subscribe`/`unsubscribe`,
+  # never by editing this file.
+  topic_arn: arn:aws:sns:us-east-1:690602674396:dqscan-reports
+  s3_bucket: erica-datastore
+  s3_prefix: dqscan-reports
   aws_region: us-east-1

@@ -22,11 +22,13 @@ logger = logging.getLogger("dqscan.emailer")
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
+_SEVERITY_DISPLAY = {"critical": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
+
+
 def _summarize(run_result: RunResult) -> str:
-    """High-level, pointer-form summary for the email body -- one bullet per
-    firing rule, described by its issue (rule.message), not its ID. Full
-    per-row detail lives only in the attached xlsx; this is meant to be
-    readable in a few seconds without opening the attachment."""
+    """Fixed-template email body: greeting, scan stats, one "Severity -"
+    section per severity with "issue description - count" bullets (no
+    percentages -- those live only in the attached xlsx), sign-off."""
     meta = run_result.meta
     active_findings = [
         o
@@ -37,38 +39,41 @@ def _summarize(run_result: RunResult) -> str:
     errors = [o for o in run_result.outcomes if o.run_status == "error"]
 
     lines = [
-        f"dqscan run: {meta.from_date} to {meta.to_date} (schema: {meta.schema})",
-        f"Rows scanned: {meta.rows_scanned:,} | Distinct showtimes: {meta.distinct_showtimes:,} | "
-        f"Duration: {meta.duration_seconds}s",
+        "Hi Team,",
+        "",
+        "Please find the error report on movies_shows below -",
+        "",
+        f"Scan Period - {meta.from_date} to {meta.to_date}",
+        f"Rows Scanned - {meta.rows_scanned:,}",
+        f"Distinct Showtimes - {meta.distinct_showtimes:,}",
+        f"Duration - {meta.duration_seconds}s",
         "",
     ]
-    if meta.extent_note:
-        lines.append(f"Note: {meta.extent_note}")
-        lines.append("")
 
     if errors:
-        lines.append(f"{len(errors)} rule(s) errored during this run:")
+        lines.append(f"{len(errors)} rule(s) errored during this run -")
         for o in errors:
-            lines.append(f"  - {o.rule.name}: {o.error}")
+            lines.append(f"{o.rule.name} - {o.error}")
         lines.append("")
 
-    if not active_findings:
-        lines.append("No findings.")
-        return "\n".join(lines)
-
-    lines.append(f"{len(active_findings)} issue(s) found:")
+    lines.append(f"{len(active_findings)} Issues Found -")
     lines.append("")
-    current_severity = None
-    for o in active_findings:
-        if o.rule.severity != current_severity:
-            current_severity = o.rule.severity
-            lines.append(f"{current_severity.upper()}:")
-        pct = f"{o.percentage * 100:.2f}%" if o.percentage is not None else "count only, no % baseline"
-        flag = " (needs calibration -- review threshold)" if o.run_status == "calibration" else ""
-        lines.append(f"  - {o.rule.message} -- {o.count} row(s), {pct}{flag}")
 
+    if active_findings:
+        current_severity = None
+        for o in active_findings:
+            if o.rule.severity != current_severity:
+                if current_severity is not None:
+                    lines.append("")
+                current_severity = o.rule.severity
+                lines.append(f"{_SEVERITY_DISPLAY.get(current_severity, current_severity.title())} -")
+            lines.append(f"{o.rule.message} - {o.count}")
+        lines.append("")
+
+    lines.append("Full row level details are attached in email")
     lines.append("")
-    lines.append("Full row-level detail is in the attached report.")
+    lines.append("Thank You,")
+    lines.append("Team Enttelligence")
     return "\n".join(lines)
 
 

@@ -16,3 +16,9 @@ email:
   sender: reports@enttelligence.com
   recipients: []
   aws_region: us-east-1
+sns:
+  enabled: false
+  topic_arn: ""
+  s3_bucket: ""
+  s3_prefix: dqscan-reports
+  aws_region: us-east-1

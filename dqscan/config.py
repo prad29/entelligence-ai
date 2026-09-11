@@ -34,6 +34,14 @@ _EMAIL_DEFAULTS = {
     "aws_region": "us-east-1",
 }
 
+_SNS_DEFAULTS = {
+    "enabled": False,
+    "topic_arn": "",
+    "s3_bucket": "",
+    "s3_prefix": "dqscan-reports",
+    "aws_region": "us-east-1",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class DatabaseConfig:
@@ -63,10 +71,20 @@ class EmailConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SnsConfig:
+    enabled: bool
+    topic_arn: str
+    s3_bucket: str
+    s3_prefix: str
+    aws_region: str
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     database: DatabaseConfig
     scan: ScanConfig
     email: EmailConfig
+    sns: SnsConfig
 
 
 def _interpolate(value):
@@ -130,6 +148,23 @@ def _build_email_config(raw: dict) -> EmailConfig:
     )
 
 
+def _build_sns_config(raw: dict) -> SnsConfig:
+    merged = {**_SNS_DEFAULTS, **raw}
+    enabled = bool(merged["enabled"])
+    if enabled and not merged["topic_arn"]:
+        raise ValueError("sns.topic_arn is required when sns.enabled is true")
+    if enabled and not merged["s3_bucket"]:
+        raise ValueError("sns.s3_bucket is required when sns.enabled is true (SNS email has no attachment "
+                          "support -- the report is uploaded to S3 and linked instead)")
+    return SnsConfig(
+        enabled=enabled,
+        topic_arn=merged["topic_arn"],
+        s3_bucket=merged["s3_bucket"],
+        s3_prefix=merged["s3_prefix"],
+        aws_region=merged["aws_region"],
+    )
+
+
 def load_config(path: str = "config.yaml") -> Config:
     # Do not override real environment (e.g. CI/deploy) with .env placeholders.
     load_dotenv()
@@ -142,4 +177,5 @@ def load_config(path: str = "config.yaml") -> Config:
     database = _build_database_config(raw.get("database") or {})
     scan = _build_scan_config(raw.get("scan") or {})
     email = _build_email_config(raw.get("email") or {})
-    return Config(database=database, scan=scan, email=email)
+    sns = _build_sns_config(raw.get("sns") or {})
+    return Config(database=database, scan=scan, email=email, sns=sns)

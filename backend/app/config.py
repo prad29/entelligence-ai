@@ -312,6 +312,17 @@ class Settings(BaseSettings):
     # Per-Converse-call budget for one classify or one extract call.
     CALENDAR_EXTRACT_TIMEOUT_SECONDS: int = 90
 
+    # ── dqscan manual trigger — Settings-page button that runs the
+    # standalone dqscan/ data-quality scanner (repo root, not an app/
+    # package) as a background Celery task. No auth on the endpoint,
+    # matching this codebase's no-auth internal-tool convention. Feature-
+    # flagged like CALENDAR_EXTRACT_ENABLED.
+    DQSCAN_TRIGGER_ENABLED: bool = True
+    # Which config.yaml dqscan loads (--env dev|prod) — kept separate from
+    # whatever the daily cron on amenity-app is currently pointed at.
+    DQSCAN_DEFAULT_ENV: str = "dev"
+    DQSCAN_TIMEOUT_SECONDS: int = 600
+
     @property
     def SERPAPI_API_KEYS(self) -> list[tuple[int, str]]:
         """Ordered (slot, key) pairs for every configured SerpApi key, slot 1 = SERPAPI_API_KEY."""

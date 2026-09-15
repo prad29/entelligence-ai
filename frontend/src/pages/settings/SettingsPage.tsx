@@ -6,9 +6,10 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select } from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { Input } from '@/components/ui/Input'
 import { useBedrockStatus } from '@/hooks/useBedrockStatus'
 import api from '@/lib/api'
-import { Zap, Save, CheckCircle2 } from 'lucide-react'
+import { Zap, Save, CheckCircle2, ScanSearch, PlayCircle } from 'lucide-react'
 
 const bedrockSchema = z.object({
   model_id: z.string().min(1, 'Model ID is required'),
@@ -149,10 +150,90 @@ function BedrockConfigCard() {
   )
 }
 
+function toISODate(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+
+function DqscanTriggerCard() {
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+
+  const [fromDate, setFromDate] = useState(toISODate(yesterday))
+  const [toDate, setToDate] = useState(toISODate(today))
+  const [triggering, setTriggering] = useState(false)
+  const [triggered, setTriggered] = useState(false)
+
+  const onTrigger = async () => {
+    setTriggering(true)
+    try {
+      await api.post('/api/v1/dqscan/trigger', { from_date: fromDate, to_date: toDate })
+      setTriggered(true)
+      setTimeout(() => setTriggered(false), 4000)
+    } catch {
+      // Handle error silently for demo
+    } finally {
+      setTriggering(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <div className="h-8 w-8 rounded-lg bg-blue-600/10 dark:bg-blue-600/20 flex items-center justify-center">
+            <ScanSearch className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+          </div>
+          <div>
+            <CardTitle>Data Quality Scan</CardTitle>
+            <CardDescription>Manually run the movies_shows data-quality scan</CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col gap-3">
+          <div className="flex gap-4">
+            <Input
+              type="date"
+              label="From"
+              value={fromDate}
+              max={toDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+            <Input
+              type="date"
+              label="To"
+              value={toDate}
+              min={fromDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+          </div>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            Defaults to the last 24 hours. Results are sent the same way as the daily scheduled scan.
+          </p>
+        </div>
+      </CardContent>
+      <CardFooter className="justify-end gap-2">
+        {triggered && (
+          <span className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Scan triggered
+          </span>
+        )}
+        <Button type="button" onClick={() => { void onTrigger() }} loading={triggering}>
+          <PlayCircle className="h-4 w-4" />
+          Trigger DQ Scan
+        </Button>
+      </CardFooter>
+    </Card>
+  )
+}
+
 function SettingsPage() {
   return (
     <div className="flex flex-col gap-6">
       <BedrockConfigCard />
+      <DqscanTriggerCard />
     </div>
   )
 }

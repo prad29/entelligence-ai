@@ -19,6 +19,7 @@ celery = Celery(
         "app.tasks.agentic_scheduler_task",
         "app.tasks.lobby_check_task",
         "app.tasks.calendar_extract_task",
+        "app.tasks.dqscan_task",
     ],
 )
 
@@ -49,6 +50,7 @@ celery.conf.update(
         "app.tasks.lobby_check_task.lobby_check_dispatch_job_task": {"queue": "lobby-check"},
         "app.tasks.lobby_check_task.lobby_check_row": {"queue": "lobby-check"},
         "app.tasks.lobby_check_task.lobby_check_finalize_job": {"queue": "lobby-check"},
+        "app.tasks.dqscan_task.run_dqscan_scan": {"queue": "dqscan"},
     },
     # Periodic tasks, run by the single-replica `celery-beat` service in
     # docker-compose.

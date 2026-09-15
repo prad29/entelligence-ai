@@ -13,12 +13,14 @@ phases:
 
   build:
     commands:
+      # Context is repo root, not ./backend -- Dockerfile.prod also COPYs in
+      # dqscan/ + config*.yaml from outside backend/ (see its comments).
       - docker build
           --platform linux/arm64
           -f backend/Dockerfile.prod
           -t $ECR_BACKEND:$IMAGE_TAG
           -t $ECR_BACKEND:latest
-          ./backend
+          .
 
   post_build:
     commands:

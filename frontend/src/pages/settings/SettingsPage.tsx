@@ -170,7 +170,11 @@ const DB_OPTIONS = [
   { value: 'prod', label: 'Prod' },
 ]
 
-function DqscanCronScheduleCard() {
+function DqscanErrorReportsCard() {
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+
   const [env, setEnv] = useState('dev')
   const [cronExpression, setCronExpression] = useState('0 18 * * *')
   const [recipients, setRecipients] = useState<DqscanRecipient[]>([])
@@ -178,6 +182,11 @@ function DqscanCronScheduleCard() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+
+  const [fromDate, setFromDate] = useState(toISODate(yesterday))
+  const [toDate, setToDate] = useState(toISODate(today))
+  const [triggering, setTriggering] = useState(false)
+  const [triggered, setTriggered] = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -227,6 +236,19 @@ function DqscanCronScheduleCard() {
     }
   }
 
+  const onTrigger = async () => {
+    setTriggering(true)
+    try {
+      await api.post('/api/v1/dqscan/trigger', { from_date: fromDate, to_date: toDate })
+      setTriggered(true)
+      setTimeout(() => setTriggered(false), 4000)
+    } catch {
+      // Handle error silently for demo
+    } finally {
+      setTriggering(false)
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -235,8 +257,8 @@ function DqscanCronScheduleCard() {
             <Clock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
           </div>
           <div>
-            <CardTitle>Cron Schedule</CardTitle>
-            <CardDescription>When the daily scan runs, which database it scans, and who gets notified</CardDescription>
+            <CardTitle>Error Reports (Movie Shows)</CardTitle>
+            <CardDescription>Cron schedule, recipients, and manual trigger for the movies_shows data-quality scan</CardDescription>
           </div>
         </div>
       </CardHeader>
@@ -258,7 +280,7 @@ function DqscanCronScheduleCard() {
           </div>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
             Standard 5-field cron format (minute hour day month weekday), UTC. Default is 6 PM daily
-            (<code>0 18 * * *</code>). Also used as the database target for the manual trigger below.
+            (<code>0 18 * * *</code>). Also used as the database target for the manual scan below.
           </p>
 
           <div className="flex flex-col gap-1.5">
@@ -295,97 +317,48 @@ function DqscanCronScheduleCard() {
               Each address must click a one-time AWS confirmation email before they start receiving reports.
             </p>
           </div>
-        </div>
-      </CardContent>
-      <CardFooter className="justify-end gap-2">
-        {saved && (
-          <span className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Saved
-          </span>
-        )}
-        <Button type="button" onClick={() => { void onSave() }} loading={saving || loading}>
-          <Save className="h-4 w-4" />
-          Save
-        </Button>
-      </CardFooter>
-    </Card>
-  )
-}
 
-function DqscanManualTriggerCard() {
-  const today = new Date()
-  const yesterday = new Date(today)
-  yesterday.setDate(yesterday.getDate() - 1)
+          <div className="flex items-center justify-end">
+            {saved && (
+              <span className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 mr-2">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Saved
+              </span>
+            )}
+            <Button type="button" onClick={() => { void onSave() }} loading={saving || loading}>
+              <Save className="h-4 w-4" />
+              Save
+            </Button>
+          </div>
 
-  const [env, setEnv] = useState<string | null>(null)
-  const [fromDate, setFromDate] = useState(toISODate(yesterday))
-  const [toDate, setToDate] = useState(toISODate(today))
-  const [triggering, setTriggering] = useState(false)
-  const [triggered, setTriggered] = useState(false)
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await api.get<DqscanSettingsResponse>('/api/v1/dqscan/settings')
-        setEnv(res.data.env)
-      } catch {
-        // Leave blank
-      }
-    }
-    void load()
-  }, [])
-
-  const onTrigger = async () => {
-    setTriggering(true)
-    try {
-      await api.post('/api/v1/dqscan/trigger', { from_date: fromDate, to_date: toDate })
-      setTriggered(true)
-      setTimeout(() => setTriggered(false), 4000)
-    } catch {
-      // Handle error silently for demo
-    } finally {
-      setTriggering(false)
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-blue-600/10 dark:bg-blue-600/20 flex items-center justify-center">
+          <div className="border-t border-zinc-200 dark:border-zinc-700 pt-4 flex flex-col gap-3">
+            <div className="flex items-center gap-2">
               <ScanSearch className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Manual Scan</h3>
             </div>
-            <div>
-              <CardTitle>Manual Scan</CardTitle>
-              <CardDescription>Run the movies_shows data-quality scan right now, for a specific window</CardDescription>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Run the scan right now, for a specific window.
+            </p>
+            <div className="flex gap-4">
+              <Input
+                type="date"
+                label="From"
+                value={fromDate}
+                max={toDate}
+                onChange={(e) => setFromDate(e.target.value)}
+              />
+              <Input
+                type="date"
+                label="To"
+                value={toDate}
+                min={fromDate}
+                onChange={(e) => setToDate(e.target.value)}
+              />
             </div>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Defaults to the last 24 hours. Uses the database target and recipients set above.
+            </p>
           </div>
-          {env && <Badge variant="secondary">Targeting {env}</Badge>}
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-3">
-          <div className="flex gap-4">
-            <Input
-              type="date"
-              label="From"
-              value={fromDate}
-              max={toDate}
-              onChange={(e) => setFromDate(e.target.value)}
-            />
-            <Input
-              type="date"
-              label="To"
-              value={toDate}
-              min={fromDate}
-              onChange={(e) => setToDate(e.target.value)}
-            />
-          </div>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Defaults to the last 24 hours. Uses the database target and recipients set in Cron Schedule above.
-          </p>
         </div>
       </CardContent>
       <CardFooter className="justify-end gap-2">
@@ -408,15 +381,7 @@ function SettingsPage() {
   return (
     <div className="flex flex-col gap-6">
       <BedrockConfigCard />
-      <div className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
-          Error Reports (Movie Shows)
-        </h2>
-        <div className="flex flex-col gap-6">
-          <DqscanCronScheduleCard />
-          <DqscanManualTriggerCard />
-        </div>
-      </div>
+      <DqscanErrorReportsCard />
     </div>
   )
 }

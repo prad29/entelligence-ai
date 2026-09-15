@@ -59,7 +59,7 @@ EOF
   sudo -u ec2-user "$VENV/bin/pip" install --quiet --upgrade pip
   sudo -u ec2-user "$VENV/bin/pip" install --quiet -r "$DQSCAN_HOME/dqscan/requirements.txt"
 
-  CRON_LINE="0 18 * * * cd $DQSCAN_HOME && $VENV/bin/python -m dqscan.run_daily --env prod >> $LOG_DIR/cron.log 2>&1"
+  CRON_LINE="0 18 * * * cd $DQSCAN_HOME && $VENV/bin/python -m dqscan.run_daily --env dev >> $LOG_DIR/cron.log 2>&1"
   ( sudo -u ec2-user crontab -l 2>/dev/null | grep -vF "dqscan.run_daily" ; echo "$CRON_LINE" ) | sudo -u ec2-user crontab -
 
   echo "dqscan setup refreshed"

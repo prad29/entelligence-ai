@@ -1,11 +1,16 @@
-"""Manual dqscan trigger — runs dqscan/run_daily.py as a subprocess.
+"""dqscan trigger + cron scheduler.
 
-Unlike every other task in this file, dqscan isn't an app/ package — it's a
-standalone tool that lives at the repo root and is normally run by a cron on
-amenity-app (see codedeploy/scripts/setup_dqscan.sh). Shelling out to its
-existing `python -m dqscan.run_daily` CLI reuses its orchestration (state
-tracking, xlsx report, SES/SNS delivery) unchanged rather than re-implementing
-it here.
+dqscan isn't an app/ package — it's a standalone tool that lives at the repo
+root, shipped into this same image (see backend/Dockerfile.prod). Shelling
+out to its existing `python -m dqscan.run_daily` CLI reuses its
+orchestration (state tracking, xlsx report, SES/SNS delivery) unchanged
+rather than re-implementing it here.
+
+check_dqscan_cron replaces what used to be a host crontab entry
+(codedeploy/scripts/setup_dqscan.sh) — it runs every minute via Celery Beat
+and fires run_dqscan_scan when DqscanSettings.cron_expression matches "now",
+so changing the schedule/DB-target from the Settings page takes effect
+within a minute, no redeploy or EC2 access needed.
 """
 
 from __future__ import annotations
@@ -13,7 +18,11 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
+
+from croniter import croniter
 
 from app.celery_app import celery
 from app.config import settings
@@ -37,14 +46,12 @@ def _dqscan_root() -> Path:
 
 
 @celery.task(name="app.tasks.dqscan_task.run_dqscan_scan", queue=QUEUE)
-def run_dqscan_scan(env: str, from_date: str, to_date: str) -> dict:
+def run_dqscan_scan(env: str, from_date: Optional[str] = None, to_date: Optional[str] = None) -> dict:
     root = _dqscan_root()
-    cmd = [
-        sys.executable, "-m", "dqscan.run_daily",
-        "--env", env,
-        "--from", from_date,
-        "--to", to_date,
-    ]
+    cmd = [sys.executable, "-m", "dqscan.run_daily", "--env", env]
+    if from_date and to_date:
+        cmd += ["--from", from_date, "--to", to_date]
+
     logger.info("dqscan_trigger_start env=%s from=%s to=%s root=%s", env, from_date, to_date, root)
 
     result = subprocess.run(
@@ -62,3 +69,36 @@ def run_dqscan_scan(env: str, from_date: str, to_date: str) -> dict:
 
     logger.info("dqscan_trigger_complete env=%s", env)
     return {"env": env, "from": from_date, "to": to_date}
+
+
+@celery.task(name="app.tasks.dqscan_task.check_dqscan_cron")
+def check_dqscan_cron() -> None:
+    from sqlmodel import Session
+
+    from app.database import engine
+    from app.models import DqscanSettings
+
+    now = datetime.utcnow().replace(second=0, microsecond=0)
+
+    with Session(engine) as session:
+        cfg = session.get(DqscanSettings, 1)
+        if cfg is None:
+            return
+
+        try:
+            is_due = croniter.match(cfg.cron_expression, now)
+        except Exception:
+            logger.warning("dqscan_cron_invalid_expression expr=%s", cfg.cron_expression)
+            return
+
+        if not is_due or cfg.last_cron_fired_at == now:
+            return
+
+        cfg.last_cron_fired_at = now
+        session.add(cfg)
+        session.commit()
+        env = cfg.env
+
+    # No --from/--to -- let run_daily.py's own state file drive the window
+    # (last cron run to now), exactly like the host crontab used to.
+    run_dqscan_scan.delay(env)

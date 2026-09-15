@@ -711,3 +711,22 @@ class CalendarExtractJob(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     ttl: Optional[datetime] = None
+
+
+class DqscanSettings(SQLModel, table=True):
+    """Singleton row (id always 1) backing the Settings page's dqscan cron
+    section. `env` is shared by both the scheduled cron and the manual
+    trigger button (product decision) -- there is deliberately no separate
+    dev/prod selector for each. `recipients_json` mirrors the JSON-string
+    convention used elsewhere in this file (see e.g. defects_json above)
+    rather than a native array column; it tracks who the last Save call
+    subscribed to the *current* env's SNS topic -- changing `env` does not
+    retroactively move anyone between topics, see app/routers/dqscan.py.
+    """
+
+    id: int = Field(default=1, primary_key=True)
+    env: str = Field(default="dev")  # "dev" | "prod"
+    cron_expression: str = Field(default="0 18 * * *")  # UTC
+    recipients_json: str = Field(default="[]")
+    last_cron_fired_at: Optional[datetime] = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

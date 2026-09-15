@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type KeyboardEvent } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Input } from '@/components/ui/Input'
 import { useBedrockStatus } from '@/hooks/useBedrockStatus'
 import api from '@/lib/api'
-import { Zap, Save, CheckCircle2, ScanSearch, PlayCircle } from 'lucide-react'
+import { Zap, Save, CheckCircle2, ScanSearch, PlayCircle, Clock, X } from 'lucide-react'
 
 const bedrockSchema = z.object({
   model_id: z.string().min(1, 'Model ID is required'),
@@ -154,15 +154,187 @@ function toISODate(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 
-function DqscanTriggerCard() {
+interface DqscanRecipient {
+  email: string
+  status: string
+}
+
+interface DqscanSettingsResponse {
+  env: string
+  cron_expression: string
+  recipients: DqscanRecipient[]
+}
+
+const DB_OPTIONS = [
+  { value: 'dev', label: 'Dev' },
+  { value: 'prod', label: 'Prod' },
+]
+
+function DqscanCronScheduleCard() {
+  const [env, setEnv] = useState('dev')
+  const [cronExpression, setCronExpression] = useState('0 18 * * *')
+  const [recipients, setRecipients] = useState<DqscanRecipient[]>([])
+  const [recipientInput, setRecipientInput] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await api.get<DqscanSettingsResponse>('/api/v1/dqscan/settings')
+        setEnv(res.data.env)
+        setCronExpression(res.data.cron_expression)
+        setRecipients(res.data.recipients)
+      } catch {
+        // Use defaults
+      } finally {
+        setLoading(false)
+      }
+    }
+    void load()
+  }, [])
+
+  const addRecipient = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    const email = recipientInput.trim()
+    if (email && !recipients.some((r) => r.email === email)) {
+      setRecipients([...recipients, { email, status: 'unsaved' }])
+    }
+    setRecipientInput('')
+  }
+
+  const removeRecipient = (email: string) => {
+    setRecipients(recipients.filter((r) => r.email !== email))
+  }
+
+  const onSave = async () => {
+    setSaving(true)
+    try {
+      const res = await api.put<DqscanSettingsResponse>('/api/v1/dqscan/settings', {
+        env,
+        cron_expression: cronExpression,
+        recipients: recipients.map((r) => r.email),
+      })
+      setRecipients(res.data.recipients)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch {
+      // Handle error silently for demo
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <div className="h-8 w-8 rounded-lg bg-amber-600/10 dark:bg-amber-600/20 flex items-center justify-center">
+            <Clock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+          </div>
+          <div>
+            <CardTitle>Cron Schedule</CardTitle>
+            <CardDescription>When the daily scan runs, which database it scans, and who gets notified</CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col gap-4">
+          <div className="flex gap-4">
+            <Select
+              label="Database"
+              value={env}
+              onValueChange={setEnv}
+              options={DB_OPTIONS}
+            />
+            <Input
+              label="Cron Trigger Time (cron expression, UTC)"
+              value={cronExpression}
+              onChange={(e) => setCronExpression(e.target.value)}
+              placeholder="0 18 * * *"
+            />
+          </div>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            Standard 5-field cron format (minute hour day month weekday), UTC. Default is 6 PM daily
+            (<code>0 18 * * *</code>). Also used as the database target for the manual trigger below.
+          </p>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Recipient List</label>
+            <div className="flex flex-wrap gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-2 min-h-[2.5rem]">
+              {recipients.map((r) => (
+                <span
+                  key={r.email}
+                  className="inline-flex items-center gap-1 rounded-md bg-zinc-100 dark:bg-zinc-800 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-200"
+                >
+                  {r.email}
+                  {r.status === 'pending' && (
+                    <span className="text-amber-600 dark:text-amber-400">(pending confirmation)</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeRecipient(r.email)}
+                    className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              <input
+                type="email"
+                value={recipientInput}
+                onChange={(e) => setRecipientInput(e.target.value)}
+                onKeyDown={addRecipient}
+                placeholder="Add email, press Enter"
+                className="flex-1 min-w-[10rem] bg-transparent text-sm outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500 text-zinc-900 dark:text-zinc-100"
+              />
+            </div>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Each address must click a one-time AWS confirmation email before they start receiving reports.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+      <CardFooter className="justify-end gap-2">
+        {saved && (
+          <span className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Saved
+          </span>
+        )}
+        <Button type="button" onClick={() => { void onSave() }} loading={saving || loading}>
+          <Save className="h-4 w-4" />
+          Save
+        </Button>
+      </CardFooter>
+    </Card>
+  )
+}
+
+function DqscanManualTriggerCard() {
   const today = new Date()
   const yesterday = new Date(today)
   yesterday.setDate(yesterday.getDate() - 1)
 
+  const [env, setEnv] = useState<string | null>(null)
   const [fromDate, setFromDate] = useState(toISODate(yesterday))
   const [toDate, setToDate] = useState(toISODate(today))
   const [triggering, setTriggering] = useState(false)
   const [triggered, setTriggered] = useState(false)
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await api.get<DqscanSettingsResponse>('/api/v1/dqscan/settings')
+        setEnv(res.data.env)
+      } catch {
+        // Leave blank
+      }
+    }
+    void load()
+  }, [])
 
   const onTrigger = async () => {
     setTriggering(true)
@@ -180,14 +352,17 @@ function DqscanTriggerCard() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-lg bg-blue-600/10 dark:bg-blue-600/20 flex items-center justify-center">
-            <ScanSearch className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded-lg bg-blue-600/10 dark:bg-blue-600/20 flex items-center justify-center">
+              <ScanSearch className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <CardTitle>Manual Scan</CardTitle>
+              <CardDescription>Run the movies_shows data-quality scan right now, for a specific window</CardDescription>
+            </div>
           </div>
-          <div>
-            <CardTitle>Data Quality Scan</CardTitle>
-            <CardDescription>Manually run the movies_shows data-quality scan</CardDescription>
-          </div>
+          {env && <Badge variant="secondary">Targeting {env}</Badge>}
         </div>
       </CardHeader>
       <CardContent>
@@ -209,7 +384,7 @@ function DqscanTriggerCard() {
             />
           </div>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Defaults to the last 24 hours. Results are sent the same way as the daily scheduled scan.
+            Defaults to the last 24 hours. Uses the database target and recipients set in Cron Schedule above.
           </p>
         </div>
       </CardContent>
@@ -233,7 +408,15 @@ function SettingsPage() {
   return (
     <div className="flex flex-col gap-6">
       <BedrockConfigCard />
-      <DqscanTriggerCard />
+      <div className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+          Error Reports (Movie Shows)
+        </h2>
+        <div className="flex flex-col gap-6">
+          <DqscanCronScheduleCard />
+          <DqscanManualTriggerCard />
+        </div>
+      </div>
     </div>
   )
 }

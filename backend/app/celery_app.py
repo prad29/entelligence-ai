@@ -86,6 +86,16 @@ celery.conf.update(
             "task": "app.tasks.usage_rollup_task.prune_llm_call_logs",
             "schedule": crontab(hour=3, minute=20),
         },
+        # Replaces the old amenity-app host crontab (codedeploy/scripts/
+        # setup_dqscan.sh) -- checks every minute whether DqscanSettings.
+        # cron_expression is due "now" and fires run_dqscan_scan if so.
+        # Deliberately NOT in task_routes -- must land on the default
+        # "celery" queue (celery-worker), not the "dqscan" queue, since it
+        # does no dqscan work itself, just decides whether to enqueue it.
+        "dqscan-cron-check": {
+            "task": "app.tasks.dqscan_task.check_dqscan_cron",
+            "schedule": 60.0,
+        },
         # Phase 2 pool observability (see local-docs/2026-08-25-agentic-batch-
         # concurrency-design.md §4.3): samples "agentic" queue depth + live
         # semaphore-holder count + active-job count every 30s. Deliberately

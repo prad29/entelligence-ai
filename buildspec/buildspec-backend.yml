@@ -34,3 +34,6 @@ artifacts:
     - docker-compose.prod.yml
     - codedeploy/**/*
     - appspec.yml
+    - dqscan/**/*
+    - config.yaml
+    - config.prod.yaml

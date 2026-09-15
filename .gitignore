@@ -7,6 +7,10 @@
 *.csv
 *.xlsx
 
+# dqscan runtime state (last-run watermark) and generated reports
+dqscan/.state/
+dqscan/reports/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -19,6 +19,7 @@ celery = Celery(
         "app.tasks.agentic_scheduler_task",
         "app.tasks.lobby_check_task",
         "app.tasks.calendar_extract_task",
+        "app.tasks.dqscan_task",
     ],
 )
 
@@ -49,6 +50,7 @@ celery.conf.update(
         "app.tasks.lobby_check_task.lobby_check_dispatch_job_task": {"queue": "lobby-check"},
         "app.tasks.lobby_check_task.lobby_check_row": {"queue": "lobby-check"},
         "app.tasks.lobby_check_task.lobby_check_finalize_job": {"queue": "lobby-check"},
+        "app.tasks.dqscan_task.run_dqscan_scan": {"queue": "dqscan"},
     },
     # Periodic tasks, run by the single-replica `celery-beat` service in
     # docker-compose.
@@ -83,6 +85,16 @@ celery.conf.update(
         "usage-prune-daily": {
             "task": "app.tasks.usage_rollup_task.prune_llm_call_logs",
             "schedule": crontab(hour=3, minute=20),
+        },
+        # Replaces the old amenity-app host crontab (codedeploy/scripts/
+        # setup_dqscan.sh) -- checks every minute whether DqscanSettings.
+        # cron_expression is due "now" and fires run_dqscan_scan if so.
+        # Deliberately NOT in task_routes -- must land on the default
+        # "celery" queue (celery-worker), not the "dqscan" queue, since it
+        # does no dqscan work itself, just decides whether to enqueue it.
+        "dqscan-cron-check": {
+            "task": "app.tasks.dqscan_task.check_dqscan_cron",
+            "schedule": 60.0,
         },
         # Phase 2 pool observability (see local-docs/2026-08-25-agentic-batch-
         # concurrency-design.md §4.3): samples "agentic" queue depth + live

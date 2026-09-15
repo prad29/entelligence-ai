@@ -33,3 +33,14 @@ pillow>=10.3.0
 litellm>=1.44.0
 # PDF report generation for GET /api/v1/usage/report?format=pdf (§9).
 reportlab>=4.1.0
+
+# dqscan (repo-root standalone tool, run in-container via
+# app/tasks/dqscan_task.py) needs these on top of what's already here
+# (pymysql, openpyxl, boto3, python-dotenv, and sqlalchemy transitively via
+# sqlmodel are all already covered above). croniter drives the Settings-page
+# cron schedule (app/tasks/dqscan_task.check_dqscan_cron) -- dqscan itself
+# doesn't use it, that's purely the in-app scheduler replacing the old host
+# crontab.
+PyYAML>=6.0
+tabulate>=0.9
+croniter>=2.0

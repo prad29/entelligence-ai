@@ -1,11 +1,19 @@
 version: 0.0
 os: linux
 
+file_exists_behavior: OVERWRITE
+
 files:
   - source: docker-compose.prod.yml
     destination: /app
   - source: image_tag.txt
     destination: /app
+  - source: dqscan
+    destination: /opt/entelligence-ai/dqscan
+  - source: config.yaml
+    destination: /opt/entelligence-ai
+  - source: config.prod.yaml
+    destination: /opt/entelligence-ai
 hooks:
   BeforeInstall:
     - location: codedeploy/scripts/stop_containers.sh
@@ -18,6 +26,12 @@ hooks:
       runas: root
     - location: codedeploy/scripts/run_migrations.sh
       timeout: 120
+      runas: root
+    # Best-effort: refreshes dqscan's code/venv/cron on the same trigger as
+    # the app deploy. Never fails this hook (see the script) -- a dqscan
+    # regression must not block or roll back a backend release.
+    - location: codedeploy/scripts/setup_dqscan.sh
+      timeout: 180
       runas: root
 
   ApplicationStart:

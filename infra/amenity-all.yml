@@ -351,7 +351,7 @@ Resources:
                   # codedeploy/scripts/setup_dqscan.sh -- was already used at
                   # runtime but missing from this template until now.
                   - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:amenity/prod-db-credentials-*"
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:dqscan/dev-db-credentials-*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:enttelligence-ai/dev-db-credentials-*"
         - PolicyName: DqscanAccess
           PolicyDocument:
             Version: "2012-10-17"

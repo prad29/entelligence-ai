@@ -16,6 +16,7 @@ from app.routers import intl_detect, intl_amenities, intl_jobs
 from app.routers import usage
 from app.routers import lobby_check
 from app.routers import calendar_extract
+from app.routers import dqscan
 
 # Configure structured JSON logging as early as possible
 configure_logging()
@@ -128,6 +129,9 @@ if settings.LOBBY_CHECK_ENABLED:
 
 if settings.CALENDAR_EXTRACT_ENABLED:
     app.include_router(calendar_extract.router)
+
+if settings.DQSCAN_TRIGGER_ENABLED:
+    app.include_router(dqscan.router)
 
 
 _DEFAULT_MOVIE_FORMAT_SEEDS = [

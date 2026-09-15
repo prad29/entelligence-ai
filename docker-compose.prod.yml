@@ -140,6 +140,17 @@ services:
       redis:
         condition: service_healthy
 
+  celery-dqscan-worker:
+    image: ${ECR_BACKEND}:${IMAGE_TAG}
+    # Concurrency 1 -- one manual trigger at a time is all the Settings-page
+    # button needs; dqscan's own state file isn't safe for concurrent runs.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q dqscan
+    restart: unless-stopped
+    env_file: /app/.env.prod
+    depends_on:
+      redis:
+        condition: service_healthy
+
   celery-beat:
     image: ${ECR_BACKEND}:${IMAGE_TAG}
     # Exactly one replica, always — see docker-compose.yml for why.

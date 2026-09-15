@@ -18,6 +18,15 @@ PROD_DB_PORT=$(echo "$PROD_DB_SECRET" | jq -r .port)
 PROD_DB_DATABASE=$(echo "$PROD_DB_SECRET" | jq -r .database)
 PROD_DB_USERNAME=$(echo "$PROD_DB_SECRET" | jq -r .username)
 PROD_DB_PASSWORD=$(echo "$PROD_DB_SECRET" | jq -r .password)
+# Read by dqscan (app/tasks/dqscan_task.py) when the Settings-page trigger's
+# --env dev, same shape/secret as setup_dqscan.sh's dev DB pull for the host
+# cron -- this is the container-side copy of that same secret.
+DEV_DB_SECRET=$(aws secretsmanager get-secret-value --secret-id enttelligence-ai/dev-db-credentials --query SecretString --output text --region us-east-1)
+DEV_DB_HOST=$(echo "$DEV_DB_SECRET" | jq -r .host)
+DEV_DB_PORT=$(echo "$DEV_DB_SECRET" | jq -r .port)
+DEV_DB_DATABASE=$(echo "$DEV_DB_SECRET" | jq -r .database)
+DEV_DB_USERNAME=$(echo "$DEV_DB_SECRET" | jq -r .username)
+DEV_DB_PASSWORD=$(echo "$DEV_DB_SECRET" | jq -r .password)
 EXTERNAL_API_KEY=$(aws secretsmanager get-secret-value --secret-id amenity/external-api-key --query SecretString --output text --region us-east-1)
 # /api/v1/lobby-check REUSES this same key (X_API_KEY below) -- no separate
 # lobby-check secret. Bedrock auth for lobby-check also reuses BEDROCK_KEY
@@ -82,6 +91,11 @@ PROD_DB_PORT=${PROD_DB_PORT}
 PROD_DB_DATABASE=${PROD_DB_DATABASE}
 PROD_DB_USERNAME=${PROD_DB_USERNAME}
 PROD_DB_PASSWORD=${PROD_DB_PASSWORD}
+DEV_DB_HOST=${DEV_DB_HOST}
+DEV_DB_PORT=${DEV_DB_PORT}
+DEV_DB_DATABASE=${DEV_DB_DATABASE}
+DEV_DB_USERNAME=${DEV_DB_USERNAME}
+DEV_DB_PASSWORD=${DEV_DB_PASSWORD}
 EXTERNAL_API_ENABLED=true
 X_API_KEY=${EXTERNAL_API_KEY}
 LOBBY_CHECK_ENABLED=true

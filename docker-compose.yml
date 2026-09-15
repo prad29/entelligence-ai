@@ -39,7 +39,9 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
@@ -66,7 +68,9 @@ services:
         condition: service_started
 
   celery-worker:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q celery
     env_file: .env
     environment:
@@ -81,7 +85,9 @@ services:
         condition: service_healthy
 
   celery-agentic-worker:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     # Concurrency is driven from AGENTIC_BATCH_MAX_CONCURRENCY (backend/app/config.py,
     # default below matches) so the worker's actual --concurrency flag and the
     # semaphore cap can never drift apart. Override by setting
@@ -106,7 +112,9 @@ services:
         condition: service_started
 
   celery-deleted-showtimes-worker:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     # Concurrency of 16 so DeletedShowtimeJob.workers (user-configurable 1-16,
     # enforced per-job by app/deleted_showtimes/job_semaphore.py) is actually
     # reachable — a lower worker concurrency would silently cap it below
@@ -123,7 +131,9 @@ services:
         condition: service_healthy
 
   celery-lobby-check-worker:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     # Concurrency is driven from LOBBY_CHECK_MAX_CONCURRENCY (backend/app/config.py,
     # default below matches), same convention as celery-agentic-worker above.
     # Its own dedicated queue -- deliberately not "agentic" (see
@@ -140,7 +150,9 @@ services:
         condition: service_healthy
 
   celery-calendar-extract-worker:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     # Low concurrency -- one job classifies+extracts a single PDF via a
     # handful of sequential Bedrock calls; this is not a high-volume path
     # like deleted-showtimes or lobby-check.
@@ -155,8 +167,26 @@ services:
       redis:
         condition: service_healthy
 
+  celery-dqscan-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    # Concurrency 1 -- dqscan's state file isn't safe for concurrent runs.
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q dqscan
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://amenity:amenity@db:5432/amenitydb
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   celery-beat:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     # Exactly one replica, always: beat only *dispatches* scheduled tasks, and
     # a second scheduler would double-fire every beat_schedule entry. The
     # tasks themselves execute on celery-worker, which consumes the default
@@ -173,7 +203,9 @@ services:
         condition: service_healthy
 
   celery-flower:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     command: celery -A app.celery_app flower --port=5555
     env_file: .env
     ports:

@@ -18,10 +18,10 @@
   chown -R ec2-user:ec2-user "$DQSCAN_HOME/dqscan" "$DQSCAN_HOME/config.yaml" "$DQSCAN_HOME/config.prod.yaml"
 
   # DB credentials come from Secrets Manager, not the repo -- same pattern as
-  # setup_env.sh's PROD_DB_SECRET. dqscan/dev-db-credentials and
+  # setup_env.sh's PROD_DB_SECRET. enttelligence-ai/dev-db-credentials and
   # amenity/prod-db-credentials must exist and the EC2 role must be able to
   # read them (see infra/amenity-all.yml's DqscanAccess policy).
-  DEV_DB_SECRET=$(aws secretsmanager get-secret-value --secret-id dqscan/dev-db-credentials --query SecretString --output text --region "$REGION")
+  DEV_DB_SECRET=$(aws secretsmanager get-secret-value --secret-id enttelligence-ai/dev-db-credentials --query SecretString --output text --region "$REGION")
   PROD_DB_SECRET=$(aws secretsmanager get-secret-value --secret-id amenity/prod-db-credentials --query SecretString --output text --region "$REGION")
 
   DEV_DB_HOST=$(echo "$DEV_DB_SECRET" | jq -r .host)

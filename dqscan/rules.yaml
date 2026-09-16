@@ -964,11 +964,11 @@ rules:
   name: showtime missing a day in its crawl series
   class: custom
   severity: low
-  status: active
+  status: dormant
   requires: [mm_id, running_date]
   detail_columns: [mm_id, first_seen, last_seen, days_present, days_expected]
   message: "showtime was not crawled every day between first and last sighting"
-  note: "May be normal depending on how the crawl is scheduled. Question 9."
+  note: "Disabled 2026-09-17 per request -- low value, may be normal depending on how the crawl is scheduled."
   sql: |
     SELECT mm_id,
            MIN(running_date) AS first_seen, MAX(running_date) AS last_seen,

@@ -1006,7 +1006,7 @@ rules:
            OR ms.theater_city <> t.theater_city
            OR ms.theater_state <> t.theater_state)
 
-- id: XTAB_CIRCUIT_MASTER
+- id: XTAB_CIRCUIT_NAME
   name: circuit_name disagrees with mqproduction.theater_circuit
   class: cross_table
   severity: medium

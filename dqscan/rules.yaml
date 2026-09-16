@@ -153,69 +153,37 @@ rules:
   note: "Every populated price in the sample carried a dollar sign. Expect this to match nearly every row. Keep it out of the digest until Q10 is answered."
 
 - id: FMT_PRICE_DECIMALS
-  name: price not 2 decimal places
-  class: format
-  severity: high
-  status: calibration
-  blocked_by: Q10
-  requires: [price]
-  expr: "price IS NOT NULL AND price <> '' AND NOT REGEXP_LIKE(REPLACE(price, '$', ''), '^[0-9]+[.][0-9]{2}$')"
-  detail_columns: [price]
-  message: "price is not two decimal places"
-  note: "About 22% of sample rows fail this. One-decimal values like $7.0 dominate."
-
-- id: FMT_PRICE_FLOAT_NOISE
-  name: price has 3 or more decimals
+  name: price has more than 2 decimal places
   class: format
   severity: critical
   status: active
   requires: [price]
-  expr: "REGEXP_LIKE(REPLACE(price, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
+  expr: "price IS NOT NULL AND price <> '' AND NOT REGEXP_LIKE(REPLACE(price, '$', ''), '^[0-9]+([.][0-9]{1,2})?$')"
   detail_columns: [price]
-  message: "price carries floating point noise"
-  note: "A defect under any reading of Q10. Sample values include $16.490000000000002."
+  message: "price has more than 2 decimal places"
+  note: "Merged 2026-09-17: was two rules (exactly-2-required, blocked by Q10; and 3+-decimal noise). Resolves Q10 -- up to 2 decimals is valid (e.g. $7, $7.0, $7.00), only 3+ decimals (e.g. $16.490000000000002) is a defect."
 
 - id: FMT_CHILD_DECIMALS
-  name: child not 2 decimal places
+  name: child price has more than 2 decimal places
   class: format
-  severity: high
-  status: calibration
-  blocked_by: Q10
+  severity: critical
+  status: active
   requires: [child]
-  expr: "child IS NOT NULL AND child <> '' AND NOT REGEXP_LIKE(REPLACE(child, '$', ''), '^[0-9]+[.][0-9]{2}$')"
+  expr: "child IS NOT NULL AND child <> '' AND NOT REGEXP_LIKE(REPLACE(child, '$', ''), '^[0-9]+([.][0-9]{1,2})?$')"
   detail_columns: [child, price]
-  message: "child price is not two decimal places"
+  message: "child price has more than 2 decimal places"
+  note: "Merged 2026-09-17, same relaxation as FMT_PRICE_DECIMALS."
 
 - id: FMT_SENIOR_DECIMALS
-  name: senior not 2 decimal places
+  name: senior price has more than 2 decimal places
   class: format
-  severity: high
-  status: calibration
-  blocked_by: Q10
+  severity: critical
+  status: active
   requires: [senior]
-  expr: "senior IS NOT NULL AND senior <> '' AND NOT REGEXP_LIKE(REPLACE(senior, '$', ''), '^[0-9]+[.][0-9]{2}$')"
+  expr: "senior IS NOT NULL AND senior <> '' AND NOT REGEXP_LIKE(REPLACE(senior, '$', ''), '^[0-9]+([.][0-9]{1,2})?$')"
   detail_columns: [senior, price]
-  message: "senior price is not two decimal places"
-
-- id: FMT_CHILD_FLOAT_NOISE
-  name: child has 3 or more decimals
-  class: format
-  severity: critical
-  status: active
-  requires: [child]
-  expr: "REGEXP_LIKE(REPLACE(child, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
-  detail_columns: [child]
-  message: "child price carries floating point noise"
-
-- id: FMT_SENIOR_FLOAT_NOISE
-  name: senior has 3 or more decimals
-  class: format
-  severity: critical
-  status: active
-  requires: [senior]
-  expr: "REGEXP_LIKE(REPLACE(senior, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
-  detail_columns: [senior]
-  message: "senior price carries floating point noise"
+  message: "senior price has more than 2 decimal places"
+  note: "Merged 2026-09-17, same relaxation as FMT_PRICE_DECIMALS."
 
 - id: FMT_ZIP_US
   name: US row with invalid zip

@@ -487,11 +487,179 @@ rules:
   severity: medium
   status: active
   requires: [language_format]
-  allowed: ["NA", "English Dubbed"]
+  allowed:
+    - NA
+    - Arabic Dubbed
+    - Arabic Dubbed with English Subtitles
+    - Arabic Subtitles
+    - Bengali Dubbed
+    - Bengali Dubbed with English Subtitles
+    - Bengali Subtitles
+    - Bhutanese Dubbed with English Subtitles
+    - Bulgarian, French & English Dubbed with English Subtitles
+    - Bulgarian, French & English Dubbed with French Subtitles
+    - Cantonese Dubbed
+    - Cantonese Dubbed with Chinese & English Subtitles
+    - Cantonese Dubbed with English Subtitles
+    - Cantonese Subtitles
+    - Catalan Dubbed with English Subtitles
+    - Chinese & English Subtitles
+    - Chinese Dubbed with Chinese & English Subtitles
+    - Chinese Dubbed with English Subtitles
+    - Chinese Subtitles
+    - Danish Dubbed with English Subtitles
+    - Danish Subtitles
+    - English & Arabic Subtitles
+    - English & Bengali Dubbed with English Subtitles
+    - English & Cantonese Dubbed with English Subtitles
+    - English & Dutch Dubbed
+    - English & French Dubbed with English Subtitles
+    - English & French Dubbed with French Subtitles
+    - English & French Subtitles
+    - English & Hindi Dubbed
+    - English & Hungarian Subtitles
+    - English & Japanese Dubbed
+    - English & Mandarin Dubbed with English Subtitles
+    - English & Persian Dubbed with Persian Subtitles
+    - English & Somali Dubbed with English Subtitles
+    - English & Spanish Subtitles
+    - English & Swahili Dubbed with English Subtitles
+    - English & Tagalog Dubbed with English Subtitles
+    - English Dubbed
+    - English Dubbed & Subtitles
+    - English Dubbed with Chinese & English Subtitles
+    - English Dubbed with French Subtitles
+    - English Dubbed with Hindi Subtitles
+    - English Dubbed with Korean Subtitles
+    - English Dubbed with Mandarin Subtitles
+    - English Dubbed with Spanish Subtitles
+    - English Subtitles
+    - English with French Subtitles
+    - Filipino Dubbed
+    - Filipino Dubbed with English Subtitles
+    - Finnish Dubbed with English Subtitles
+    - French & English Dubbed with French Subtitles
+    - French Dubbed
+    - French Dubbed & Subtitles
+    - French Dubbed with English Subtitles
+    - French Subtitles
+    - German Dubbed
+    - German Dubbed with English Subtitles
+    - German Dubbed with French Subtitles
+    - Greek Dubbed with English Subtitles
+    - Greek Subtitles
+    - Gujarati Dubbed
+    - Gujarati Dubbed with English Subtitles
+    - Haryanavi Dubbed
+    - Haryanavi Dubbed with English Subtitles
+    - Haryanvi Dubbed with English Subtitles
+    - Hebrew Dubbed with English Subtitles
+    - Hindi & Telugu Dubbed
+    - Hindi Dubbed
+    - Hindi Dubbed with English Subtitles
+    - Hindi Subtitles
+    - Hungarian & Romanian Dubbed with English Subtitles
+    - Hungarian Dubbed with English Subtitles
+    - Icelandic Dubbed
+    - Icelandic Dubbed with English Subtitles
+    - Icelandic Subtitles
+    - Indonesian Dubbed with English Subtitles
+    - Irish Subtitles
+    - Italian Dubbed
+    - Italian Dubbed with English Subtitles
+    - Italian Subtitles
+    - Italien Dubbed with French Subtitles
+    - Japanese & English Dubbed with English Subtitles
+    - Japanese & English Subtitles
+    - Japanese Dubbed
+    - Japanese Dubbed with English Subtitles
+    - Japanese Dubbed with Spanish Subtitles
+    - Japanese Subtitles
+    - Kannada Dubbed
+    - Kannada Dubbed with English Subtitles
+    - Kannada Subtitles
+    - Korean & English Dubbed with English Subtitles
+    - Korean Dubbed
+    - Korean Dubbed with English Subtitles
+    - Korean Dubbed with Spanish Subtitles
+    - Korean Subtitles
+    - Macedonian Dubbed with English Subtitles
+    - Malayalam Dubbed
+    - Malayalam Dubbed with English Subtitles
+    - Malayalam Subtitles
+    - Mandarin & English Subtitles
+    - Mandarin Dubbed
+    - Mandarin Dubbed with Chinese & English Subtitles
+    - Mandarin Dubbed with English Subtitles
+    - Mandarin Subtitles
+    - Marathi Dubbed
+    - Marathi Dubbed with English Subtitles
+    - Marathi Subtitles
+    - Nepalese Dubbed with English Subtitles
+    - Nepali Dubbed
+    - Nepali Dubbed with English Subtitles
+    - Nepali Subtitles
+    - Nigerian Dubbed
+    - Norwegian Dubbed
+    - Norwegian Dubbed with English Subtitles
+    - Norwegian Subtitles
+    - Original Version with English Subtitles
+    - Original Version with French Subtitles
+    - Persian Dubbed
+    - Persian Dubbed with English Subtitles
+    - Persian Subtitles
+    - Polish Dubbed with English Subtitles
+    - Portuguese Dubbed
+    - Portuguese Dubbed with English Subtitles
+    - Portuguese Subtitles
+    - Punjabi Dubbed
+    - Punjabi Dubbed with English Subtitles
+    - Punjabi Subtitles
+    - Russian Dubbed
+    - Russian Dubbed with English Subtitles
+    - Russian Dubbed with French Subtitles
+    - Sinhala Dubbed with English Subtitles
+    - Spanish & English Subtitles
+    - Spanish Dubbed
+    - Spanish Dubbed & Subtitles
+    - Spanish Dubbed with English Subtitles
+    - Spanish Dubbed with French Subtitles
+    - Spanish Subtitles
+    - Swedish Dubbed with English Subtitles
+    - Tagalog Dubbed
+    - Tagalog Dubbed with English Subtitles
+    - Tamil & Telugu Dubbed
+    - Tamil Dubbed
+    - Tamil Dubbed with English Subtitles
+    - Tamil Subtitles
+    - Telugu Dubbed
+    - Telugu Dubbed & Subtitles
+    - Telugu Dubbed with English Subtitles
+    - Telugu Subtitles
+    - Teochew & Chinese Dubbed with English Subtitles
+    - Teochew Dubbed with English Subtitles
+    - Thai Dubbed
+    - Thai Dubbed with English Subtitles
+    - Turkish Dubbed with English Subtitles
+    - Urdu Dubbed
+    - Urdu Dubbed with English Subtitles
+    - Vietnamese & Thai Subtitles
+    - Vietnamese Dubbed
+    - Vietnamese Dubbed with English Subtitles
+    - Vietnamese Subtitles
   column: language_format
   detail_columns: [language_format, movie_format, screen_format]
   message: "unexpected language_format value"
-  note: "NA is a valid value, not a missing-data marker. language_format can never legitimately be IMAX -- that's a screen_format value (confirmed Q5)."
+  note: >
+    Widened 2026-09-17 to the master list in ~/Downloads/Language
+    Formats.csv (158 values), plus "NA" (not in the CSV, but confirmed
+    valid, not a missing-data marker -- would reintroduce a known-wrong
+    flag if dropped). language_format can never legitimately be IMAX --
+    that is a screen_format value (confirmed Q5). Checked against real
+    dev data: only NULL/blank fall outside this list, no gap like
+    DOM_SCREEN_FORMAT's. New language formats are added regularly; a
+    live sync (MongoDB or otherwise) is deferred to a later stage --
+    this is a static list for now.
 
 - id: DOM_DMA
   name: dma not in the canonical market list

@@ -100,15 +100,47 @@ rules:
   message: "theater name missing"
 
 - id: PRES_AUDITORIUM
-  name: auditorium blank
-  class: presence
+  name: theater stopped reporting auditorium
+  class: custom
   severity: medium
   status: active
-  requires: [auditorium]
-  expr: "auditorium IS NULL OR TRIM(auditorium) = ''"
-  detail_columns: [theater_id, auditorium]
-  message: "auditorium missing"
-  note: "No canonical form beyond non-blank -- '2', '02' and 'imax' are all confirmed valid values, so this rule only checks presence, not shape."
+  requires: [theater_name, auditorium, running_date, date_sh]
+  detail_columns: [theater_name]
+  message: "theater had auditorium data before but is missing it today"
+  note: >
+    Replaced 2026-09-17 (query from Aarti) -- the old check (any blank
+    auditorium) fired constantly for theaters (e.g. AMC) that never report
+    auditorium at all, which isn't a defect. This instead only flags a
+    theater that USED to report auditorium and has now stopped -- a real
+    regression. Deliberately always uses CURRENT_DATE(), not this run's
+    --from/--to window, so: (1) the report's %-of-window column isn't
+    meaningful for this rule, (2) a retrospective/backfill run still checks
+    against right-now, not the range being scanned, and (3) this resurfaces
+    the same standing violations on every daily run rather than only new
+    ones. All intentional, matching the query as given.
+  sql: |
+    SELECT theater_name
+    FROM (
+        SELECT
+            theater_name,
+            MAX(CASE WHEN running_date < CURRENT_DATE()
+                      AND auditorium IS NOT NULL
+                      AND TRIM(auditorium) <> ''
+                     THEN 1 ELSE 0 END) AS had_auditorium_before,
+            MAX(CASE WHEN running_date = CURRENT_DATE() THEN 1 ELSE 0 END) AS has_row_today,
+            MAX(CASE WHEN running_date = CURRENT_DATE()
+                      AND auditorium IS NOT NULL
+                      AND TRIM(auditorium) <> ''
+                     THEN 1 ELSE 0 END) AS has_auditorium_today
+        FROM {{table}}
+        WHERE date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
+          AND running_date <= CURRENT_DATE()
+        GROUP BY theater_name
+    ) x
+    WHERE had_auditorium_before = 1
+      AND has_row_today = 1
+      AND has_auditorium_today = 0
+    ORDER BY theater_name
 
 - id: FMT_RUNNING_DATE
   name: running_date not equal to date of last_updates

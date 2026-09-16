@@ -912,8 +912,8 @@ rules:
   detail_columns: [title, release_date]
   message: "one title maps to more than one release date"
 
-- id: XROW_DELTA_RECONCILE
-  name: delta does not reconcile against the previous crawl
+- id: XROW_WRONG_AVAILABLE
+  name: available delta does not reconcile against the previous crawl
   class: custom
   severity: critical
   status: active

@@ -336,10 +336,114 @@ rules:
   severity: medium
   status: active
   requires: [screen_format]
-  allowed: [Standard, IMAX, "Elite Golden Ticket"]
+  allowed:
+    - 4D E-Motion
+    - 4DX
+    - ACX
+    - ACX Apple
+    - ACX Select
+    - AMC Prime
+    - APEX Atrium
+    - ARQ WYO
+    - AVX Santikos
+    - AXIS
+    - BIGSCENE
+    - BTX
+    - BigD AMC
+    - C Premium
+    - C Premium XL
+    - CBX Citybase
+    - CINE 1
+    - CSXL
+    - CWX
+    - Cine XL Harkins
+    - Cnmk XD
+    - DCX
+    - DFX Galaxy
+    - Dolby Cinema
+    - EMAX
+    - EPEX Starlight
+    - EPIC
+    - EVX
+    - EXTRA Ldmrk Canada
+    - Eiffel Screen
+    - Elite Gold
+    - Elite Golden Ticket
+    - Encore Phoenix
+    - Epic XL
+    - FDX Paragon
+    - FTX
+    - Finity
+    - GTX Georgia
+    - Grand Aud
+    - Grand DLX O'Neil
+    - Grand Infinity Regal
+    - HDR by Barco
+    - HPX CinemaTimes
+    - IMAX
+    - Iconic Screen
+    - Infinity Screen
+    - LOOK PX
+    - Laser Ultra
+    - Luxe at Landmark cinemas
+    - MBG Superior
+    - MX4D
+    - MXL
+    - MacroXE Cinepolis
+    - Mega Screen
+    - Monster Emagine
+    - Onyx
+    - Onyx LED
+    - PDX Stone
+    - PlatinumX Megaplex
+    - Premium Large Format
+    - Premium Theatre
+    - RCXtreme
+    - REX Regency
+    - ReelMax
+    - SBX Sun Basin
+    - SDX
+    - SPX
+    - ST Immersive
+    - SXS Southeast
+    - ScreenX
+    - Signature Screen B&B
+    - Sony DC
+    - Standard
+    - Studio LUXX
+    - SuperScreen Marcus
+    - THX Ultimate
+    - TITAN LUXE
+    - TSX Thomas
+    - The Big Show Alamo
+    - Titan XC Reading
+    - UDC SR Entertainment
+    - ULTRAV
+    - UltraAVX Cineplex
+    - UltraScreen Marcus
+    - Warren Grand Regal
+    - XDX
+    - XL Screen
+    - XL at AMC
+    - XLD Fridley
+    - XPX
+    - XPlus NAM
+    - XQ Classic
+    - XTR
+    - XTS
+    - XXDXP Atlas
+    - Xtreme
   column: screen_format
   detail_columns: [screen_format, movie_format]
   message: "unexpected screen format value"
+  note: >
+    Widened 2026-09-17 to Aarti's 96-value master list
+    (~/Downloads/amenities (1).xlsx), used exactly as given. Known gap,
+    confirmed against real dev data and accepted deliberately: several
+    real, high-volume screen_format values are NOT in her list and will
+    show up as findings until she updates it -- e.g. "Dolby Atmos"
+    (70,845 rows in a spot check), "RPX Regal" (101,196), "VIP Cineplex"
+    (37,496), "GIANT SCREEN", "JBX Brenden", "GDX", "Grand Screen".
 
 - id: DOM_MOVIE_FORMAT
   name: movie_format outside known set

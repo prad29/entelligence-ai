@@ -242,15 +242,16 @@ rules:
   class: format
   severity: low
   status: active
-  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, amenities_new, auditorium]
+  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, amenities, auditorium]
   expr: >
     circuit_name <> TRIM(circuit_name) OR theater_name <> TRIM(theater_name)
     OR theater_address <> TRIM(theater_address) OR theater_city <> TRIM(theater_city)
     OR theater_state <> TRIM(theater_state) OR theater_zip <> TRIM(theater_zip)
     OR title <> TRIM(title) OR dma <> TRIM(dma) OR studio_name <> TRIM(studio_name)
-    OR amenities_new <> TRIM(amenities_new) OR auditorium <> TRIM(auditorium)
-  detail_columns: [theater_name, theater_address, title, amenities_new]
+    OR amenities <> TRIM(amenities) OR auditorium <> TRIM(auditorium)
+  detail_columns: [theater_name, theater_address, title, amenities]
   message: "text column has leading or trailing whitespace"
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
 
 - id: JUNK_DOUBLE_SPACE
   name: doubled internal space
@@ -747,14 +748,15 @@ rules:
   note: "Two sample theaters had Ontario and Quebec addresses with country USA."
 
 - id: XCOL_SEATING_AMENITIES
-  name: seating_type contradicts amenities_new text
+  name: seating_type contradicts amenities text
   class: cross_column
   severity: medium
   status: active
-  requires: [seating_type, amenities_new]
-  expr: "(seating_type = 'Reserved' AND LOWER(amenities_new) LIKE '%non reserved%') OR (seating_type = 'Non Reserved' AND LOWER(amenities_new) LIKE '%reserved seating%')"
-  detail_columns: [seating_type, amenities_new]
+  requires: [seating_type, amenities]
+  expr: "(seating_type = 'Reserved' AND LOWER(amenities) LIKE '%non reserved%') OR (seating_type = 'Non Reserved' AND LOWER(amenities) LIKE '%reserved seating%')"
+  detail_columns: [seating_type, amenities]
   message: "seating type contradicts the amenities text"
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
 
 - id: XCOL_SHOW_BEFORE_RELEASE
   name: show date before release date
@@ -778,24 +780,26 @@ rules:
   note: "In the sample these were blank on exactly the same rows, so this fires only when that pairing breaks."
 
 - id: XCOL_AMENITIES_LEADING_PIPE
-  name: amenities_new begins with an empty token
+  name: amenities begins with an empty token
   class: cross_column
   severity: medium
   status: active
-  requires: [amenities_new]
-  expr: "TRIM(amenities_new) LIKE '|%'"
-  detail_columns: [amenities_new]
+  requires: [amenities]
+  expr: "TRIM(amenities) LIKE '|%'"
+  detail_columns: [amenities]
   message: "amenities list begins with an empty token"
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
 
 - id: XCOL_AMENITIES_RATING
-  name: amenities_new embeds a rating and runtime
+  name: amenities embeds a rating and runtime
   class: cross_column
   severity: medium
   status: active
-  requires: [amenities_new]
-  expr: "REGEXP_LIKE(amenities_new, '(^|[|])[[:space:]]*(G|PG|PG-13|R|NC-17)/')"
-  detail_columns: [amenities_new]
+  requires: [amenities]
+  expr: "REGEXP_LIKE(amenities, '(^|[|])[[:space:]]*(G|PG|PG-13|R|NC-17)/')"
+  detail_columns: [amenities]
   message: "amenities field carries a rating and runtime instead of amenity tokens"
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
 
 - id: XCOL_DATE_SH_RECENCY
   name: date_sh older than yesterday

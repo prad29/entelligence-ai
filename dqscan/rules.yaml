@@ -117,7 +117,10 @@ rules:
     meaningful for this rule, (2) a retrospective/backfill run still checks
     against right-now, not the range being scanned, and (3) this resurfaces
     the same standing violations on every daily run rather than only new
-    ones. All intentional, matching the query as given.
+    ones. All intentional, matching the query as given. Also treats the
+    literal text 'NULL' as not-reporting (2026-09-17) -- 50 rows in a dev
+    sample had auditorium stored as the 4-character string NULL, which the
+    old TRIM<>'' check let through as if the theater were reporting fine.
   sql: |
     SELECT theater_name
     FROM (
@@ -126,11 +129,13 @@ rules:
             MAX(CASE WHEN running_date < CURRENT_DATE()
                       AND auditorium IS NOT NULL
                       AND TRIM(auditorium) <> ''
+                      AND UPPER(TRIM(auditorium)) <> 'NULL'
                      THEN 1 ELSE 0 END) AS had_auditorium_before,
             MAX(CASE WHEN running_date = CURRENT_DATE() THEN 1 ELSE 0 END) AS has_row_today,
             MAX(CASE WHEN running_date = CURRENT_DATE()
                       AND auditorium IS NOT NULL
                       AND TRIM(auditorium) <> ''
+                      AND UPPER(TRIM(auditorium)) <> 'NULL'
                      THEN 1 ELSE 0 END) AS has_auditorium_today
         FROM {{table}}
         WHERE date_sh >= CURRENT_DATE() - INTERVAL 1 DAY

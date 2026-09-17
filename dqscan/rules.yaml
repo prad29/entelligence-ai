@@ -172,18 +172,6 @@ rules:
   detail_columns: [time_sh]
   message: "showtime time is not 24-hour HH:MM"
 
-- id: FMT_PRICE_SYMBOL
-  name: price carries a currency symbol
-  class: format
-  severity: medium
-  status: calibration
-  blocked_by: Q10
-  requires: [price]
-  expr: "price LIKE '%$%'"
-  detail_columns: [price]
-  message: "price stores a currency symbol"
-  note: "Every populated price in the sample carried a dollar sign. Expect this to match nearly every row. Keep it out of the digest until Q10 is answered."
-
 - id: FMT_PRICE_DECIMALS
   name: price has more than 2 decimal places
   class: format

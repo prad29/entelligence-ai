@@ -987,6 +987,30 @@ rules:
     WHERE prev_actual_checkered IS NOT NULL
       AND checkered <> actual_checkered - prev_actual_checkered
 
+- id: XROW_WRONG_TOTAL_SEATS
+  name: total_seats delta does not reconcile against the previous crawl
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, running_date, total_seats, actual_total_seats, ticket_availability]
+  detail_columns: [mm_id, running_date, total_seats, actual_total_seats]
+  message: "capacity change does not match the movement in the absolute count"
+  note: >
+    Added 2026-09-17, mirrors XROW_WRONG_AVAILABLE/RESERVED/CHECKERED's
+    reconciliation check for the total_seats/actual_total_seats pair -- the
+    fourth member of the same family. Measured 35 of 373,542 comparable rows
+    (0.0094%) on a dev sample day.
+  sql: |
+    SELECT mm_id, running_date, total_seats, actual_total_seats, prev_actual_total_seats
+    FROM (
+      SELECT mm_id, running_date, total_seats, actual_total_seats,
+             LAG(actual_total_seats) OVER (PARTITION BY mm_id ORDER BY running_date) AS prev_actual_total_seats
+      FROM {{table}}
+      WHERE {{window}} AND ticket_availability <> 'Crawdads' AND total_seats IS NOT NULL
+    ) w
+    WHERE prev_actual_total_seats IS NOT NULL
+      AND total_seats <> actual_total_seats - prev_actual_total_seats
+
 - id: XROW_CRAWL_GAP
   name: showtime missing a day in its crawl series
   class: custom

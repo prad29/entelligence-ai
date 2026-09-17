@@ -155,7 +155,9 @@ def _condition_for_rule(
         )
         return condition, params
 
-    expr = _substitute_placeholders(rule.expr, allowlist_regex=allowlist_regex, ca_provinces=ca_provinces)
+    expr = _substitute_placeholders(
+        rule.expr, allowlist_regex=rule.allowlist_regex or allowlist_regex, ca_provinces=ca_provinces
+    )
     return expr, {}
 
 

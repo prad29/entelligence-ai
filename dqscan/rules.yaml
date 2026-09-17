@@ -100,15 +100,47 @@ rules:
   message: "theater name missing"
 
 - id: PRES_AUDITORIUM
-  name: auditorium blank
-  class: presence
+  name: theater stopped reporting auditorium
+  class: custom
   severity: medium
   status: active
-  requires: [auditorium]
-  expr: "auditorium IS NULL OR TRIM(auditorium) = ''"
-  detail_columns: [theater_id, auditorium]
-  message: "auditorium missing"
-  note: "No canonical form beyond non-blank -- '2', '02' and 'imax' are all confirmed valid values, so this rule only checks presence, not shape."
+  requires: [theater_name, auditorium, running_date, date_sh]
+  detail_columns: [theater_name]
+  message: "theater had auditorium data before but is missing it today"
+  note: >
+    Replaced 2026-09-17 (query from Aarti) -- the old check (any blank
+    auditorium) fired constantly for theaters (e.g. AMC) that never report
+    auditorium at all, which isn't a defect. This instead only flags a
+    theater that USED to report auditorium and has now stopped -- a real
+    regression. Deliberately always uses CURRENT_DATE(), not this run's
+    --from/--to window, so: (1) the report's %-of-window column isn't
+    meaningful for this rule, (2) a retrospective/backfill run still checks
+    against right-now, not the range being scanned, and (3) this resurfaces
+    the same standing violations on every daily run rather than only new
+    ones. All intentional, matching the query as given.
+  sql: |
+    SELECT theater_name
+    FROM (
+        SELECT
+            theater_name,
+            MAX(CASE WHEN running_date < CURRENT_DATE()
+                      AND auditorium IS NOT NULL
+                      AND TRIM(auditorium) <> ''
+                     THEN 1 ELSE 0 END) AS had_auditorium_before,
+            MAX(CASE WHEN running_date = CURRENT_DATE() THEN 1 ELSE 0 END) AS has_row_today,
+            MAX(CASE WHEN running_date = CURRENT_DATE()
+                      AND auditorium IS NOT NULL
+                      AND TRIM(auditorium) <> ''
+                     THEN 1 ELSE 0 END) AS has_auditorium_today
+        FROM {{table}}
+        WHERE date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
+          AND running_date <= CURRENT_DATE()
+        GROUP BY theater_name
+    ) x
+    WHERE had_auditorium_before = 1
+      AND has_row_today = 1
+      AND has_auditorium_today = 0
+    ORDER BY theater_name
 
 - id: FMT_RUNNING_DATE
   name: running_date not equal to date of last_updates
@@ -153,69 +185,37 @@ rules:
   note: "Every populated price in the sample carried a dollar sign. Expect this to match nearly every row. Keep it out of the digest until Q10 is answered."
 
 - id: FMT_PRICE_DECIMALS
-  name: price not 2 decimal places
-  class: format
-  severity: high
-  status: calibration
-  blocked_by: Q10
-  requires: [price]
-  expr: "price IS NOT NULL AND price <> '' AND NOT REGEXP_LIKE(REPLACE(price, '$', ''), '^[0-9]+[.][0-9]{2}$')"
-  detail_columns: [price]
-  message: "price is not two decimal places"
-  note: "About 22% of sample rows fail this. One-decimal values like $7.0 dominate."
-
-- id: FMT_PRICE_FLOAT_NOISE
-  name: price has 3 or more decimals
+  name: price has more than 2 decimal places
   class: format
   severity: critical
   status: active
   requires: [price]
-  expr: "REGEXP_LIKE(REPLACE(price, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
+  expr: "price IS NOT NULL AND price <> '' AND NOT REGEXP_LIKE(REPLACE(price, '$', ''), '^[0-9]+([.][0-9]{1,2})?$')"
   detail_columns: [price]
-  message: "price carries floating point noise"
-  note: "A defect under any reading of Q10. Sample values include $16.490000000000002."
+  message: "price has more than 2 decimal places"
+  note: "Merged 2026-09-17: was two rules (exactly-2-required, blocked by Q10; and 3+-decimal noise). Resolves Q10 -- up to 2 decimals is valid (e.g. $7, $7.0, $7.00), only 3+ decimals (e.g. $16.490000000000002) is a defect."
 
 - id: FMT_CHILD_DECIMALS
-  name: child not 2 decimal places
+  name: child price has more than 2 decimal places
   class: format
-  severity: high
-  status: calibration
-  blocked_by: Q10
+  severity: critical
+  status: active
   requires: [child]
-  expr: "child IS NOT NULL AND child <> '' AND NOT REGEXP_LIKE(REPLACE(child, '$', ''), '^[0-9]+[.][0-9]{2}$')"
+  expr: "child IS NOT NULL AND child <> '' AND NOT REGEXP_LIKE(REPLACE(child, '$', ''), '^[0-9]+([.][0-9]{1,2})?$')"
   detail_columns: [child, price]
-  message: "child price is not two decimal places"
+  message: "child price has more than 2 decimal places"
+  note: "Merged 2026-09-17, same relaxation as FMT_PRICE_DECIMALS."
 
 - id: FMT_SENIOR_DECIMALS
-  name: senior not 2 decimal places
+  name: senior price has more than 2 decimal places
   class: format
-  severity: high
-  status: calibration
-  blocked_by: Q10
+  severity: critical
+  status: active
   requires: [senior]
-  expr: "senior IS NOT NULL AND senior <> '' AND NOT REGEXP_LIKE(REPLACE(senior, '$', ''), '^[0-9]+[.][0-9]{2}$')"
+  expr: "senior IS NOT NULL AND senior <> '' AND NOT REGEXP_LIKE(REPLACE(senior, '$', ''), '^[0-9]+([.][0-9]{1,2})?$')"
   detail_columns: [senior, price]
-  message: "senior price is not two decimal places"
-
-- id: FMT_CHILD_FLOAT_NOISE
-  name: child has 3 or more decimals
-  class: format
-  severity: critical
-  status: active
-  requires: [child]
-  expr: "REGEXP_LIKE(REPLACE(child, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
-  detail_columns: [child]
-  message: "child price carries floating point noise"
-
-- id: FMT_SENIOR_FLOAT_NOISE
-  name: senior has 3 or more decimals
-  class: format
-  severity: critical
-  status: active
-  requires: [senior]
-  expr: "REGEXP_LIKE(REPLACE(senior, '$', ''), '^[0-9]+[.][0-9]{3,}$')"
-  detail_columns: [senior]
-  message: "senior price carries floating point noise"
+  message: "senior price has more than 2 decimal places"
+  note: "Merged 2026-09-17, same relaxation as FMT_PRICE_DECIMALS."
 
 - id: FMT_ZIP_US
   name: US row with invalid zip
@@ -280,9 +280,11 @@ rules:
   severity: medium
   status: active
   requires: [theater_name]
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!–—-]*$"
   expr: "NOT REGEXP_LIKE(theater_name, '{{allowlist_regex}}')"
   detail_columns: [theater_name]
   message: "theater name contains a character outside the allowlist"
+  note: "Own allowlist (not the pack default) -- additionally allows ! and en/em dash (2026-09-17)."
 
 - id: JUNK_CHARS_ADDRESS
   name: character outside allowlist in theater_address
@@ -300,9 +302,11 @@ rules:
   severity: medium
   status: active
   requires: [title]
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|@-]*$"
   expr: "NOT REGEXP_LIKE(title, '{{allowlist_regex}}')"
   detail_columns: [title]
   message: "title contains a character outside the allowlist"
+  note: "Own allowlist (not the pack default) -- additionally allows @ (2026-09-17)."
 
 - id: DOM_TICKET_AVAILABILITY
   name: ticket_availability outside known set
@@ -332,10 +336,114 @@ rules:
   severity: medium
   status: active
   requires: [screen_format]
-  allowed: [Standard, IMAX, "Elite Golden Ticket"]
+  allowed:
+    - 4D E-Motion
+    - 4DX
+    - ACX
+    - ACX Apple
+    - ACX Select
+    - AMC Prime
+    - APEX Atrium
+    - ARQ WYO
+    - AVX Santikos
+    - AXIS
+    - BIGSCENE
+    - BTX
+    - BigD AMC
+    - C Premium
+    - C Premium XL
+    - CBX Citybase
+    - CINE 1
+    - CSXL
+    - CWX
+    - Cine XL Harkins
+    - Cnmk XD
+    - DCX
+    - DFX Galaxy
+    - Dolby Cinema
+    - EMAX
+    - EPEX Starlight
+    - EPIC
+    - EVX
+    - EXTRA Ldmrk Canada
+    - Eiffel Screen
+    - Elite Gold
+    - Elite Golden Ticket
+    - Encore Phoenix
+    - Epic XL
+    - FDX Paragon
+    - FTX
+    - Finity
+    - GTX Georgia
+    - Grand Aud
+    - Grand DLX O'Neil
+    - Grand Infinity Regal
+    - HDR by Barco
+    - HPX CinemaTimes
+    - IMAX
+    - Iconic Screen
+    - Infinity Screen
+    - LOOK PX
+    - Laser Ultra
+    - Luxe at Landmark cinemas
+    - MBG Superior
+    - MX4D
+    - MXL
+    - MacroXE Cinepolis
+    - Mega Screen
+    - Monster Emagine
+    - Onyx
+    - Onyx LED
+    - PDX Stone
+    - PlatinumX Megaplex
+    - Premium Large Format
+    - Premium Theatre
+    - RCXtreme
+    - REX Regency
+    - ReelMax
+    - SBX Sun Basin
+    - SDX
+    - SPX
+    - ST Immersive
+    - SXS Southeast
+    - ScreenX
+    - Signature Screen B&B
+    - Sony DC
+    - Standard
+    - Studio LUXX
+    - SuperScreen Marcus
+    - THX Ultimate
+    - TITAN LUXE
+    - TSX Thomas
+    - The Big Show Alamo
+    - Titan XC Reading
+    - UDC SR Entertainment
+    - ULTRAV
+    - UltraAVX Cineplex
+    - UltraScreen Marcus
+    - Warren Grand Regal
+    - XDX
+    - XL Screen
+    - XL at AMC
+    - XLD Fridley
+    - XPX
+    - XPlus NAM
+    - XQ Classic
+    - XTR
+    - XTS
+    - XXDXP Atlas
+    - Xtreme
   column: screen_format
   detail_columns: [screen_format, movie_format]
   message: "unexpected screen format value"
+  note: >
+    Widened 2026-09-17 to Aarti's 96-value master list
+    (~/Downloads/amenities (1).xlsx), used exactly as given. Known gap,
+    confirmed against real dev data and accepted deliberately: several
+    real, high-volume screen_format values are NOT in her list and will
+    show up as findings until she updates it -- e.g. "Dolby Atmos"
+    (70,845 rows in a spot check), "RPX Regal" (101,196), "VIP Cineplex"
+    (37,496), "GIANT SCREEN", "JBX Brenden", "GDX", "Grand Screen".
 
 - id: DOM_MOVIE_FORMAT
   name: movie_format outside known set
@@ -379,11 +487,179 @@ rules:
   severity: medium
   status: active
   requires: [language_format]
-  allowed: ["NA", "English Dubbed"]
+  allowed:
+    - NA
+    - Arabic Dubbed
+    - Arabic Dubbed with English Subtitles
+    - Arabic Subtitles
+    - Bengali Dubbed
+    - Bengali Dubbed with English Subtitles
+    - Bengali Subtitles
+    - Bhutanese Dubbed with English Subtitles
+    - Bulgarian, French & English Dubbed with English Subtitles
+    - Bulgarian, French & English Dubbed with French Subtitles
+    - Cantonese Dubbed
+    - Cantonese Dubbed with Chinese & English Subtitles
+    - Cantonese Dubbed with English Subtitles
+    - Cantonese Subtitles
+    - Catalan Dubbed with English Subtitles
+    - Chinese & English Subtitles
+    - Chinese Dubbed with Chinese & English Subtitles
+    - Chinese Dubbed with English Subtitles
+    - Chinese Subtitles
+    - Danish Dubbed with English Subtitles
+    - Danish Subtitles
+    - English & Arabic Subtitles
+    - English & Bengali Dubbed with English Subtitles
+    - English & Cantonese Dubbed with English Subtitles
+    - English & Dutch Dubbed
+    - English & French Dubbed with English Subtitles
+    - English & French Dubbed with French Subtitles
+    - English & French Subtitles
+    - English & Hindi Dubbed
+    - English & Hungarian Subtitles
+    - English & Japanese Dubbed
+    - English & Mandarin Dubbed with English Subtitles
+    - English & Persian Dubbed with Persian Subtitles
+    - English & Somali Dubbed with English Subtitles
+    - English & Spanish Subtitles
+    - English & Swahili Dubbed with English Subtitles
+    - English & Tagalog Dubbed with English Subtitles
+    - English Dubbed
+    - English Dubbed & Subtitles
+    - English Dubbed with Chinese & English Subtitles
+    - English Dubbed with French Subtitles
+    - English Dubbed with Hindi Subtitles
+    - English Dubbed with Korean Subtitles
+    - English Dubbed with Mandarin Subtitles
+    - English Dubbed with Spanish Subtitles
+    - English Subtitles
+    - English with French Subtitles
+    - Filipino Dubbed
+    - Filipino Dubbed with English Subtitles
+    - Finnish Dubbed with English Subtitles
+    - French & English Dubbed with French Subtitles
+    - French Dubbed
+    - French Dubbed & Subtitles
+    - French Dubbed with English Subtitles
+    - French Subtitles
+    - German Dubbed
+    - German Dubbed with English Subtitles
+    - German Dubbed with French Subtitles
+    - Greek Dubbed with English Subtitles
+    - Greek Subtitles
+    - Gujarati Dubbed
+    - Gujarati Dubbed with English Subtitles
+    - Haryanavi Dubbed
+    - Haryanavi Dubbed with English Subtitles
+    - Haryanvi Dubbed with English Subtitles
+    - Hebrew Dubbed with English Subtitles
+    - Hindi & Telugu Dubbed
+    - Hindi Dubbed
+    - Hindi Dubbed with English Subtitles
+    - Hindi Subtitles
+    - Hungarian & Romanian Dubbed with English Subtitles
+    - Hungarian Dubbed with English Subtitles
+    - Icelandic Dubbed
+    - Icelandic Dubbed with English Subtitles
+    - Icelandic Subtitles
+    - Indonesian Dubbed with English Subtitles
+    - Irish Subtitles
+    - Italian Dubbed
+    - Italian Dubbed with English Subtitles
+    - Italian Subtitles
+    - Italien Dubbed with French Subtitles
+    - Japanese & English Dubbed with English Subtitles
+    - Japanese & English Subtitles
+    - Japanese Dubbed
+    - Japanese Dubbed with English Subtitles
+    - Japanese Dubbed with Spanish Subtitles
+    - Japanese Subtitles
+    - Kannada Dubbed
+    - Kannada Dubbed with English Subtitles
+    - Kannada Subtitles
+    - Korean & English Dubbed with English Subtitles
+    - Korean Dubbed
+    - Korean Dubbed with English Subtitles
+    - Korean Dubbed with Spanish Subtitles
+    - Korean Subtitles
+    - Macedonian Dubbed with English Subtitles
+    - Malayalam Dubbed
+    - Malayalam Dubbed with English Subtitles
+    - Malayalam Subtitles
+    - Mandarin & English Subtitles
+    - Mandarin Dubbed
+    - Mandarin Dubbed with Chinese & English Subtitles
+    - Mandarin Dubbed with English Subtitles
+    - Mandarin Subtitles
+    - Marathi Dubbed
+    - Marathi Dubbed with English Subtitles
+    - Marathi Subtitles
+    - Nepalese Dubbed with English Subtitles
+    - Nepali Dubbed
+    - Nepali Dubbed with English Subtitles
+    - Nepali Subtitles
+    - Nigerian Dubbed
+    - Norwegian Dubbed
+    - Norwegian Dubbed with English Subtitles
+    - Norwegian Subtitles
+    - Original Version with English Subtitles
+    - Original Version with French Subtitles
+    - Persian Dubbed
+    - Persian Dubbed with English Subtitles
+    - Persian Subtitles
+    - Polish Dubbed with English Subtitles
+    - Portuguese Dubbed
+    - Portuguese Dubbed with English Subtitles
+    - Portuguese Subtitles
+    - Punjabi Dubbed
+    - Punjabi Dubbed with English Subtitles
+    - Punjabi Subtitles
+    - Russian Dubbed
+    - Russian Dubbed with English Subtitles
+    - Russian Dubbed with French Subtitles
+    - Sinhala Dubbed with English Subtitles
+    - Spanish & English Subtitles
+    - Spanish Dubbed
+    - Spanish Dubbed & Subtitles
+    - Spanish Dubbed with English Subtitles
+    - Spanish Dubbed with French Subtitles
+    - Spanish Subtitles
+    - Swedish Dubbed with English Subtitles
+    - Tagalog Dubbed
+    - Tagalog Dubbed with English Subtitles
+    - Tamil & Telugu Dubbed
+    - Tamil Dubbed
+    - Tamil Dubbed with English Subtitles
+    - Tamil Subtitles
+    - Telugu Dubbed
+    - Telugu Dubbed & Subtitles
+    - Telugu Dubbed with English Subtitles
+    - Telugu Subtitles
+    - Teochew & Chinese Dubbed with English Subtitles
+    - Teochew Dubbed with English Subtitles
+    - Thai Dubbed
+    - Thai Dubbed with English Subtitles
+    - Turkish Dubbed with English Subtitles
+    - Urdu Dubbed
+    - Urdu Dubbed with English Subtitles
+    - Vietnamese & Thai Subtitles
+    - Vietnamese Dubbed
+    - Vietnamese Dubbed with English Subtitles
+    - Vietnamese Subtitles
   column: language_format
   detail_columns: [language_format, movie_format, screen_format]
   message: "unexpected language_format value"
-  note: "NA is a valid value, not a missing-data marker. language_format can never legitimately be IMAX -- that's a screen_format value (confirmed Q5)."
+  note: >
+    Widened 2026-09-17 to the master list in ~/Downloads/Language
+    Formats.csv (158 values), plus "NA" (not in the CSV, but confirmed
+    valid, not a missing-data marker -- would reintroduce a known-wrong
+    flag if dropped). language_format can never legitimately be IMAX --
+    that is a screen_format value (confirmed Q5). Checked against real
+    dev data: only NULL/blank fall outside this list, no gap like
+    DOM_SCREEN_FORMAT's. New language formats are added regularly; a
+    live sync (MongoDB or otherwise) is deferred to a later stage --
+    this is a static list for now.
 
 - id: DOM_DMA
   name: dma not in the canonical market list
@@ -636,8 +912,8 @@ rules:
   detail_columns: [title, release_date]
   message: "one title maps to more than one release date"
 
-- id: XROW_DELTA_RECONCILE
-  name: delta does not reconcile against the previous crawl
+- id: XROW_WRONG_AVAILABLE
+  name: available delta does not reconcile against the previous crawl
   class: custom
   severity: critical
   status: active
@@ -661,15 +937,38 @@ rules:
     WHERE prev_actual_available IS NOT NULL
       AND available <> actual_available - prev_actual_available
 
+- id: XROW_WRONG_RESERVED
+  name: reserved delta does not reconcile against the previous crawl
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, running_date, reserved, actual_reserved, ticket_availability, total_seats]
+  detail_columns: [mm_id, running_date, reserved, actual_reserved]
+  message: "reserved change does not match the movement in the absolute count"
+  note: >
+    Added 2026-09-17, mirrors XROW_WRONG_AVAILABLE's reconciliation check
+    for the reserved/actual_reserved pair instead of available/
+    actual_available. Same no-`id`-column rationale applies.
+  sql: |
+    SELECT mm_id, running_date, reserved, actual_reserved, prev_actual_reserved
+    FROM (
+      SELECT mm_id, running_date, reserved, actual_reserved,
+             LAG(actual_reserved) OVER (PARTITION BY mm_id ORDER BY running_date) AS prev_actual_reserved
+      FROM {{table}}
+      WHERE {{window}} AND ticket_availability <> 'Crawdads' AND total_seats IS NOT NULL
+    ) w
+    WHERE prev_actual_reserved IS NOT NULL
+      AND reserved <> actual_reserved - prev_actual_reserved
+
 - id: XROW_CRAWL_GAP
   name: showtime missing a day in its crawl series
   class: custom
   severity: low
-  status: active
+  status: dormant
   requires: [mm_id, running_date]
   detail_columns: [mm_id, first_seen, last_seen, days_present, days_expected]
   message: "showtime was not crawled every day between first and last sighting"
-  note: "May be normal depending on how the crawl is scheduled. Question 9."
+  note: "Disabled 2026-09-17 per request -- low value, may be normal depending on how the crawl is scheduled."
   sql: |
     SELECT mm_id,
            MIN(running_date) AS first_seen, MAX(running_date) AS last_seen,
@@ -707,7 +1006,7 @@ rules:
            OR ms.theater_city <> t.theater_city
            OR ms.theater_state <> t.theater_state)
 
-- id: XTAB_CIRCUIT_MASTER
+- id: XTAB_CIRCUIT_NAME
   name: circuit_name disagrees with mqproduction.theater_circuit
   class: cross_table
   severity: medium

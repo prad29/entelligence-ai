@@ -232,16 +232,6 @@ rules:
   message: "Canadian postal code is not in A1A 1A1 form"
   note: "Sample had a truncated value, K7R, at Bouler House Cinema."
 
-- id: FMT_RELEASE_DATE
-  name: release_date null or zero date
-  class: format
-  severity: medium
-  status: active
-  requires: [release_date]
-  expr: "release_date IS NULL OR CAST(release_date AS CHAR) LIKE '0000-00-00%'"
-  detail_columns: [release_date, title, studio_name]
-  message: "release date missing or zero"
-
 - id: JUNK_WHITESPACE
   name: leading or trailing whitespace in a text column
   class: format

@@ -1039,6 +1039,51 @@ rules:
     WHERE prev_actual_total_seats IS NOT NULL
       AND total_seats <> actual_total_seats - prev_actual_total_seats
 
+- id: XROW_DUP_MMID_NO_AUDITORIUM
+  name: same showtime crawled under different mm_id (no auditorium reported)
+  class: cross_row
+  severity: high
+  status: active
+  requires: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats, mm_id, auditorium, running_date, total_seats, amenities]
+  group_by: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats]
+  filter: >
+    (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
+    AND running_date IS NOT NULL AND total_seats IS NOT NULL
+    AND mm_id NOT IN (SELECT DISTINCT mm_id FROM movies_shows WHERE amenities LIKE '%D%Box%' OR amenities LIKE '%Dbox%')
+  having: "COUNT(DISTINCT mm_id) > 1"
+  detail_columns: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats, mm_id, auditorium]
+  message: "the same showtime appears to be crawled under more than one mm_id"
+  note: >
+    Added 2026-09-17, from a query provided by Aarti. Distinct from
+    XROW_DUPLICATE_SHOWTIME (which groups on mm_id+running_date -- the same
+    id repeated). This instead groups on the showtime's real-world identity
+    (no auditorium reported, e.g. AMC-style theaters) and catches the
+    opposite case: two different mm_ids for what looks like one real
+    showtime. Excludes D-Box mm_ids using `amenities` (Aarti's query used
+    amenities_new, which is 100% empty in dev data -- see the amenities_new
+    -> amenities fix elsewhere in this pack). Measured 0 groups on one dense
+    sample day but 87 groups over a 3-day window.
+
+- id: XROW_DUP_MMID_WITH_AUDITORIUM
+  name: same showtime crawled under different mm_id (auditorium reported)
+  class: cross_row
+  severity: high
+  status: active
+  requires: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format, mm_id, running_date, total_seats, amenities]
+  group_by: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format]
+  filter: >
+    NOT (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
+    AND running_date IS NOT NULL AND total_seats IS NOT NULL
+    AND mm_id NOT IN (SELECT DISTINCT mm_id FROM movies_shows WHERE amenities LIKE '%D%Box%' OR amenities LIKE '%Dbox%')
+  having: "COUNT(DISTINCT mm_id) > 1"
+  detail_columns: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format, mm_id]
+  message: "the same showtime appears to be crawled under more than one mm_id"
+  note: >
+    Added 2026-09-17, from a query provided by Aarti. Same rationale as
+    XROW_DUP_MMID_NO_AUDITORIUM, for theaters that do report auditorium
+    (included in the grouping key here). Measured 1,166 groups / 5,468 rows
+    (0.91%) on one dense sample day, 2,802 groups over a 3-day window.
+
 - id: XROW_CRAWL_GAP
   name: showtime missing a day in its crawl series
   class: custom

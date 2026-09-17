@@ -948,6 +948,29 @@ rules:
     WHERE prev_actual_reserved IS NOT NULL
       AND reserved <> actual_reserved - prev_actual_reserved
 
+- id: XROW_WRONG_CHECKERED
+  name: checkered delta does not reconcile against the previous crawl
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, running_date, checkered, actual_checkered, ticket_availability, total_seats]
+  detail_columns: [mm_id, running_date, checkered, actual_checkered]
+  message: "checkered change does not match the movement in the absolute count"
+  note: >
+    Added 2026-09-17, mirrors XROW_WRONG_AVAILABLE/XROW_WRONG_RESERVED's
+    reconciliation check for the checkered/actual_checkered pair. Same
+    no-`id`-column rationale applies.
+  sql: |
+    SELECT mm_id, running_date, checkered, actual_checkered, prev_actual_checkered
+    FROM (
+      SELECT mm_id, running_date, checkered, actual_checkered,
+             LAG(actual_checkered) OVER (PARTITION BY mm_id ORDER BY running_date) AS prev_actual_checkered
+      FROM {{table}}
+      WHERE {{window}} AND ticket_availability <> 'Crawdads' AND total_seats IS NOT NULL
+    ) w
+    WHERE prev_actual_checkered IS NOT NULL
+      AND checkered <> actual_checkered - prev_actual_checkered
+
 - id: XROW_CRAWL_GAP
   name: showtime missing a day in its crawl series
   class: custom

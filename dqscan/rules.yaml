@@ -210,6 +210,39 @@ rules:
   message: "senior price has more than 2 decimal places"
   note: "Merged 2026-09-17, same relaxation as FMT_PRICE_DECIMALS."
 
+- id: FMT_PRICE_SYMBOL
+  name: price uses a non-dollar symbol
+  class: format
+  severity: medium
+  status: active
+  requires: [price]
+  expr: "price IS NOT NULL AND price <> '' AND NOT REGEXP_LIKE(price, '^[$]?[0-9]')"
+  detail_columns: [price]
+  message: "price is not in dollar format"
+  note: "Added 2026-09-17. 0% finding rate in dev data as of this date -- every populated price/child/senior value currently starts with $ (or is the already-caught literal string 'NULL', see FMT_PRICE_DECIMALS). Added as forward-looking coverage per request, not an evidenced live defect."
+
+- id: FMT_CHILD_SYMBOL
+  name: child price uses a non-dollar symbol
+  class: format
+  severity: medium
+  status: active
+  requires: [child]
+  expr: "child IS NOT NULL AND child <> '' AND NOT REGEXP_LIKE(child, '^[$]?[0-9]')"
+  detail_columns: [child, price]
+  message: "child price is not in dollar format"
+  note: "Added 2026-09-17, same rationale as FMT_PRICE_SYMBOL."
+
+- id: FMT_SENIOR_SYMBOL
+  name: senior price uses a non-dollar symbol
+  class: format
+  severity: medium
+  status: active
+  requires: [senior]
+  expr: "senior IS NOT NULL AND senior <> '' AND NOT REGEXP_LIKE(senior, '^[$]?[0-9]')"
+  detail_columns: [senior, price]
+  message: "senior price is not in dollar format"
+  note: "Added 2026-09-17, same rationale as FMT_PRICE_SYMBOL."
+
 - id: FMT_ZIP_US
   name: US row with invalid zip
   class: format

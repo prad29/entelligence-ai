@@ -813,6 +813,18 @@ rules:
   message: "showtime date is older than allowed"
   note: "The checklist allows yesterday only for ticketing records. Cannot be written until the is_ticketing codes are defined."
 
+- id: XROW_MM_ID_IDENTITY
+  name: mm_id refers to more than one theater, time or title
+  class: cross_row
+  severity: critical
+  status: active
+  requires: [mm_id, theater_id, time_sh, title]
+  group_by: [mm_id]
+  having: "COUNT(DISTINCT theater_id) > 1 OR COUNT(DISTINCT time_sh) > 1 OR COUNT(DISTINCT title) > 1"
+  detail_columns: [mm_id, theater_id, time_sh, title, running_date]
+  message: "same mm_id refers to a different theater, time or title across crawl days"
+  note: "Added 2026-09-17. Measured 3 of 146,283 distinct mm_id (0.0021%) on a dev sample day. Undermines XROW_WRONG_AVAILABLE/RESERVED/CHECKERED/TOTAL_SEATS, which assume mm_id identifies the same showtime across running_date values."
+
 - id: XROW_DUPLICATE_SHOWTIME
   name: duplicate showtime on one crawl day
   class: cross_row

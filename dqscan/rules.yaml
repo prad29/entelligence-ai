@@ -290,11 +290,11 @@ rules:
   severity: medium
   status: active
   requires: [title]
-  allowlist_regex: "^[[:alnum:] &''.,/#():+|@-]*$"
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@-]*$"
   expr: "NOT REGEXP_LIKE(title, '{{allowlist_regex}}')"
   detail_columns: [title]
   message: "title contains a character outside the allowlist"
-  note: "Own allowlist (not the pack default) -- additionally allows @ (2026-09-17)."
+  note: "Own allowlist (not the pack default) -- additionally allows @ (2026-09-17) and ! (2026-09-17, titles like 'Six: The Musical Live!')."
 
 - id: DOM_TICKET_AVAILABILITY
   name: ticket_availability outside known set

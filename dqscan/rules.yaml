@@ -117,7 +117,10 @@ rules:
     meaningful for this rule, (2) a retrospective/backfill run still checks
     against right-now, not the range being scanned, and (3) this resurfaces
     the same standing violations on every daily run rather than only new
-    ones. All intentional, matching the query as given.
+    ones. All intentional, matching the query as given. Also treats the
+    literal text 'NULL' as not-reporting (2026-09-17) -- 50 rows in a dev
+    sample had auditorium stored as the 4-character string NULL, which the
+    old TRIM<>'' check let through as if the theater were reporting fine.
   sql: |
     SELECT theater_name
     FROM (
@@ -126,11 +129,13 @@ rules:
             MAX(CASE WHEN running_date < CURRENT_DATE()
                       AND auditorium IS NOT NULL
                       AND TRIM(auditorium) <> ''
+                      AND UPPER(TRIM(auditorium)) <> 'NULL'
                      THEN 1 ELSE 0 END) AS had_auditorium_before,
             MAX(CASE WHEN running_date = CURRENT_DATE() THEN 1 ELSE 0 END) AS has_row_today,
             MAX(CASE WHEN running_date = CURRENT_DATE()
                       AND auditorium IS NOT NULL
                       AND TRIM(auditorium) <> ''
+                      AND UPPER(TRIM(auditorium)) <> 'NULL'
                      THEN 1 ELSE 0 END) AS has_auditorium_today
         FROM {{table}}
         WHERE date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
@@ -172,18 +177,6 @@ rules:
   detail_columns: [time_sh]
   message: "showtime time is not 24-hour HH:MM"
 
-- id: FMT_PRICE_SYMBOL
-  name: price carries a currency symbol
-  class: format
-  severity: medium
-  status: calibration
-  blocked_by: Q10
-  requires: [price]
-  expr: "price LIKE '%$%'"
-  detail_columns: [price]
-  message: "price stores a currency symbol"
-  note: "Every populated price in the sample carried a dollar sign. Expect this to match nearly every row. Keep it out of the digest until Q10 is answered."
-
 - id: FMT_PRICE_DECIMALS
   name: price has more than 2 decimal places
   class: format
@@ -217,6 +210,39 @@ rules:
   message: "senior price has more than 2 decimal places"
   note: "Merged 2026-09-17, same relaxation as FMT_PRICE_DECIMALS."
 
+- id: FMT_PRICE_SYMBOL
+  name: price uses a non-dollar symbol
+  class: format
+  severity: medium
+  status: active
+  requires: [price]
+  expr: "price IS NOT NULL AND price <> '' AND NOT REGEXP_LIKE(price, '^[$]?[0-9]')"
+  detail_columns: [price]
+  message: "price is not in dollar format"
+  note: "Added 2026-09-17. 0% finding rate in dev data as of this date -- every populated price/child/senior value currently starts with $ (or is the already-caught literal string 'NULL', see FMT_PRICE_DECIMALS). Added as forward-looking coverage per request, not an evidenced live defect."
+
+- id: FMT_CHILD_SYMBOL
+  name: child price uses a non-dollar symbol
+  class: format
+  severity: medium
+  status: active
+  requires: [child]
+  expr: "child IS NOT NULL AND child <> '' AND NOT REGEXP_LIKE(child, '^[$]?[0-9]')"
+  detail_columns: [child, price]
+  message: "child price is not in dollar format"
+  note: "Added 2026-09-17, same rationale as FMT_PRICE_SYMBOL."
+
+- id: FMT_SENIOR_SYMBOL
+  name: senior price uses a non-dollar symbol
+  class: format
+  severity: medium
+  status: active
+  requires: [senior]
+  expr: "senior IS NOT NULL AND senior <> '' AND NOT REGEXP_LIKE(senior, '^[$]?[0-9]')"
+  detail_columns: [senior, price]
+  message: "senior price is not in dollar format"
+  note: "Added 2026-09-17, same rationale as FMT_PRICE_SYMBOL."
+
 - id: FMT_ZIP_US
   name: US row with invalid zip
   class: format
@@ -239,30 +265,21 @@ rules:
   message: "Canadian postal code is not in A1A 1A1 form"
   note: "Sample had a truncated value, K7R, at Bouler House Cinema."
 
-- id: FMT_RELEASE_DATE
-  name: release_date null or zero date
-  class: format
-  severity: medium
-  status: active
-  requires: [release_date]
-  expr: "release_date IS NULL OR CAST(release_date AS CHAR) LIKE '0000-00-00%'"
-  detail_columns: [release_date, title, studio_name]
-  message: "release date missing or zero"
-
 - id: JUNK_WHITESPACE
   name: leading or trailing whitespace in a text column
   class: format
   severity: low
   status: active
-  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, amenities_new, auditorium]
+  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, amenities, auditorium]
   expr: >
     circuit_name <> TRIM(circuit_name) OR theater_name <> TRIM(theater_name)
     OR theater_address <> TRIM(theater_address) OR theater_city <> TRIM(theater_city)
     OR theater_state <> TRIM(theater_state) OR theater_zip <> TRIM(theater_zip)
     OR title <> TRIM(title) OR dma <> TRIM(dma) OR studio_name <> TRIM(studio_name)
-    OR amenities_new <> TRIM(amenities_new) OR auditorium <> TRIM(auditorium)
-  detail_columns: [theater_name, theater_address, title, amenities_new]
+    OR amenities <> TRIM(amenities) OR auditorium <> TRIM(auditorium)
+  detail_columns: [theater_name, theater_address, title, amenities]
   message: "text column has leading or trailing whitespace"
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
 
 - id: JUNK_DOUBLE_SPACE
   name: doubled internal space
@@ -302,11 +319,11 @@ rules:
   severity: medium
   status: active
   requires: [title]
-  allowlist_regex: "^[[:alnum:] &''.,/#():+|@-]*$"
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@-]*$"
   expr: "NOT REGEXP_LIKE(title, '{{allowlist_regex}}')"
   detail_columns: [title]
   message: "title contains a character outside the allowlist"
-  note: "Own allowlist (not the pack default) -- additionally allows @ (2026-09-17)."
+  note: "Own allowlist (not the pack default) -- additionally allows @ (2026-09-17) and ! (2026-09-17, titles like 'Six: The Musical Live!')."
 
 - id: DOM_TICKET_AVAILABILITY
   name: ticket_availability outside known set
@@ -694,8 +711,8 @@ rules:
   detail_columns: [price, child, senior]
   message: "senior price exceeds adult price"
 
-- id: XCOL_DELTA_IDENTITY
-  name: delta seat identity broken
+- id: XCOL_WRONG_SEATING_INFO
+  name: wrong seating information
   class: cross_column
   severity: critical
   status: active
@@ -759,14 +776,15 @@ rules:
   note: "Two sample theaters had Ontario and Quebec addresses with country USA."
 
 - id: XCOL_SEATING_AMENITIES
-  name: seating_type contradicts amenities_new text
+  name: seating_type contradicts amenities text
   class: cross_column
   severity: medium
   status: active
-  requires: [seating_type, amenities_new]
-  expr: "(seating_type = 'Reserved' AND LOWER(amenities_new) LIKE '%non reserved%') OR (seating_type = 'Non Reserved' AND LOWER(amenities_new) LIKE '%reserved seating%')"
-  detail_columns: [seating_type, amenities_new]
+  requires: [seating_type, amenities]
+  expr: "(seating_type = 'Reserved' AND LOWER(amenities) LIKE '%non reserved%') OR (seating_type = 'Non Reserved' AND LOWER(amenities) LIKE '%reserved seating%')"
+  detail_columns: [seating_type, amenities]
   message: "seating type contradicts the amenities text"
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
 
 - id: XCOL_SHOW_BEFORE_RELEASE
   name: show date before release date
@@ -790,24 +808,26 @@ rules:
   note: "In the sample these were blank on exactly the same rows, so this fires only when that pairing breaks."
 
 - id: XCOL_AMENITIES_LEADING_PIPE
-  name: amenities_new begins with an empty token
+  name: amenities begins with an empty token
   class: cross_column
   severity: medium
   status: active
-  requires: [amenities_new]
-  expr: "TRIM(amenities_new) LIKE '|%'"
-  detail_columns: [amenities_new]
+  requires: [amenities]
+  expr: "TRIM(amenities) LIKE '|%'"
+  detail_columns: [amenities]
   message: "amenities list begins with an empty token"
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
 
 - id: XCOL_AMENITIES_RATING
-  name: amenities_new embeds a rating and runtime
+  name: amenities embeds a rating and runtime
   class: cross_column
   severity: medium
   status: active
-  requires: [amenities_new]
-  expr: "REGEXP_LIKE(amenities_new, '(^|[|])[[:space:]]*(G|PG|PG-13|R|NC-17)/')"
-  detail_columns: [amenities_new]
+  requires: [amenities]
+  expr: "REGEXP_LIKE(amenities, '(^|[|])[[:space:]]*(G|PG|PG-13|R|NC-17)/')"
+  detail_columns: [amenities]
   message: "amenities field carries a rating and runtime instead of amenity tokens"
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
 
 - id: XCOL_DATE_SH_RECENCY
   name: date_sh older than yesterday
@@ -820,6 +840,18 @@ rules:
   detail_columns: [date_sh, is_ticketing, ticket_availability]
   message: "showtime date is older than allowed"
   note: "The checklist allows yesterday only for ticketing records. Cannot be written until the is_ticketing codes are defined."
+
+- id: XROW_MM_ID_IDENTITY
+  name: mm_id refers to more than one theater, time or title
+  class: cross_row
+  severity: critical
+  status: active
+  requires: [mm_id, theater_id, time_sh, title]
+  group_by: [mm_id]
+  having: "COUNT(DISTINCT theater_id) > 1 OR COUNT(DISTINCT time_sh) > 1 OR COUNT(DISTINCT title) > 1"
+  detail_columns: [mm_id, theater_id, time_sh, title, running_date]
+  message: "same mm_id refers to a different theater, time or title across crawl days"
+  note: "Added 2026-09-17. Measured 3 of 146,283 distinct mm_id (0.0021%) on a dev sample day. Undermines XROW_WRONG_AVAILABLE/RESERVED/CHECKERED/TOTAL_SEATS, which assume mm_id identifies the same showtime across running_date values."
 
 - id: XROW_DUPLICATE_SHOWTIME
   name: duplicate showtime on one crawl day
@@ -959,6 +991,98 @@ rules:
     ) w
     WHERE prev_actual_reserved IS NOT NULL
       AND reserved <> actual_reserved - prev_actual_reserved
+
+- id: XROW_WRONG_CHECKERED
+  name: checkered delta does not reconcile against the previous crawl
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, running_date, checkered, actual_checkered, ticket_availability, total_seats]
+  detail_columns: [mm_id, running_date, checkered, actual_checkered]
+  message: "checkered change does not match the movement in the absolute count"
+  note: >
+    Added 2026-09-17, mirrors XROW_WRONG_AVAILABLE/XROW_WRONG_RESERVED's
+    reconciliation check for the checkered/actual_checkered pair. Same
+    no-`id`-column rationale applies.
+  sql: |
+    SELECT mm_id, running_date, checkered, actual_checkered, prev_actual_checkered
+    FROM (
+      SELECT mm_id, running_date, checkered, actual_checkered,
+             LAG(actual_checkered) OVER (PARTITION BY mm_id ORDER BY running_date) AS prev_actual_checkered
+      FROM {{table}}
+      WHERE {{window}} AND ticket_availability <> 'Crawdads' AND total_seats IS NOT NULL
+    ) w
+    WHERE prev_actual_checkered IS NOT NULL
+      AND checkered <> actual_checkered - prev_actual_checkered
+
+- id: XROW_WRONG_TOTAL_SEATS
+  name: total_seats delta does not reconcile against the previous crawl
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, running_date, total_seats, actual_total_seats, ticket_availability]
+  detail_columns: [mm_id, running_date, total_seats, actual_total_seats]
+  message: "capacity change does not match the movement in the absolute count"
+  note: >
+    Added 2026-09-17, mirrors XROW_WRONG_AVAILABLE/RESERVED/CHECKERED's
+    reconciliation check for the total_seats/actual_total_seats pair -- the
+    fourth member of the same family. Measured 35 of 373,542 comparable rows
+    (0.0094%) on a dev sample day.
+  sql: |
+    SELECT mm_id, running_date, total_seats, actual_total_seats, prev_actual_total_seats
+    FROM (
+      SELECT mm_id, running_date, total_seats, actual_total_seats,
+             LAG(actual_total_seats) OVER (PARTITION BY mm_id ORDER BY running_date) AS prev_actual_total_seats
+      FROM {{table}}
+      WHERE {{window}} AND ticket_availability <> 'Crawdads' AND total_seats IS NOT NULL
+    ) w
+    WHERE prev_actual_total_seats IS NOT NULL
+      AND total_seats <> actual_total_seats - prev_actual_total_seats
+
+- id: XROW_DUP_MMID_NO_AUDITORIUM
+  name: same showtime crawled under different mm_id (no auditorium reported)
+  class: cross_row
+  severity: high
+  status: active
+  requires: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats, mm_id, auditorium, running_date, total_seats, amenities]
+  group_by: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats]
+  filter: >
+    (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
+    AND running_date IS NOT NULL AND total_seats IS NOT NULL
+    AND mm_id NOT IN (SELECT DISTINCT mm_id FROM movies_shows WHERE amenities LIKE '%D%Box%' OR amenities LIKE '%Dbox%')
+  having: "COUNT(DISTINCT mm_id) > 1"
+  detail_columns: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats, mm_id, auditorium]
+  message: "the same showtime appears to be crawled under more than one mm_id"
+  note: >
+    Added 2026-09-17, from a query provided by Aarti. Distinct from
+    XROW_DUPLICATE_SHOWTIME (which groups on mm_id+running_date -- the same
+    id repeated). This instead groups on the showtime's real-world identity
+    (no auditorium reported, e.g. AMC-style theaters) and catches the
+    opposite case: two different mm_ids for what looks like one real
+    showtime. Excludes D-Box mm_ids using `amenities` (Aarti's query used
+    amenities_new, which is 100% empty in dev data -- see the amenities_new
+    -> amenities fix elsewhere in this pack). Measured 0 groups on one dense
+    sample day but 87 groups over a 3-day window.
+
+- id: XROW_DUP_MMID_WITH_AUDITORIUM
+  name: same showtime crawled under different mm_id (auditorium reported)
+  class: cross_row
+  severity: high
+  status: active
+  requires: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format, mm_id, running_date, total_seats, amenities]
+  group_by: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format]
+  filter: >
+    NOT (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
+    AND running_date IS NOT NULL AND total_seats IS NOT NULL
+    AND mm_id NOT IN (SELECT DISTINCT mm_id FROM movies_shows WHERE amenities LIKE '%D%Box%' OR amenities LIKE '%Dbox%')
+  having: "COUNT(DISTINCT mm_id) > 1"
+  detail_columns: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format, mm_id]
+  message: "the same showtime appears to be crawled under more than one mm_id"
+  note: >
+    Added 2026-09-17, from a query provided by Aarti. Same rationale as
+    XROW_DUP_MMID_NO_AUDITORIUM, for theaters that do report auditorium
+    (included in the grouping key here). Measured 1,166 groups / 5,468 rows
+    (0.91%) on one dense sample day, 2,802 groups over a 3-day window.
 
 - id: XROW_CRAWL_GAP
   name: showtime missing a day in its crawl series

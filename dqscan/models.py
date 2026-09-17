@@ -39,6 +39,12 @@ class Rule:
     # custom
     sql: str = ""
 
+    # Per-rule override of the pack-level allowlist_regex (rules.yaml's
+    # top-level meta) -- None means "use the pack default". Only a couple of
+    # JUNK_CHARS_* rules need their own allowed-character set; everything
+    # else falls back to the shared default.
+    allowlist_regex: Optional[str] = None
+
 
 @dataclass
 class CompiledRule:

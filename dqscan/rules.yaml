@@ -373,6 +373,7 @@ rules:
     - CINE 1
     - CSXL
     - CWX
+    - Caribbean VIP
     - Cine XL Harkins
     - Cnmk XD
     - DCX
@@ -387,36 +388,62 @@ rules:
     - Elite Gold
     - Elite Golden Ticket
     - Encore Phoenix
+    - Epic Experience
     - Epic XL
+    - Extreme Screen
     - FDX Paragon
     - FTX
     - Finity
+    - GDX
+    - GIANT SCREEN
+    - GPX Southern
+    - GSX
+    - GTX
     - GTX Georgia
+    - GXL Westown
     - Grand Aud
-    - Grand DLX O'Neil
+    - "Grand DLX O'Neil"
     - Grand Infinity Regal
+    - Grand Screen
     - HDR by Barco
     - HPX CinemaTimes
+    - Hale Ikua Regal
+    - ICE Immersive
+    - ICON-X Kerasotes
     - IMAX
     - Iconic Screen
     - Infinity Screen
+    - JBX Brenden
+    - LDX Screen
+    - LFX Krikorian
     - LOOK PX
     - Laser Ultra
+    - Laser Ultra Landmark CAN
+    - LaserLux
     - Luxe at Landmark cinemas
     - MBG Superior
+    - MEGA-D Cineplanet
+    - MPX Maya
+    - MX Flix Brew
     - MX4D
+    - MXC Marquee
     - MXL
+    - MXT
     - MacroXE Cinepolis
     - Mega Screen
     - Monster Emagine
+    - Monster Screen
     - Onyx
     - Onyx LED
     - PDX Stone
+    - PTX Phoenix
     - PlatinumX Megaplex
+    - Premiere Cinema
     - Premium Large Format
     - Premium Theatre
     - RCXtreme
     - REX Regency
+    - RPX Regal
     - ReelMax
     - SBX Sun Basin
     - SDX
@@ -425,6 +452,7 @@ rules:
     - SXS Southeast
     - ScreenX
     - Signature Screen B&B
+    - Silverspot Max
     - Sony DC
     - Standard
     - Studio LUXX
@@ -438,6 +466,7 @@ rules:
     - ULTRAV
     - UltraAVX Cineplex
     - UltraScreen Marcus
+    - VIP Cineplex
     - Warren Grand Regal
     - XDX
     - XL Screen
@@ -454,13 +483,14 @@ rules:
   detail_columns: [screen_format, movie_format]
   message: "unexpected screen format value"
   note: >
-    Widened 2026-09-17 to Aarti's 96-value master list
-    (~/Downloads/amenities (1).xlsx), used exactly as given. Known gap,
-    confirmed against real dev data and accepted deliberately: several
-    real, high-volume screen_format values are NOT in her list and will
-    show up as findings until she updates it -- e.g. "Dolby Atmos"
-    (70,845 rows in a spot check), "RPX Regal" (101,196), "VIP Cineplex"
-    (37,496), "GIANT SCREEN", "JBX Brenden", "GDX", "Grand Screen".
+    Widened 2026-09-18 to Aarti's updated 125-value master list (pasted
+    directly, superseding the earlier 96-value amenities (1).xlsx list).
+    Closes almost all of the previously-documented gap: RPX Regal, VIP
+    Cineplex, GIANT SCREEN, JBX Brenden, GDX and Grand Screen are now all
+    included. Checked against real dev data (2026-07-25 sample, 601,124
+    rows): only 187 rows (0.031%) now fall outside the list -- "EPIC
+    online" (97), "ACX Infinity" (51), "XD Strike + Reel" (39). Accepted
+    as a remaining known gap rather than guessed at.
 
 - id: DOM_MOVIE_FORMAT
   name: movie_format outside known set

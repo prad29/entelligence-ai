@@ -688,8 +688,8 @@ rules:
   detail_columns: [price, child, senior]
   message: "senior price exceeds adult price"
 
-- id: XCOL_DELTA_IDENTITY
-  name: delta seat identity broken
+- id: XCOL_WRONG_SEATING_INFO
+  name: wrong seating information
   class: cross_column
   severity: critical
   status: active

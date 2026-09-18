@@ -1108,28 +1108,42 @@ rules:
 
 - id: XROW_DUP_MMID_NO_AUDITORIUM
   name: same showtime crawled under different mm_id (no auditorium reported)
-  class: cross_row
+  class: custom
   severity: high
   status: active
-  requires: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats, mm_id, auditorium, running_date, total_seats, amenities]
-  group_by: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats]
-  filter: >
-    (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
-    AND running_date IS NOT NULL AND total_seats IS NOT NULL
-    AND mm_id NOT IN (SELECT DISTINCT mm_id FROM movies_shows WHERE amenities LIKE '%D%Box%' OR amenities LIKE '%Dbox%')
-  having: "COUNT(DISTINCT mm_id) > 1"
-  detail_columns: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats, mm_id, auditorium]
-  message: "the same showtime appears to be crawled under more than one mm_id"
+  requires: [theater_id, title, date_sh, time_sh, auditorium, mm_id, total_seats, ticket_availability]
+  detail_columns: [theater_id, title, date_sh, time_sh, mm_id, seat_sum]
+  message: "the same showtime appears to be crawled under more than one mm_id with matching capacity"
   note: >
-    Added 2026-09-17, from a query provided by Aarti. Distinct from
-    XROW_DUPLICATE_SHOWTIME (which groups on mm_id+running_date -- the same
-    id repeated). This instead groups on the showtime's real-world identity
-    (no auditorium reported, e.g. AMC-style theaters) and catches the
-    opposite case: two different mm_ids for what looks like one real
-    showtime. Excludes D-Box mm_ids using `amenities` (Aarti's query used
-    amenities_new, which is 100% empty in dev data -- see the amenities_new
-    -> amenities fix elsewhere in this pack). Measured 0 groups on one dense
-    sample day but 87 groups over a 3-day window.
+    Rewritten 2026-09-19 per request. Groups by theater, title, date and
+    time only (no auditorium reported, e.g. AMC-style theaters), then
+    treats two different mm_ids in that group as the same real auditorium
+    -- and therefore a duplicate showtime -- only when their lifetime
+    SUM(total_seats) (whole crawl history, not the scan window, Crawdads
+    excluded -- same convention as XROW_SEATING_TYPE_LIFETIME_SEATS)
+    matches exactly. Distinct from XROW_DUP_MMID_WITH_AUDITORIUM, which
+    groups directly by the reported auditorium value instead of by a
+    capacity signature.
+  sql: |
+    SELECT theater_id, title, date_sh, time_sh, mm_id, seat_sum
+    FROM (
+      SELECT theater_id, title, date_sh, time_sh, mm_id, seat_sum,
+             COUNT(DISTINCT mm_id) OVER (
+               PARTITION BY theater_id, title, date_sh, time_sh, seat_sum
+             ) AS sig_count
+      FROM (
+        SELECT mm_id,
+               MAX(theater_id) AS theater_id, MAX(title) AS title,
+               MAX(date_sh) AS date_sh, MAX(time_sh) AS time_sh,
+               SUM(total_seats) AS seat_sum
+        FROM {{table}}
+        WHERE (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
+          AND ticket_availability <> 'Crawdads'
+        GROUP BY mm_id
+      ) p
+      WHERE seat_sum IS NOT NULL
+    ) w
+    WHERE sig_count > 1
 
 - id: XROW_DUP_MMID_WITH_AUDITORIUM
   name: same showtime crawled under different mm_id (auditorium reported)

@@ -285,11 +285,12 @@ rules:
   name: doubled internal space
   class: format
   severity: low
-  status: active
+  status: dormant
   requires: [theater_address, theater_name, title]
   expr: "theater_address LIKE '%  %' OR theater_name LIKE '%  %' OR title LIKE '%  %'"
   detail_columns: [theater_name, theater_address, title]
   message: "doubled internal space"
+  note: "Disabled 2026-09-19 per request."
 
 - id: JUNK_CHARS_THEATER_NAME
   name: character outside allowlist in theater_name

@@ -270,16 +270,16 @@ rules:
   class: format
   severity: low
   status: active
-  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, amenities, auditorium]
+  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, auditorium]
   expr: >
     circuit_name <> TRIM(circuit_name) OR theater_name <> TRIM(theater_name)
     OR theater_address <> TRIM(theater_address) OR theater_city <> TRIM(theater_city)
     OR theater_state <> TRIM(theater_state) OR theater_zip <> TRIM(theater_zip)
     OR title <> TRIM(title) OR dma <> TRIM(dma) OR studio_name <> TRIM(studio_name)
-    OR amenities <> TRIM(amenities) OR auditorium <> TRIM(auditorium)
-  detail_columns: [theater_name, theater_address, title, amenities]
+    OR auditorium <> TRIM(auditorium)
+  detail_columns: [theater_name, theater_address, title]
   message: "text column has leading or trailing whitespace"
-  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
+  note: "amenities excluded 2026-09-19 per request."
 
 - id: JUNK_DOUBLE_SPACE
   name: doubled internal space

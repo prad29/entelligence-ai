@@ -270,26 +270,27 @@ rules:
   class: format
   severity: low
   status: active
-  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, amenities, auditorium]
+  requires: [circuit_name, theater_name, theater_address, theater_city, theater_state, theater_zip, title, dma, studio_name, auditorium]
   expr: >
     circuit_name <> TRIM(circuit_name) OR theater_name <> TRIM(theater_name)
     OR theater_address <> TRIM(theater_address) OR theater_city <> TRIM(theater_city)
     OR theater_state <> TRIM(theater_state) OR theater_zip <> TRIM(theater_zip)
     OR title <> TRIM(title) OR dma <> TRIM(dma) OR studio_name <> TRIM(studio_name)
-    OR amenities <> TRIM(amenities) OR auditorium <> TRIM(auditorium)
-  detail_columns: [theater_name, theater_address, title, amenities]
+    OR auditorium <> TRIM(auditorium)
+  detail_columns: [theater_name, theater_address, title]
   message: "text column has leading or trailing whitespace"
-  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
+  note: "amenities excluded 2026-09-19 per request."
 
 - id: JUNK_DOUBLE_SPACE
   name: doubled internal space
   class: format
   severity: low
-  status: active
+  status: dormant
   requires: [theater_address, theater_name, title]
   expr: "theater_address LIKE '%  %' OR theater_name LIKE '%  %' OR title LIKE '%  %'"
   detail_columns: [theater_name, theater_address, title]
   message: "doubled internal space"
+  note: "Disabled 2026-09-19 per request."
 
 - id: JUNK_CHARS_THEATER_NAME
   name: character outside allowlist in theater_name
@@ -841,12 +842,12 @@ rules:
   name: amenities begins with an empty token
   class: cross_column
   severity: medium
-  status: active
+  status: dormant
   requires: [amenities]
   expr: "TRIM(amenities) LIKE '|%'"
   detail_columns: [amenities]
   message: "amenities list begins with an empty token"
-  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column. Disabled 2026-09-19 per request -- not required."
 
 - id: XCOL_AMENITIES_RATING
   name: amenities embeds a rating and runtime
@@ -1069,50 +1070,99 @@ rules:
     WHERE prev_actual_total_seats IS NOT NULL
       AND total_seats <> actual_total_seats - prev_actual_total_seats
 
+- id: XROW_SEATING_TYPE_LIFETIME_SEATS
+  name: seating_type does not match the mm_id's lifetime total_seats sum
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, total_seats, seating_type, ticket_availability]
+  detail_columns: [mm_id, seating_type, seat_sum]
+  message: "seating type does not match the sign of the mm_id's lifetime total_seats sum"
+  note: >
+    Added 2026-09-19 per request. Sums total_seats across every crawled row
+    for a given mm_id -- deliberately the mm_id's whole history, not the
+    scan's --from/--to window, so no {{window}} in this SQL -- excluding
+    Crawdads correction rows, same convention as XROW_WRONG_AVAILABLE/
+    RESERVED/CHECKERED/TOTAL_SEATS. sum == 0 is expected to be Non Reserved,
+    sum > 0 is expected to be Reserved; a negative sum is never valid on its
+    own (more seats were removed than were ever added for that mm_id) and
+    is flagged regardless of seating_type. Assumes seating_type is constant
+    for a given mm_id (MAX() picks a representative value) -- a genuinely
+    mixed mm_id is a different defect this rule doesn't diagnose.
+  sql: |
+    SELECT mm_id, seating_type, seat_sum
+    FROM (
+      SELECT mm_id,
+             MAX(seating_type) AS seating_type,
+             SUM(total_seats) AS seat_sum
+      FROM {{table}}
+      WHERE ticket_availability <> 'Crawdads'
+      GROUP BY mm_id
+    ) g
+    WHERE seat_sum IS NOT NULL
+      AND (
+        seat_sum < 0
+        OR (seat_sum = 0 AND seating_type <> 'Non Reserved')
+        OR (seat_sum > 0 AND seating_type <> 'Reserved')
+      )
+
 - id: XROW_DUP_MMID_NO_AUDITORIUM
   name: same showtime crawled under different mm_id (no auditorium reported)
-  class: cross_row
+  class: custom
   severity: high
   status: active
-  requires: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats, mm_id, auditorium, running_date, total_seats, amenities]
-  group_by: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats]
-  filter: >
-    (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
-    AND running_date IS NOT NULL AND total_seats IS NOT NULL
-    AND mm_id NOT IN (SELECT DISTINCT mm_id FROM movies_shows WHERE amenities LIKE '%D%Box%' OR amenities LIKE '%Dbox%')
-  having: "COUNT(DISTINCT mm_id) > 1"
-  detail_columns: [theater_id, title, date_sh, time_sh, screen_format, movie_format, actual_total_seats, mm_id, auditorium]
-  message: "the same showtime appears to be crawled under more than one mm_id"
+  requires: [theater_id, title, date_sh, time_sh, auditorium, mm_id, total_seats, ticket_availability]
+  detail_columns: [theater_id, title, date_sh, time_sh, mm_id, seat_sum]
+  message: "the same showtime appears to be crawled under more than one mm_id with matching capacity"
   note: >
-    Added 2026-09-17, from a query provided by Aarti. Distinct from
-    XROW_DUPLICATE_SHOWTIME (which groups on mm_id+running_date -- the same
-    id repeated). This instead groups on the showtime's real-world identity
-    (no auditorium reported, e.g. AMC-style theaters) and catches the
-    opposite case: two different mm_ids for what looks like one real
-    showtime. Excludes D-Box mm_ids using `amenities` (Aarti's query used
-    amenities_new, which is 100% empty in dev data -- see the amenities_new
-    -> amenities fix elsewhere in this pack). Measured 0 groups on one dense
-    sample day but 87 groups over a 3-day window.
+    Rewritten 2026-09-19 per request. Groups by theater, title, date and
+    time only (no auditorium reported, e.g. AMC-style theaters), then
+    treats two different mm_ids in that group as the same real auditorium
+    -- and therefore a duplicate showtime -- only when their lifetime
+    SUM(total_seats) (whole crawl history, not the scan window, Crawdads
+    excluded -- same convention as XROW_SEATING_TYPE_LIFETIME_SEATS)
+    matches exactly. Distinct from XROW_DUP_MMID_WITH_AUDITORIUM, which
+    groups directly by the reported auditorium value instead of by a
+    capacity signature.
+  sql: |
+    SELECT theater_id, title, date_sh, time_sh, mm_id, seat_sum
+    FROM (
+      SELECT theater_id, title, date_sh, time_sh, mm_id, seat_sum,
+             COUNT(DISTINCT mm_id) OVER (
+               PARTITION BY theater_id, title, date_sh, time_sh, seat_sum
+             ) AS sig_count
+      FROM (
+        SELECT mm_id,
+               MAX(theater_id) AS theater_id, MAX(title) AS title,
+               MAX(date_sh) AS date_sh, MAX(time_sh) AS time_sh,
+               SUM(total_seats) AS seat_sum
+        FROM {{table}}
+        WHERE (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
+          AND ticket_availability <> 'Crawdads'
+        GROUP BY mm_id
+      ) p
+      WHERE seat_sum IS NOT NULL
+    ) w
+    WHERE sig_count > 1
 
 - id: XROW_DUP_MMID_WITH_AUDITORIUM
   name: same showtime crawled under different mm_id (auditorium reported)
   class: cross_row
   severity: high
   status: active
-  requires: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format, mm_id, running_date, total_seats, amenities]
-  group_by: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format]
-  filter: >
-    NOT (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')
-    AND running_date IS NOT NULL AND total_seats IS NOT NULL
-    AND mm_id NOT IN (SELECT DISTINCT mm_id FROM movies_shows WHERE amenities LIKE '%D%Box%' OR amenities LIKE '%Dbox%')
+  requires: [theater_id, title, date_sh, time_sh, auditorium, mm_id]
+  group_by: [theater_id, title, date_sh, time_sh, auditorium]
+  filter: "NOT (auditorium IS NULL OR auditorium = '' OR auditorium = 'null')"
   having: "COUNT(DISTINCT mm_id) > 1"
-  detail_columns: [theater_id, title, date_sh, time_sh, auditorium, screen_format, movie_format, mm_id]
+  detail_columns: [theater_id, title, date_sh, time_sh, auditorium, mm_id]
   message: "the same showtime appears to be crawled under more than one mm_id"
   note: >
-    Added 2026-09-17, from a query provided by Aarti. Same rationale as
-    XROW_DUP_MMID_NO_AUDITORIUM, for theaters that do report auditorium
-    (included in the grouping key here). Measured 1,166 groups / 5,468 rows
-    (0.91%) on one dense sample day, 2,802 groups over a 3-day window.
+    Rewritten 2026-09-19 per request to the simplest definition: same
+    theater, title, date, time and reported auditorium under more than one
+    mm_id is a duplicate showtime. Deliberately drops the previous
+    version's screen_format/movie_format grouping columns and its D-Box /
+    total_seats / running_date exclusions -- no extra conditions, per
+    request.
 
 - id: XROW_CRAWL_GAP
   name: showtime missing a day in its crawl series

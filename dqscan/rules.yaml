@@ -298,11 +298,11 @@ rules:
   severity: medium
   status: active
   requires: [theater_name]
-  allowlist_regex: "^[[:alnum:] &''.,/#():+|!–—-]*$"
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@–—-]*$"
   expr: "NOT REGEXP_LIKE(theater_name, '{{allowlist_regex}}')"
   detail_columns: [theater_name]
   message: "theater name contains a character outside the allowlist"
-  note: "Own allowlist (not the pack default) -- additionally allows ! and en/em dash (2026-09-17)."
+  note: "Own allowlist (not the pack default) -- additionally allows ! and en/em dash (2026-09-17), and @ (2026-09-21, per request)."
 
 - id: JUNK_CHARS_ADDRESS
   name: character outside allowlist in theater_address

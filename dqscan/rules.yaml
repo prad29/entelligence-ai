@@ -810,12 +810,12 @@ rules:
   name: seating_type contradicts amenities text
   class: cross_column
   severity: medium
-  status: active
+  status: dormant
   requires: [seating_type, amenities]
   expr: "(seating_type = 'Reserved' AND LOWER(amenities) LIKE '%non reserved%') OR (seating_type = 'Non Reserved' AND LOWER(amenities) LIKE '%reserved seating%')"
   detail_columns: [seating_type, amenities]
   message: "seating type contradicts the amenities text"
-  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column. Disabled 2026-09-21 per request -- not needed."
 
 - id: XCOL_SHOW_BEFORE_RELEASE
   name: show date before release date

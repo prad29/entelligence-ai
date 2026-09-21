@@ -1163,37 +1163,35 @@ rules:
     WHERE seat_sum = 0 AND actual_total_seats > 0
 
 - id: XROW_SEATING_TYPE_LIFETIME_SEATS
-  name: seating_type does not match the mm_id's lifetime total_seats sum
+  name: seating_type does not match the mm_id's lifetime actual_total_seats sum
   class: custom
   severity: critical
   status: active
-  requires: [mm_id, total_seats, seating_type, ticket_availability]
+  requires: [mm_id, actual_total_seats, seating_type, ticket_availability]
   detail_columns: [mm_id, seating_type, seat_sum]
-  message: "seating type does not match the sign of the mm_id's lifetime total_seats sum"
+  message: "seating type does not match the sign of the mm_id's lifetime actual_total_seats sum"
   note: >
-    Added 2026-09-19, rescoped 2026-09-21 -- the original version grouped
-    by mm_id over the ENTIRE table with no date filter at all, which timed
-    out in production (MAX_EXECUTION_TIME exceeded) because its cost scales
-    with the whole table's ever-growing history, not with the run's window.
-    Rescoped per request: first cheaply find the distinct mm_ids that fall
-    in this run's --from/--to window (indexed on date_sh), then sum
-    total_seats for only those mm_ids across their whole lifetime --
-    excluding Crawdads correction rows, same convention as
-    XROW_WRONG_AVAILABLE/RESERVED/CHECKERED/TOTAL_SEATS. sum == 0 is
-    expected to be Non Reserved, sum > 0 is expected to be Reserved; a
-    negative sum is never valid on its own (more seats were removed than
-    were ever added for that mm_id) and is flagged regardless of
-    seating_type. Assumes seating_type is constant for a given mm_id
-    (MAX() picks a representative value) -- a genuinely mixed mm_id is a
-    different defect this rule doesn't diagnose. An mm_id outside this
-    run's window won't be re-checked unless it recurs in a later window --
-    same behavior every other windowed rule in this pack already has.
+    Added 2026-09-19, rescoped 2026-09-21 for the production timeout,
+    switched from SUM(total_seats) to SUM(actual_total_seats) 2026-09-21
+    per request. Finds the distinct mm_ids that fall in this run's
+    --from/--to window (indexed on date_sh), then sums actual_total_seats
+    for only those mm_ids across their whole lifetime -- excluding
+    Crawdads correction rows, same convention as XROW_WRONG_AVAILABLE/
+    RESERVED/CHECKERED/TOTAL_SEATS. sum == 0 is expected to be Non
+    Reserved, sum > 0 is expected to be Reserved. Note: since
+    actual_total_seats is itself never negative, this sum can also never
+    be negative, so the seat_sum < 0 branch below is now unreachable in
+    practice -- kept for symmetry with XROW_MISSING_FIRST_RECORD's
+    total_seats-based logic and as a harmless safety net, not because
+    it's expected to fire. Assumes seating_type is constant for a given
+    mm_id (MAX() picks a representative value) -- a genuinely mixed mm_id
+    is a different defect this rule doesn't diagnose.
   sql: |
     SELECT mm_id, seating_type, seat_sum
     FROM (
       SELECT mm_id,
              MAX(seating_type) AS seating_type,
-             SUM(total_seats) AS seat_sum
+             SUM(actual_total_seats) AS seat_sum
       FROM {{table}}
       WHERE ticket_availability <> 'Crawdads'
         AND mm_id IN (SELECT DISTINCT mm_id FROM {{table}} WHERE {{window}})

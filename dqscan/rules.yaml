@@ -925,13 +925,22 @@ rules:
   class: cross_row
   severity: critical
   status: active
-  requires: [mm_id, running_date, ticket_availability]
+  requires: [mm_id, running_date, ticket_availability, last_updates]
   group_by: [mm_id, running_date]
   filter: "ticket_availability <> 'Crawdads'"
-  having: "COUNT(*) > 1"
+  having: "COUNT(*) > COUNT(DISTINCT last_updates)"
   detail_columns: [mm_id, running_date, ticket_availability, last_updates]
   message: "the same showtime was written twice on one crawl day"
-  note: "Crawdads rows are corrections, not duplicates, so they are filtered out. Confirm with Q2."
+  note: >
+    Crawdads rows are corrections, not duplicates, so they are filtered
+    out. Changed 2026-09-21: was COUNT(*) > 1, which flagged more than one
+    row per (mm_id, running_date) unconditionally -- verified against dev
+    data (2026-09-20 to 2027-03-31) that the 3 groups this fired on all had
+    distinct last_updates hours apart with actual_available/actual_reserved
+    drifting consistently between them -- i.e. two genuinely separate
+    crawls the same day, not a duplicate write. Now only fires when a
+    last_updates value repeats within the group -- the actual signal of
+    the same crawl event being written more than once.
 
 - id: XROW_DUPLICATE_CRAWDADS
   name: more than one Crawdads row for a showtime on one day

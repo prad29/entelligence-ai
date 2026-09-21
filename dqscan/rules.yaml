@@ -1126,6 +1126,42 @@ rules:
     WHERE prev_actual_total_seats IS NOT NULL
       AND total_seats <> actual_total_seats - prev_actual_total_seats
 
+- id: XROW_MISSING_FIRST_RECORD
+  name: mm_id's first capacity-establishing record is missing
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, total_seats, actual_total_seats, ticket_availability]
+  detail_columns: [mm_id, seat_sum, actual_total_seats]
+  message: "lifetime total_seats sum is 0 but the showtime has real capacity"
+  note: >
+    Added 2026-09-21 per request. total_seats is a delta column -- an
+    mm_id's very first crawl is expected to log total_seats equal to the
+    starting actual_total_seats (there's no previous row to diff against),
+    then 0 on every later row unless capacity itself changes. If that
+    first establishing row never got written, SUM(total_seats) over the
+    mm_id's lifetime stays 0 forever even though the showtime plainly has
+    real capacity (actual_total_seats > 0) -- this rule catches exactly
+    that gap. Distinct from XROW_SEATING_TYPE_LIFETIME_SEATS, which checks
+    the sum's sign against seating_type; this checks it against
+    actual_total_seats directly, regardless of seating_type. Same
+    Crawdads-exclusion and window-scoping convention as
+    XROW_SEATING_TYPE_LIFETIME_SEATS -- mm_ids are narrowed to this run's
+    --from/--to window first, then summed/maxed across their full
+    lifetime.
+  sql: |
+    SELECT mm_id, seat_sum, actual_total_seats
+    FROM (
+      SELECT mm_id,
+             SUM(total_seats) AS seat_sum,
+             MAX(actual_total_seats) AS actual_total_seats
+      FROM {{table}}
+      WHERE ticket_availability <> 'Crawdads'
+        AND mm_id IN (SELECT DISTINCT mm_id FROM {{table}} WHERE {{window}})
+      GROUP BY mm_id
+    ) g
+    WHERE seat_sum = 0 AND actual_total_seats > 0
+
 - id: XROW_SEATING_TYPE_LIFETIME_SEATS
   name: seating_type does not match the mm_id's lifetime total_seats sum
   class: custom

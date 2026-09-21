@@ -1079,16 +1079,23 @@ rules:
   detail_columns: [mm_id, seating_type, seat_sum]
   message: "seating type does not match the sign of the mm_id's lifetime total_seats sum"
   note: >
-    Added 2026-09-19 per request. Sums total_seats across every crawled row
-    for a given mm_id -- deliberately the mm_id's whole history, not the
-    scan's --from/--to window, so no {{window}} in this SQL -- excluding
-    Crawdads correction rows, same convention as XROW_WRONG_AVAILABLE/
-    RESERVED/CHECKERED/TOTAL_SEATS. sum == 0 is expected to be Non Reserved,
-    sum > 0 is expected to be Reserved; a negative sum is never valid on its
-    own (more seats were removed than were ever added for that mm_id) and
-    is flagged regardless of seating_type. Assumes seating_type is constant
-    for a given mm_id (MAX() picks a representative value) -- a genuinely
-    mixed mm_id is a different defect this rule doesn't diagnose.
+    Added 2026-09-19, rescoped 2026-09-21 -- the original version grouped
+    by mm_id over the ENTIRE table with no date filter at all, which timed
+    out in production (MAX_EXECUTION_TIME exceeded) because its cost scales
+    with the whole table's ever-growing history, not with the run's window.
+    Rescoped per request: first cheaply find the distinct mm_ids that fall
+    in this run's --from/--to window (indexed on date_sh), then sum
+    total_seats for only those mm_ids across their whole lifetime --
+    excluding Crawdads correction rows, same convention as
+    XROW_WRONG_AVAILABLE/RESERVED/CHECKERED/TOTAL_SEATS. sum == 0 is
+    expected to be Non Reserved, sum > 0 is expected to be Reserved; a
+    negative sum is never valid on its own (more seats were removed than
+    were ever added for that mm_id) and is flagged regardless of
+    seating_type. Assumes seating_type is constant for a given mm_id
+    (MAX() picks a representative value) -- a genuinely mixed mm_id is a
+    different defect this rule doesn't diagnose. An mm_id outside this
+    run's window won't be re-checked unless it recurs in a later window --
+    same behavior every other windowed rule in this pack already has.
   sql: |
     SELECT mm_id, seating_type, seat_sum
     FROM (
@@ -1097,6 +1104,7 @@ rules:
              SUM(total_seats) AS seat_sum
       FROM {{table}}
       WHERE ticket_availability <> 'Crawdads'
+        AND mm_id IN (SELECT DISTINCT mm_id FROM {{table}} WHERE {{window}})
       GROUP BY mm_id
     ) g
     WHERE seat_sum IS NOT NULL

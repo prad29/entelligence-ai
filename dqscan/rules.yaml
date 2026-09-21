@@ -947,12 +947,23 @@ rules:
   class: cross_row
   severity: high
   status: active
-  requires: [mm_id, running_date, ticket_availability]
+  requires: [mm_id, running_date, ticket_availability, last_updates]
   group_by: [mm_id, running_date]
   filter: "ticket_availability = 'Crawdads'"
-  having: "COUNT(*) > 1"
-  detail_columns: [mm_id, running_date, reserved, checkered]
+  having: "COUNT(*) > COUNT(DISTINCT last_updates)"
+  detail_columns: [mm_id, running_date, reserved, checkered, last_updates]
   message: "a showtime carries more than one correction row on one day"
+  note: >
+    Changed 2026-09-21 to the same COUNT(*) > COUNT(DISTINCT last_updates)
+    fix as XROW_DUPLICATE_SHOWTIME, for consistency -- same-day corrections
+    with genuinely distinct last_updates are legitimate and shouldn't be
+    flagged. No behavior change against dev data (2026-09-20 to
+    2027-03-31): verified all 38 groups this rule fires on there share the
+    identical last_updates within the pair, so all 38 still fire. Of
+    those, 2 are byte-identical duplicate rows and 36 have identical
+    actual_available/actual_reserved/actual_checkered/actual_total_seats
+    but reserved and checkered swapped between the two rows -- a real
+    same-crawl-event double-write bug, not two separate crawls.
 
 - id: XROW_THEATER_NAME
   name: theater_id carrying more than one theater_name

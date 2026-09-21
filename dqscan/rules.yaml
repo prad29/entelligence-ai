@@ -298,11 +298,16 @@ rules:
   severity: medium
   status: active
   requires: [theater_name]
-  allowlist_regex: "^[[:alnum:] &''.,/#():+|!–—-]*$"
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@$–—-]*$"
   expr: "NOT REGEXP_LIKE(theater_name, '{{allowlist_regex}}')"
   detail_columns: [theater_name]
   message: "theater name contains a character outside the allowlist"
-  note: "Own allowlist (not the pack default) -- additionally allows ! and en/em dash (2026-09-17)."
+  note: >
+    Own allowlist (not the pack default) -- additionally allows ! and
+    en/em dash (2026-09-17), @ (2026-09-21, per request), and $ (2026-09-22,
+    unified with JUNK_CHARS_TITLE/ADDRESS per Opus audit finding A4 --
+    the three JUNK_CHARS_* rules had drifted to different character sets
+    for no recorded reason; all three now share one allowlist).
 
 - id: JUNK_CHARS_ADDRESS
   name: character outside allowlist in theater_address
@@ -310,9 +315,17 @@ rules:
   severity: medium
   status: active
   requires: [theater_address]
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@$–—-]*$"
   expr: "NOT REGEXP_LIKE(theater_address, '{{allowlist_regex}}')"
   detail_columns: [theater_address]
   message: "address contains a character outside the allowlist"
+  note: >
+    Added 2026-09-22, own allowlist matching JUNK_CHARS_THEATER_NAME/TITLE
+    (per Opus audit finding A1) -- this rule had no override at all and
+    was silently inheriting the pack-level default (line 7), the only one
+    of the three JUNK_CHARS_* rules to do so, with no record anyone ever
+    decided addresses needed a narrower set than names/titles. Now shares
+    the same allowlist as its two siblings.
 
 - id: JUNK_CHARS_TITLE
   name: character outside allowlist in title
@@ -320,11 +333,17 @@ rules:
   severity: medium
   status: active
   requires: [title]
-  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@-]*$"
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@$–—-]*$"
   expr: "NOT REGEXP_LIKE(title, '{{allowlist_regex}}')"
   detail_columns: [title]
   message: "title contains a character outside the allowlist"
-  note: "Own allowlist (not the pack default) -- additionally allows @ (2026-09-17) and ! (2026-09-17, titles like 'Six: The Musical Live!')."
+  note: >
+    Own allowlist (not the pack default) -- additionally allows @
+    (2026-09-17), ! (2026-09-17, titles like 'Six: The Musical Live!'), $
+    (2026-09-21, per request), and en/em dash (2026-09-22, unified with
+    JUNK_CHARS_THEATER_NAME/ADDRESS per Opus audit finding A3 -- dashes
+    are at least as common in scraped titles as in venue names, e.g.
+    "Movie -- Extended Cut", but had only been added to theater_name).
 
 - id: DOM_TICKET_AVAILABILITY
   name: ticket_availability outside known set
@@ -810,12 +829,12 @@ rules:
   name: seating_type contradicts amenities text
   class: cross_column
   severity: medium
-  status: active
+  status: dormant
   requires: [seating_type, amenities]
   expr: "(seating_type = 'Reserved' AND LOWER(amenities) LIKE '%non reserved%') OR (seating_type = 'Non Reserved' AND LOWER(amenities) LIKE '%reserved seating%')"
   detail_columns: [seating_type, amenities]
   message: "seating type contradicts the amenities text"
-  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column."
+  note: "amenities_new -> amenities (2026-09-17): amenities_new is 100% empty in dev data; amenities is the real column. Disabled 2026-09-21 per request -- not needed."
 
 - id: XCOL_SHOW_BEFORE_RELEASE
   name: show date before release date
@@ -928,7 +947,7 @@ rules:
   requires: [mm_id, running_date, ticket_availability, last_updates]
   group_by: [mm_id, running_date]
   filter: "ticket_availability <> 'Crawdads'"
-  having: "COUNT(*) > COUNT(DISTINCT last_updates)"
+  having: "COUNT(*) > 1 AND COUNT(*) > COUNT(DISTINCT last_updates)"
   detail_columns: [mm_id, running_date, ticket_availability, last_updates]
   message: "the same showtime was written twice on one crawl day"
   note: >
@@ -940,7 +959,12 @@ rules:
     drifting consistently between them -- i.e. two genuinely separate
     crawls the same day, not a duplicate write. Now only fires when a
     last_updates value repeats within the group -- the actual signal of
-    the same crawl event being written more than once.
+    the same crawl event being written more than once. Added the explicit
+    COUNT(*) > 1 guard 2026-09-22 (Opus audit finding B1): COUNT(DISTINCT
+    last_updates) ignores NULLs, so a single-row group whose last_updates
+    is NULL would otherwise evaluate 1 > 0 and misreport a lone row as a
+    duplicate (that gap is PRES_LAST_UPDATES's job, not this rule's). Not
+    observed in the dev window checked, but cheap to close regardless.
 
 - id: XROW_DUPLICATE_CRAWDADS
   name: more than one Crawdads row for a showtime on one day
@@ -950,7 +974,7 @@ rules:
   requires: [mm_id, running_date, ticket_availability, last_updates]
   group_by: [mm_id, running_date]
   filter: "ticket_availability = 'Crawdads'"
-  having: "COUNT(*) > COUNT(DISTINCT last_updates)"
+  having: "COUNT(*) > 1 AND COUNT(*) > COUNT(DISTINCT last_updates)"
   detail_columns: [mm_id, running_date, reserved, checkered, last_updates]
   message: "a showtime carries more than one correction row on one day"
   note: >
@@ -963,7 +987,9 @@ rules:
     those, 2 are byte-identical duplicate rows and 36 have identical
     actual_available/actual_reserved/actual_checkered/actual_total_seats
     but reserved and checkered swapped between the two rows -- a real
-    same-crawl-event double-write bug, not two separate crawls.
+    same-crawl-event double-write bug, not two separate crawls. Added the
+    explicit COUNT(*) > 1 guard 2026-09-22, same NULL-last_updates fix as
+    XROW_DUPLICATE_SHOWTIME (Opus audit finding B1).
 
 - id: XROW_THEATER_NAME
   name: theater_id carrying more than one theater_name
@@ -1126,38 +1152,78 @@ rules:
     WHERE prev_actual_total_seats IS NOT NULL
       AND total_seats <> actual_total_seats - prev_actual_total_seats
 
-- id: XROW_SEATING_TYPE_LIFETIME_SEATS
-  name: seating_type does not match the mm_id's lifetime total_seats sum
+- id: XROW_MISSING_FIRST_RECORD
+  name: mm_id's first capacity-establishing record is missing
   class: custom
   severity: critical
   status: active
-  requires: [mm_id, total_seats, seating_type, ticket_availability]
-  detail_columns: [mm_id, seating_type, seat_sum]
-  message: "seating type does not match the sign of the mm_id's lifetime total_seats sum"
+  requires: [mm_id, total_seats, actual_total_seats, ticket_availability]
+  detail_columns: [mm_id, seat_sum, actual_total_seats]
+  message: "lifetime total_seats sum is 0 but the showtime has real capacity"
   note: >
-    Added 2026-09-19, rescoped 2026-09-21 -- the original version grouped
-    by mm_id over the ENTIRE table with no date filter at all, which timed
-    out in production (MAX_EXECUTION_TIME exceeded) because its cost scales
-    with the whole table's ever-growing history, not with the run's window.
-    Rescoped per request: first cheaply find the distinct mm_ids that fall
-    in this run's --from/--to window (indexed on date_sh), then sum
-    total_seats for only those mm_ids across their whole lifetime --
-    excluding Crawdads correction rows, same convention as
-    XROW_WRONG_AVAILABLE/RESERVED/CHECKERED/TOTAL_SEATS. sum == 0 is
-    expected to be Non Reserved, sum > 0 is expected to be Reserved; a
-    negative sum is never valid on its own (more seats were removed than
-    were ever added for that mm_id) and is flagged regardless of
-    seating_type. Assumes seating_type is constant for a given mm_id
-    (MAX() picks a representative value) -- a genuinely mixed mm_id is a
-    different defect this rule doesn't diagnose. An mm_id outside this
-    run's window won't be re-checked unless it recurs in a later window --
-    same behavior every other windowed rule in this pack already has.
+    Added 2026-09-21 per request. total_seats is a delta column -- an
+    mm_id's very first crawl is expected to log total_seats equal to the
+    starting actual_total_seats (there's no previous row to diff against),
+    then 0 on every later row unless capacity itself changes. If that
+    first establishing row never got written, SUM(total_seats) over the
+    mm_id's lifetime stays 0 forever even though the showtime plainly has
+    real capacity (actual_total_seats > 0) -- this rule catches exactly
+    that gap. Distinct from XROW_SEATING_TYPE_LIFETIME_SEATS, which checks
+    the sum's sign against seating_type; this checks it against
+    actual_total_seats directly, regardless of seating_type. Same
+    Crawdads-exclusion and window-scoping convention as
+    XROW_SEATING_TYPE_LIFETIME_SEATS -- mm_ids are narrowed to this run's
+    --from/--to window first, then summed/maxed across their full
+    lifetime. Uses COALESCE(seat_sum, 0) = 0, not a bare seat_sum = 0
+    (2026-09-22, Opus audit finding B2): if every total_seats value for an
+    mm_id is NULL, SUM() returns NULL rather than 0, and NULL = 0 is
+    unknown -- which would let the worst case (an mm_id that never had ANY
+    capacity-establishing value written) escape the exact rule meant to
+    catch it. No change against the dev window checked (still 139) since
+    no all-NULL mm_id was present there, but the gap is real.
+  sql: |
+    SELECT mm_id, seat_sum, actual_total_seats
+    FROM (
+      SELECT mm_id,
+             SUM(total_seats) AS seat_sum,
+             MAX(actual_total_seats) AS actual_total_seats
+      FROM {{table}}
+      WHERE ticket_availability <> 'Crawdads'
+        AND mm_id IN (SELECT DISTINCT mm_id FROM {{table}} WHERE {{window}})
+      GROUP BY mm_id
+    ) g
+    WHERE COALESCE(seat_sum, 0) = 0 AND actual_total_seats > 0
+
+- id: XROW_SEATING_TYPE_LIFETIME_SEATS
+  name: seating_type does not match the mm_id's lifetime actual_total_seats sum
+  class: custom
+  severity: critical
+  status: active
+  requires: [mm_id, actual_total_seats, seating_type, ticket_availability]
+  detail_columns: [mm_id, seating_type, seat_sum]
+  message: "seating type does not match the sign of the mm_id's lifetime actual_total_seats sum"
+  note: >
+    Added 2026-09-19, rescoped 2026-09-21 for the production timeout,
+    switched from SUM(total_seats) to SUM(actual_total_seats) 2026-09-21
+    per request. Finds the distinct mm_ids that fall in this run's
+    --from/--to window (indexed on date_sh), then sums actual_total_seats
+    for only those mm_ids across their whole lifetime -- excluding
+    Crawdads correction rows, same convention as XROW_WRONG_AVAILABLE/
+    RESERVED/CHECKERED/TOTAL_SEATS. sum == 0 is expected to be Non
+    Reserved, sum > 0 is expected to be Reserved. Note: since
+    actual_total_seats is itself never negative, this sum can also never
+    be negative, so the seat_sum < 0 branch below is now unreachable in
+    practice -- kept for symmetry with XROW_MISSING_FIRST_RECORD's
+    total_seats-based logic and as a harmless safety net, not because
+    it's expected to fire. Assumes seating_type is constant for a given
+    mm_id (MAX() picks a representative value) -- a genuinely mixed mm_id
+    is a different defect this rule doesn't diagnose.
   sql: |
     SELECT mm_id, seating_type, seat_sum
     FROM (
       SELECT mm_id,
              MAX(seating_type) AS seating_type,
-             SUM(total_seats) AS seat_sum
+             SUM(actual_total_seats) AS seat_sum
       FROM {{table}}
       WHERE ticket_availability <> 'Crawdads'
         AND mm_id IN (SELECT DISTINCT mm_id FROM {{table}} WHERE {{window}})

@@ -1174,7 +1174,13 @@ rules:
     Crawdads-exclusion and window-scoping convention as
     XROW_SEATING_TYPE_LIFETIME_SEATS -- mm_ids are narrowed to this run's
     --from/--to window first, then summed/maxed across their full
-    lifetime.
+    lifetime. Uses COALESCE(seat_sum, 0) = 0, not a bare seat_sum = 0
+    (2026-09-22, Opus audit finding B2): if every total_seats value for an
+    mm_id is NULL, SUM() returns NULL rather than 0, and NULL = 0 is
+    unknown -- which would let the worst case (an mm_id that never had ANY
+    capacity-establishing value written) escape the exact rule meant to
+    catch it. No change against the dev window checked (still 139) since
+    no all-NULL mm_id was present there, but the gap is real.
   sql: |
     SELECT mm_id, seat_sum, actual_total_seats
     FROM (
@@ -1186,7 +1192,7 @@ rules:
         AND mm_id IN (SELECT DISTINCT mm_id FROM {{table}} WHERE {{window}})
       GROUP BY mm_id
     ) g
-    WHERE seat_sum = 0 AND actual_total_seats > 0
+    WHERE COALESCE(seat_sum, 0) = 0 AND actual_total_seats > 0
 
 - id: XROW_SEATING_TYPE_LIFETIME_SEATS
   name: seating_type does not match the mm_id's lifetime actual_total_seats sum

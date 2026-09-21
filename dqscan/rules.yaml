@@ -325,11 +325,17 @@ rules:
   severity: medium
   status: active
   requires: [title]
-  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@$-]*$"
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@$–—-]*$"
   expr: "NOT REGEXP_LIKE(title, '{{allowlist_regex}}')"
   detail_columns: [title]
   message: "title contains a character outside the allowlist"
-  note: "Own allowlist (not the pack default) -- additionally allows @ (2026-09-17), ! (2026-09-17, titles like 'Six: The Musical Live!'), and $ (2026-09-21, per request)."
+  note: >
+    Own allowlist (not the pack default) -- additionally allows @
+    (2026-09-17), ! (2026-09-17, titles like 'Six: The Musical Live!'), $
+    (2026-09-21, per request), and en/em dash (2026-09-22, unified with
+    JUNK_CHARS_THEATER_NAME/ADDRESS per Opus audit finding A3 -- dashes
+    are at least as common in scraped titles as in venue names, e.g.
+    "Movie -- Extended Cut", but had only been added to theater_name).
 
 - id: DOM_TICKET_AVAILABILITY
   name: ticket_availability outside known set

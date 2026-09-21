@@ -315,9 +315,17 @@ rules:
   severity: medium
   status: active
   requires: [theater_address]
+  allowlist_regex: "^[[:alnum:] &''.,/#():+|!@$–—-]*$"
   expr: "NOT REGEXP_LIKE(theater_address, '{{allowlist_regex}}')"
   detail_columns: [theater_address]
   message: "address contains a character outside the allowlist"
+  note: >
+    Added 2026-09-22, own allowlist matching JUNK_CHARS_THEATER_NAME/TITLE
+    (per Opus audit finding A1) -- this rule had no override at all and
+    was silently inheriting the pack-level default (line 7), the only one
+    of the three JUNK_CHARS_* rules to do so, with no record anyone ever
+    decided addresses needed a narrower set than names/titles. Now shares
+    the same allowlist as its two siblings.
 
 - id: JUNK_CHARS_TITLE
   name: character outside allowlist in title

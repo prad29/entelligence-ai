@@ -947,7 +947,7 @@ rules:
   requires: [mm_id, running_date, ticket_availability, last_updates]
   group_by: [mm_id, running_date]
   filter: "ticket_availability <> 'Crawdads'"
-  having: "COUNT(*) > COUNT(DISTINCT last_updates)"
+  having: "COUNT(*) > 1 AND COUNT(*) > COUNT(DISTINCT last_updates)"
   detail_columns: [mm_id, running_date, ticket_availability, last_updates]
   message: "the same showtime was written twice on one crawl day"
   note: >
@@ -959,7 +959,12 @@ rules:
     drifting consistently between them -- i.e. two genuinely separate
     crawls the same day, not a duplicate write. Now only fires when a
     last_updates value repeats within the group -- the actual signal of
-    the same crawl event being written more than once.
+    the same crawl event being written more than once. Added the explicit
+    COUNT(*) > 1 guard 2026-09-22 (Opus audit finding B1): COUNT(DISTINCT
+    last_updates) ignores NULLs, so a single-row group whose last_updates
+    is NULL would otherwise evaluate 1 > 0 and misreport a lone row as a
+    duplicate (that gap is PRES_LAST_UPDATES's job, not this rule's). Not
+    observed in the dev window checked, but cheap to close regardless.
 
 - id: XROW_DUPLICATE_CRAWDADS
   name: more than one Crawdads row for a showtime on one day
@@ -969,7 +974,7 @@ rules:
   requires: [mm_id, running_date, ticket_availability, last_updates]
   group_by: [mm_id, running_date]
   filter: "ticket_availability = 'Crawdads'"
-  having: "COUNT(*) > COUNT(DISTINCT last_updates)"
+  having: "COUNT(*) > 1 AND COUNT(*) > COUNT(DISTINCT last_updates)"
   detail_columns: [mm_id, running_date, reserved, checkered, last_updates]
   message: "a showtime carries more than one correction row on one day"
   note: >
@@ -982,7 +987,9 @@ rules:
     those, 2 are byte-identical duplicate rows and 36 have identical
     actual_available/actual_reserved/actual_checkered/actual_total_seats
     but reserved and checkered swapped between the two rows -- a real
-    same-crawl-event double-write bug, not two separate crawls.
+    same-crawl-event double-write bug, not two separate crawls. Added the
+    explicit COUNT(*) > 1 guard 2026-09-22, same NULL-last_updates fix as
+    XROW_DUPLICATE_SHOWTIME (Opus audit finding B1).
 
 - id: XROW_THEATER_NAME
   name: theater_id carrying more than one theater_name

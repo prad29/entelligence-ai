@@ -164,6 +164,10 @@ def _serialize_job(job) -> dict:
         "true_count": job.true_count,
         "false_count": job.false_count,
         "unknown_count": job.unknown_count,
+        "site_verified_count": job.site_verified_count,
+        "site_wrong_count": job.site_wrong_count,
+        "site_unavailable_count": job.site_unavailable_count,
+        "scrape_credits_used": job.scrape_credits_used,
         "original_filename": job.original_filename,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "output_url": (

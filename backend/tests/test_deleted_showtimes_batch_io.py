@@ -127,18 +127,29 @@ class TestBuildOutputXlsx:
 
         wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
         assert "SERP_EVIDENCE" in wb.sheetnames
+        assert "SITE_EVIDENCE" in wb.sheetnames
 
         ws = wb[wb.sheetnames[0]]
         rows_out = list(ws.iter_rows(values_only=True))
-        assert rows_out[0] == ("Theater Name", "Title", "Show date", "Show time", VERDICT_COL)
-        assert rows_out[1][-1] == FALSE_
-        assert rows_out[2][-1] == TRUE_
+        assert rows_out[0] == (
+            "Theater Name", "Title", "Show date", "Show time", VERDICT_COL,
+            "SITE_VERDICT", "SITE_REASON", "SITE_URL",
+        )
+        verdict_idx = rows_out[0].index(VERDICT_COL)
+        assert rows_out[1][verdict_idx] == FALSE_
+        assert rows_out[2][verdict_idx] == TRUE_
 
         ev = wb["SERP_EVIDENCE"]
         ev_rows = list(ev.iter_rows(values_only=True))
         assert ev_rows[0][0] == "Row"
         assert ev_rows[1][5] == FALSE_  # DELETED_SHOWTIME column
         assert ev_rows[2][5] == TRUE_
+
+        site_ev = wb["SITE_EVIDENCE"]
+        site_ev_rows = list(site_ev.iter_rows(values_only=True))
+        assert site_ev_rows[0][0] == "Row"
+        assert site_ev_rows[1][5] == FALSE_  # DELETED_SHOWTIME column
+        assert site_ev_rows[2][5] == TRUE_
 
 
 def test_required_columns_constant():

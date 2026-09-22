@@ -159,6 +159,12 @@ class RotatingScrapeDoClient:
     def __init__(self, timeout: int = 90, job_id: Optional[str] = None):
         self.timeout = timeout
         self.job_id = job_id
+        # Accumulated across every .fetch() call made through this instance
+        # (one instance is shared across an adapter's whole multi-fetch call,
+        # e.g. AMC's multi-candidate/multi-attempt loop) — read by the caller
+        # afterwards to bump DeletedShowtimeJob.scrape_credits_used.
+        self.calls_made = 0
+        self.total_credits = 0
 
     def _log_attempt(
         self,
@@ -223,6 +229,8 @@ class RotatingScrapeDoClient:
                                   error_type=type(exc).__name__)
                 raise
             self._log_attempt(slot, client, started, success=True)
+            self.calls_made += client.calls_made
+            self.total_credits += client.total_credits
             return data
 
         logger.warning(

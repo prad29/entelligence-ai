@@ -68,6 +68,11 @@ class ShowtimeRow:
     theater_verified: bool = False
     google_theater: str = ""
     google_address: str = ""
+    # Upload's "Circuit Name" column, when present (case-insensitive, not a
+    # required column — see batch_io.rows_to_showtime_rows). Used only to
+    # route site_adapters.registry.resolve(); "" means infer from theater
+    # name prefix instead.
+    circuit: str = ""
     # Site-verification fields (see docs/plans/2026-09-23-deleted-showtimes-
     # site-verification-design.md). google_verdict/google_reason snapshot
     # what decide_rows() decided from Google alone, BEFORE apply_site_check()

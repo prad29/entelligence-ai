@@ -20,6 +20,15 @@ Coverage:
 DB: in-memory sqlite via SQLModel metadata (mirrors test_agentic_batch_task.py).
 Row-result storage and the per-job semaphore are patched to avoid any real
 Redis/SerpApi dependency — no network calls, no SerpApi credits spent.
+
+The site-verification step (see app.deleted_showtimes.site_adapters) is
+disabled for every test in this file via DELETED_SHOWTIME_SITE_CHECK_ENABLED
+— this suite only covers the pre-existing Google-only path, and a theater
+name like "AMC Wayne 14" would otherwise resolve a real adapter and attempt
+real SerpApi/scrape.do network calls the moment `_attempt` succeeds, which is
+exactly what this file's "no network calls" guarantee above exists to
+prevent. Site-check combine logic has its own dedicated coverage in
+test_deleted_showtimes_core.py / test_deleted_showtimes_site_adapters.py.
 """
 
 from __future__ import annotations
@@ -57,8 +66,13 @@ def fake_hash():
 def patched_task(monkeypatch, db_engine, fake_hash):
     """Patch the task module's engine + redis-backed helpers to in-memory ones."""
     import app.tasks.deleted_showtime_task as task_mod
+    from app.config import settings
 
     monkeypatch.setattr("app.database.engine", db_engine, raising=False)
+    # See module docstring: this file covers the pre-existing Google-only
+    # path only — the site-check step has its own dedicated test coverage
+    # and must not make real SerpApi/scrape.do calls from here.
+    monkeypatch.setattr(settings, "DELETED_SHOWTIME_SITE_CHECK_ENABLED", False)
 
     def _store(job_id, row_index, row):
         payload = {
@@ -70,6 +84,11 @@ def patched_task(monkeypatch, db_engine, fake_hash):
             "theater_verified": row.theater_verified,
             "google_theater": row.google_theater,
             "google_address": row.google_address,
+            "google_verdict": row.google_verdict,
+            "google_reason": row.google_reason,
+            "site_verdict": row.site_verdict,
+            "site_reason": row.site_reason,
+            "site_url": row.site_url,
         }
         fake_hash[str(row_index)] = json.dumps(payload)
 
@@ -112,7 +131,7 @@ def test_successful_batch_bumps_counters_and_stores_results(patched_task, db_eng
     import app.tasks.deleted_showtime_task as task_mod
     from unittest.mock import patch
 
-    with patch.object(task_mod, "_attempt", return_value=ok_listing):
+    with patch.object(task_mod, "_attempt", return_value=(ok_listing, None)):
         task_mod.process_batch.run(job_id, "AMC Wayne 14", "2026-08-06", [0, 1], _row_payloads())
 
     job = _get_job(db_engine, job_id)
@@ -223,7 +242,7 @@ def test_consecutive_failures_crossing_threshold_aborts_job(patched_task, db_eng
 
     failing_listing = Listing(ok=False, reason="NO_SHOWTIMES_PANEL")
 
-    with patch.object(task_mod, "_attempt", return_value=failing_listing):
+    with patch.object(task_mod, "_attempt", return_value=(failing_listing, None)):
         task_mod.process_batch.run(job_id, "Theater A", "2026-08-06", [0], _row_payloads()[:1])
         job = _get_job(db_engine, job_id)
         assert job.consecutive_failures == 1
@@ -247,7 +266,7 @@ def test_success_resets_consecutive_failures(patched_task, db_engine, fake_hash,
 
     ok_listing = Listing(ok=True, query="q", by_title={}, titles_seen=[], total_times=1)
 
-    with patch.object(task_mod, "_attempt", return_value=ok_listing):
+    with patch.object(task_mod, "_attempt", return_value=(ok_listing, None)):
         task_mod.process_batch.run(job_id, "Theater A", "2026-08-06", [0], _row_payloads()[:1])
 
     job = _get_job(db_engine, job_id)

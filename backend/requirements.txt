@@ -1,6 +1,13 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
-sqlmodel>=0.0.18
+# Exact-pinned (was >=0.0.18): a later sqlmodel release started requiring
+# tz-aware datetimes on INSERT, which broke every model here using the
+# naive `datetime.utcnow()` default-factory convention (confirmed against
+# 0.0.46) -- CI resolving "latest" on every fresh build made this a
+# ticking time bomb. 0.0.42 is what's actually running in the built/tested
+# backend image; bump deliberately (and re-check the tz-aware datetime
+# fields codebase-wide) rather than letting CI silently float again.
+sqlmodel==0.0.42
 psycopg2-binary>=2.9.9
 pymysql>=1.1.0
 alembic>=1.13.1

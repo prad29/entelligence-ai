@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Tuple
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 
-from app.deleted_showtimes.core import FALSE_, TRUE_, UNKNOWN_, ShowtimeRow
+from app.deleted_showtimes.core import FALSE_, TRUE_, UNKNOWN_, ShowtimeRow, plain_site_reason
 from app.deleted_showtimes.normalize import fmt_min, parse_show_date, parse_time_to_min
 
 REQUIRED_COLUMNS = ("Theater Name", "Title", "Show date", "Show time")
@@ -129,6 +129,10 @@ def rows_to_showtime_rows(headers: List[str], rows: List[Dict[str, Any]]) -> Lis
             show_date=parse_show_date(g(row, "Show date")),
             show_time_raw=show_time_raw,
             show_min=show_min,
+            # Optional, NOT in REQUIRED_COLUMNS — most uploads won't have it;
+            # site_adapters.registry.resolve() infers the circuit from the
+            # theater name prefix when this is "".
+            circuit=str(g(row, "Circuit Name")).strip(),
         ))
     return out
 
@@ -147,19 +151,22 @@ def build_output_xlsx(
     wb = openpyxl.Workbook()
     ws = wb.active
 
-    out_headers = list(original_headers) + [VERDICT_COL]
+    site_cols = ["SITE_VERDICT", "SITE_REASON", "SITE_URL"]
+    out_headers = list(original_headers) + [VERDICT_COL] + site_cols
     ws.append(out_headers)
     for c in ws[1]:
         c.font = Font(bold=True)
 
     fill = PatternFill(start_color=YELLOW, end_color=YELLOW, fill_type="solid")
     for row, r in zip(rows, showtime_rows):
-        out_row = [row.get(h, "") for h in original_headers] + [r.verdict]
+        out_row = [row.get(h, "") for h in original_headers] + [r.verdict] + [
+            r.site_verdict, plain_site_reason(r.site_reason) if r.site_reason else "", r.site_url,
+        ]
         ws.append(out_row)
         if r.verdict == TRUE_ and not no_highlight:
             for c in ws[ws.max_row]:
                 c.fill = fill
-    ws.column_dimensions[openpyxl.utils.get_column_letter(len(out_headers))].width = 22
+    ws.column_dimensions[openpyxl.utils.get_column_letter(len(original_headers) + 1)].width = 22
 
     ev = wb.create_sheet("SERP_EVIDENCE")
     ev.append(["Row", "Theater Name", "Title", "Show date", "Show time",
@@ -177,6 +184,22 @@ def build_output_xlsx(
     for i, w in enumerate([8, 34, 30, 12, 11, 22, 44, 60, 20, 16, 38, 40, 40], start=1):
         ev.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ev.freeze_panes = "A2"
+
+    site_ev = wb.create_sheet("SITE_EVIDENCE")
+    site_ev.append(["Row", "Theater Name", "Title", "Show date", "Show time",
+                     VERDICT_COL, "GOOGLE_VERDICT", "GOOGLE_REASON",
+                     "SITE_VERDICT", "SITE_REASON_CODE (raw)", "SITE_URL"])
+    for c in site_ev[1]:
+        c.font = Font(bold=True)
+    for row, r in zip(rows, showtime_rows):
+        site_ev.append([
+            r.key + 2, r.theater, r.title, str(r.show_date or ""), r.show_time_raw,
+            r.verdict, r.google_verdict, r.google_reason,
+            r.site_verdict, r.site_reason, r.site_url,
+        ])
+    for i, w in enumerate([8, 34, 30, 12, 11, 22, 20, 60, 20, 60, 60], start=1):
+        site_ev.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    site_ev.freeze_panes = "A2"
 
     buf = io.BytesIO()
     wb.save(buf)

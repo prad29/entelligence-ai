@@ -130,7 +130,8 @@ function DeletedShowtimesCheck() {
             <div>
               <CardTitle>Deleted Showtimes Check</CardTitle>
               <CardDescription>
-                Upload a CSV or XLSX export to verify showtimes still exist on Google via SerpApi.
+                Upload a CSV or XLSX export to verify showtimes still exist on Google, and — for
+                supported theater chains — on the theater's own website too.
                 Requires <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Theater Name</code>,{' '}
                 <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Title</code>,{' '}
                 <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Show date</code>, and{' '}
@@ -341,6 +342,32 @@ function DeletedShowtimesCheck() {
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-3 text-center">
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">Undetermined</p>
                   <p className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{job.unknown_count}</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 p-3">
+                <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                  Theater website check
+                </p>
+                <div className="flex items-center gap-4 text-xs text-zinc-500 dark:text-zinc-400">
+                  <span>
+                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                      {job.site_verified_count}
+                    </span>{' '}
+                    confirmed
+                  </span>
+                  <span>
+                    <span className="font-semibold text-amber-600 dark:text-amber-400">
+                      {job.site_wrong_count}
+                    </span>{' '}
+                    overrode Google
+                  </span>
+                  <span>
+                    <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+                      {job.site_unavailable_count}
+                    </span>{' '}
+                    unavailable
+                  </span>
                 </div>
               </div>
 

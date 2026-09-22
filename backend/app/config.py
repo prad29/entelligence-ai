@@ -184,6 +184,25 @@ class Settings(BaseSettings):
     # on a run that's clearly not getting usable listings back.
     DELETED_SHOWTIME_ABORT_AFTER: int = 5
 
+    # Site-verification (see docs/plans/2026-09-23-deleted-showtimes-site-
+    # verification-design.md) — checks each row against the real theater
+    # website (scrape.do-backed adapters) in addition to Google, and lets a
+    # confident site verdict override Google's. Kill switch so the whole
+    # site-check step can be disabled without a deploy if scrape.do has an
+    # outage or a cost spike — process_batch falls back to Google-only,
+    # exactly like an unsupported circuit.
+    DELETED_SHOWTIME_SITE_CHECK_ENABLED: bool = True
+    # scrape.do token(s). Rotation mirrors SERPAPI_API_KEYS above but with far
+    # fewer slots — only added as real multi-token need shows up.
+    SCRAPE_DO_TOKEN: str = ""
+    SCRAPE_DO_TOKEN_2: str = ""
+    SCRAPE_DO_TOKEN_3: str = ""
+    # scrape.do's real plan concurrency limits weren't confirmed as of this
+    # writing — deliberately conservative default, raise once confirmed.
+    SCRAPE_DO_MAX_CONCURRENCY: int = 4
+    # Same rationale as SERPAPI_KEY_COOLDOWN_HOURS.
+    SCRAPE_DO_TOKEN_COOLDOWN_HOURS: int = 24
+
     # ── LLM/API usage observability (see local-docs/2026-08-24-observability-platform-design.md)
     # Single kill switch: every instrumentation site checks this before doing
     # any work, so the feature can be disabled in production without a deploy
@@ -341,6 +360,16 @@ class Settings(BaseSettings):
             (13, self.SERPAPI_API_KEY_13),
         ]
         return [(slot, key) for slot, key in slots if key]
+
+    @property
+    def SCRAPE_DO_TOKENS(self) -> list[tuple[int, str]]:
+        """Ordered (slot, token) pairs for every configured scrape.do token, slot 1 = SCRAPE_DO_TOKEN."""
+        slots = [
+            (1, self.SCRAPE_DO_TOKEN),
+            (2, self.SCRAPE_DO_TOKEN_2),
+            (3, self.SCRAPE_DO_TOKEN_3),
+        ]
+        return [(slot, token) for slot, token in slots if token]
 
     class Config:
         env_file = ".env"

@@ -51,6 +51,13 @@ SERPAPI_API_KEY_10=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."10" // ""')
 SERPAPI_API_KEY_11=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."11" // ""')
 SERPAPI_API_KEY_12=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."12" // ""')
 SERPAPI_API_KEY_13=$(echo "$SERPAPI_KEYS_JSON" | jq -r '."13" // ""')
+# Site-verification step's scrape.do token(s) (see docs/plans/2026-09-23-
+# deleted-showtimes-site-verification-design.md) — same rotation-pool JSON
+# secret shape as amenity/serpapi-api-keys above, keyed "1".."3".
+SCRAPE_DO_TOKENS_JSON=$(aws secretsmanager get-secret-value --secret-id amenity/scrape-do-tokens --query SecretString --output text --region us-east-1)
+SCRAPE_DO_TOKEN=$(echo "$SCRAPE_DO_TOKENS_JSON" | jq -r '."1" // ""')
+SCRAPE_DO_TOKEN_2=$(echo "$SCRAPE_DO_TOKENS_JSON" | jq -r '."2" // ""')
+SCRAPE_DO_TOKEN_3=$(echo "$SCRAPE_DO_TOKENS_JSON" | jq -r '."3" // ""')
 
 cat > /app/.env.prod <<EOF
 DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@amenity-db.critf4jd3ef7.us-east-1.rds.amazonaws.com:5432/amenitydb
@@ -124,6 +131,16 @@ DELETED_SHOWTIME_S3_REGION=us-east-1
 DELETED_SHOWTIME_MAX_ROWS=1000
 DELETED_SHOWTIME_JOB_TTL_HOURS=720
 DELETED_SHOWTIME_ABORT_AFTER=5
+SCRAPE_DO_TOKEN=${SCRAPE_DO_TOKEN}
+SCRAPE_DO_TOKEN_2=${SCRAPE_DO_TOKEN_2}
+SCRAPE_DO_TOKEN_3=${SCRAPE_DO_TOKEN_3}
+# Matches celery-deleted-showtimes-worker's hardcoded --concurrency=4
+# (docker-compose.prod.yml) for the same reason that worker's own comment
+# documents (2026-09-11 incident): a semaphore cap smaller than the worker
+# pool starves tasks past its acquire timeout even when nothing upstream is
+# actually failing. Raise both together if scrape.do's real plan limits
+# turn out to allow more.
+SCRAPE_DO_MAX_CONCURRENCY=4
 CALENDAR_EXTRACT_ENABLED=true
 CALENDAR_EXTRACT_MODEL_ID=mistral.mistral-large-3-675b-instruct
 CALENDAR_EXTRACT_S3_BUCKET=erica-datastore

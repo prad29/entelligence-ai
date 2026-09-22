@@ -329,6 +329,67 @@ class DeletedShowtimeJob(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ttl: Optional[datetime] = None
     original_filename: Optional[str] = None
+    # Site-verification counters (see docs/plans/2026-09-23-deleted-showtimes-
+    # site-verification-design.md) — additive to true_count/false_count/
+    # unknown_count above, which already reflect the COMBINED (Google + site)
+    # verdict. These exist purely so the job-history UI can show how much
+    # site-checking actually happened/cost, independent of the final verdict
+    # mix. site_verified_count = rows where the site confirmed Google's call
+    # (site_verdict FALSE); site_wrong_count = rows where the site overrode
+    # Google (site_verdict TRUE); site_unavailable_count = rows where no
+    # adapter matched or the site check was inconclusive.
+    site_verified_count: int = Field(default=0)
+    site_wrong_count: int = Field(default=0)
+    site_unavailable_count: int = Field(default=0)
+    scrape_credits_used: int = Field(default=0)
+
+
+class TheaterSiteUrl(SQLModel, table=True):
+    """Persistent theater-name -> resolved showtimes-page URL cache for
+    site_adapters that must resolve a URL via a search step (currently just
+    AMC, via SerpApi). Real replacement for the research session's throwaway
+    SQLite AMC-URL cache, generalized to any adapter that needs one.
+
+    Caches only the URL/slug mapping (effectively permanent — a theater's
+    market+slug doesn't change), never the showtime listing itself, which
+    must stay live per serp_client.py's no-caching rule.
+    """
+
+    theater_name: str = Field(primary_key=True)
+    circuit_name: str
+    resolved_url: str
+    resolved_at: datetime = Field(default_factory=datetime.utcnow)
+    source: str = Field(default="serpapi")
+
+
+class ScrapeDoTokenSlot(SQLModel, table=True):
+    """Rotation state for scrape.do tokens used by the Deleted Showtimes Check
+    site-verification step. Direct structural copy of SerpApiKeySlot below —
+    same absence-means-available / fingerprint-mismatch-means-available
+    semantics, same never-lazily-seeded rationale (insert race across
+    concurrent Celery workers)."""
+
+    slot: int = Field(primary_key=True)
+    key_fingerprint: str
+    exhausted_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    failure_count: int = Field(default=0)
+
+
+class ScrapeDoCallLog(SQLModel, table=True):
+    """One row per scrape.do fetch attempt against one token slot. Direct
+    structural copy of SerpApiCallLog below, tracking credits_used (scrape.do
+    bills per-request by render/proxy tier) instead of calls_made. Not
+    pruned — same rationale as SerpApiCallLog."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=datetime.utcnow, index=True)
+    job_id: Optional[str] = Field(default=None, index=True)  # DeletedShowtimeJob.id
+    slot: int = Field(index=True)  # ScrapeDoTokenSlot.slot the attempt used
+    success: bool = Field(default=True)
+    credits_used: int = Field(default=0)
+    latency_ms: int = Field(default=0)
+    error_type: Optional[str] = None
 
 
 class SerpApiKeySlot(SQLModel, table=True):

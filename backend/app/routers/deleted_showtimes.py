@@ -82,8 +82,8 @@ async def upload_batch(
     if row_count == 0:
         raise HTTPException(status_code=400, detail="File has no data rows")
 
-    if workers < 1 or workers > 16:
-        raise HTTPException(status_code=400, detail="workers must be between 1 and 16")
+    if workers < 1 or workers > 4:
+        raise HTTPException(status_code=400, detail="workers must be between 1 and 4")
 
     from app.models import DeletedShowtimeJob
 
@@ -164,6 +164,10 @@ def _serialize_job(job) -> dict:
         "true_count": job.true_count,
         "false_count": job.false_count,
         "unknown_count": job.unknown_count,
+        "site_verified_count": job.site_verified_count,
+        "site_wrong_count": job.site_wrong_count,
+        "site_unavailable_count": job.site_unavailable_count,
+        "scrape_credits_used": job.scrape_credits_used,
         "original_filename": job.original_filename,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "output_url": (

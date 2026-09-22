@@ -60,6 +60,44 @@ def log_serpapi_call(
         )
 
 
+def log_scrapedo_call(
+    *,
+    job_id: Optional[str],
+    slot: int,
+    success: bool,
+    credits_used: int,
+    latency_ms: int,
+    error_type: Optional[str] = None,
+) -> None:
+    """Write one ScrapeDoCallLog row for one fetch attempt. Never raises.
+    Direct structural copy of log_serpapi_call above, tracking credits_used
+    (scrape.do bills per-request by render/proxy tier) instead of calls_made.
+    """
+    if not settings.USAGE_TRACKING_ENABLED:
+        return
+
+    try:
+        from app.database import engine
+        from app.models import ScrapeDoCallLog
+
+        with Session(engine) as session:
+            session.add(
+                ScrapeDoCallLog(
+                    job_id=job_id,
+                    slot=slot,
+                    success=success,
+                    credits_used=int(credits_used),
+                    latency_ms=int(latency_ms),
+                    error_type=error_type,
+                )
+            )
+            session.commit()
+    except Exception as exc:  # noqa: BLE001 — see module docstring / spec §7
+        logger.warning(
+            "scrapedo_call_log_write_failed slot=%s job_id=%r error=%s", slot, job_id, exc
+        )
+
+
 def log_serper_calls(
     calls: list,
     *,

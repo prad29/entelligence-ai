@@ -23,6 +23,10 @@ export interface DeletedShowtimeJob {
   true_count: number
   false_count: number
   unknown_count: number
+  site_verified_count: number
+  site_wrong_count: number
+  site_unavailable_count: number
+  scrape_credits_used: number
   original_filename?: string
   created_at?: string
   output_url?: string

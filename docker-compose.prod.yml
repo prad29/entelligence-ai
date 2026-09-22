@@ -105,11 +105,14 @@ services:
 
   celery-deleted-showtimes-worker:
     image: ${ECR_BACKEND}:${IMAGE_TAG}
-    # Concurrency of 16 so DeletedShowtimeJob.workers (user-configurable 1-16,
-    # enforced per-job by app/deleted_showtimes/job_semaphore.py) is actually
-    # reachable — a lower worker concurrency would silently cap it below
-    # whatever the user picks in the UI.
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=16 -Q deleted-showtimes
+    # Concurrency must match DeletedShowtimeJob.workers' max (see
+    # app/deleted_showtimes/job_semaphore.py and routers/deleted_showtimes.py) —
+    # if the worker pool is bigger than the per-job SerpApi slot cap, tasks
+    # race for slots and can starve past the semaphore's acquire timeout even
+    # though nothing upstream is actually failing (see 2026-09-11 incident:
+    # every deleted-showtimes run aborted on a 5x-consecutive-timeout false
+    # positive with concurrency=16 vs a 4-slot cap).
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4 -Q deleted-showtimes
     restart: unless-stopped
     env_file: /app/.env.prod
     depends_on:

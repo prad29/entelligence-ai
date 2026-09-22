@@ -37,21 +37,26 @@ from sqlmodel import Session
 
 from app.celery_app import celery
 from app.config import settings
-from app.deleted_showtimes import batch_io, job_semaphore, storage
+from app.deleted_showtimes import batch_io, job_semaphore, scrapedo_semaphore, storage
 from app.deleted_showtimes.core import (
     FALSE_,
+    NO_ADAPTER_REASON,
     RETRYABLE_MISSES,
     TRUE_,
     UNKNOWN_,
     Listing,
     ShowtimeRow,
+    apply_site_check,
     build_query,
     decide_rows,
     parse_theater_listing,
     short_theater_name,
 )
+from app.deleted_showtimes.scrapedo_key_rotation import RotatingScrapeDoClient
 from app.deleted_showtimes.serp_client import SerpAuthError, SerpError
 from app.deleted_showtimes.serp_key_rotation import AllKeysExhaustedError, RotatingSerpClient
+from app.deleted_showtimes.site_adapters import registry as site_adapter_registry
+from app.deleted_showtimes.site_adapters.base import SiteCheckContext
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +96,11 @@ def _store_row_result(job_id: str, row_index: int, row: ShowtimeRow) -> None:
         "theater_verified": row.theater_verified,
         "google_theater": row.google_theater,
         "google_address": row.google_address,
+        "google_verdict": row.google_verdict,
+        "google_reason": row.google_reason,
+        "site_verdict": row.site_verdict,
+        "site_reason": row.site_reason,
+        "site_url": row.site_url,
     }
     _get_redis().hset(_results_key(job_id), str(row_index), json.dumps(payload))
 
@@ -131,20 +141,23 @@ def _mark_aborted(session: Session, job_id: str, reason: str) -> None:
 
 
 def _attempt(client: RotatingSerpClient, theater: str, target: date, today: date, aliases: Dict[str, str],
-             q: str, require_theater_verify: bool, strict_screens: bool) -> Listing:
+             q: str, require_theater_verify: bool, strict_screens: bool) -> Tuple[Listing, Optional[dict]]:
+    """Returns (Listing, raw_serp_data) — the raw response is threaded through
+    to the site-check step below (site_adapters.amc reuses organic_results
+    for URL resolution instead of spending a second SerpApi call)."""
     params = {"engine": "google", "q": q, "hl": "en", "gl": "us", "device": "desktop"}
     try:
         data = client.search(params)
     except SerpAuthError:
         raise
     except SerpError as e:
-        return Listing(ok=False, reason=f"API_ERROR: {e}"[:200], query=q)
+        return Listing(ok=False, reason=f"API_ERROR: {e}"[:200], query=q), None
     got = parse_theater_listing(
         data, theater, target, today, aliases,
         require_theater_verify=require_theater_verify, strict_screens=strict_screens,
     )
     got.query = q
-    return got
+    return got, data
 
 
 @celery.task(
@@ -152,8 +165,15 @@ def _attempt(client: RotatingSerpClient, theater: str, target: date, today: date
     name="app.tasks.deleted_showtime_task.process_batch",
     queue=QUEUE,
     max_retries=0,
-    soft_time_limit=180,
-    time_limit=240,
+    # Raised from 180/240 now that this task also runs a scrape.do-backed
+    # site check (see below) — AMC's adapter can try up to 3 candidate URLs
+    # x 3 attempts each, and a single scrape.do fetch's own timeout is 90s.
+    # The site-check step below catches BaseException (including
+    # SoftTimeLimitExceeded) around itself specifically so a slow/hanging
+    # site check degrades to the Google-only verdict rather than losing
+    # already-computed results to the outer broad-except handler.
+    soft_time_limit=280,
+    time_limit=340,
 )
 def process_batch(
     self,
@@ -194,6 +214,7 @@ def process_batch(
             show_date=target,
             show_time_raw=p["show_time_raw"],
             show_min=p["show_min"],
+            circuit=p.get("circuit", ""),
         )
         for idx, p in zip(row_indices, row_payloads)
     ]
@@ -226,8 +247,8 @@ def process_batch(
         client = RotatingSerpClient(job_id=job_id)
         holder = job_semaphore.acquire(job_id, max_concurrency, timeout=120)
 
-        lst = _attempt(client, theater, target, today, {}, build_query(theater, "bare"),
-                       require_verify, strict_screens)
+        lst, serp_data = _attempt(client, theater, target, today, {}, build_query(theater, "bare"),
+                                   require_verify, strict_screens)
 
         if not lst.ok and fallback_mode != "off" and lst.reason in RETRYABLE_MISSES:
             short = short_theater_name(theater)
@@ -248,13 +269,60 @@ def process_batch(
 
             first_reason = lst.reason
             for label, alt_q in plan[:3]:
-                alt = _attempt(client, theater, target, today, {}, alt_q, require_verify, strict_screens)
+                alt, alt_data = _attempt(client, theater, target, today, {}, alt_q, require_verify, strict_screens)
                 if alt.ok:
                     alt.reason = f"VIA_FALLBACK ({label}) after {first_reason}"
                     lst = alt
+                    serp_data = alt_data
                     break
 
         decide_rows(batch, lst, title_missing_is_deleted)
+
+        site_tally = {"verified": 0, "wrong": 0, "unavailable": 0}
+        scrape_credits_used = 0
+        theater_circuit = batch[0].circuit if batch else ""
+        adapter = (
+            site_adapter_registry.resolve(theater, theater_circuit)
+            if settings.DELETED_SHOWTIME_SITE_CHECK_ENABLED else None
+        )
+        if adapter is None:
+            reason = NO_ADAPTER_REASON if settings.DELETED_SHOWTIME_SITE_CHECK_ENABLED else "SITE_CHECK_DISABLED"
+            for r in batch:
+                r.google_verdict, r.google_reason = r.verdict, r.reason
+                r.site_verdict, r.site_reason, r.site_url = "", reason, ""
+            site_tally["unavailable"] = len(batch)
+        else:
+            scrapedo_holder = None
+            try:
+                scrapedo_holder = scrapedo_semaphore.acquire(timeout=120)
+                scrapedo_client = RotatingScrapeDoClient(job_id=job_id)
+                ctx = SiteCheckContext(scrapedo=scrapedo_client, serp_client=client,
+                                        serp_data=serp_data, today=today)
+                listing = adapter(theater, theater_circuit, ctx)
+                scrape_credits_used = scrapedo_client.total_credits
+                for r in batch:
+                    apply_site_check(r, listing.by_title, listing.status_map, listing.method, listing.url)
+                    if r.site_verdict == FALSE_:
+                        site_tally["verified"] += 1
+                    elif r.site_verdict == TRUE_:
+                        site_tally["wrong"] += 1
+                    else:
+                        site_tally["unavailable"] += 1
+            except BaseException as exc:  # noqa: BLE001
+                # Deliberately BaseException, not Exception: this must also
+                # catch SoftTimeLimitExceeded (scrape.do fetches can be slow),
+                # so a slow/hanging site check degrades every row in this
+                # batch to its already-computed Google-only verdict instead
+                # of letting the failure propagate to the outer handler,
+                # which would overwrite those already-correct Google results
+                # with BATCH_TASK_ERROR.
+                logger.warning("site check failed job=%s theater=%r: %s", job_id, theater, exc)
+                for r in batch:
+                    r.google_verdict, r.google_reason = r.verdict, r.reason
+                    r.site_verdict, r.site_reason, r.site_url = "", f"SITE_CHECK_ERROR: {exc}"[:200], ""
+                site_tally["unavailable"] = len(batch)
+            finally:
+                scrapedo_semaphore.release(scrapedo_holder)
 
         tally = {TRUE_: 0, FALSE_: 0, UNKNOWN_: 0}
         for idx, r in zip(row_indices, batch):
@@ -268,6 +336,10 @@ def process_batch(
                 true_count=tally.get(TRUE_, 0),
                 false_count=tally.get(FALSE_, 0),
                 unknown_count=tally.get(UNKNOWN_, 0),
+                site_verified_count=site_tally["verified"],
+                site_wrong_count=site_tally["wrong"],
+                site_unavailable_count=site_tally["unavailable"],
+                scrape_credits_used=scrape_credits_used,
             )
             if lst.ok:
                 _record_batch_success(session, job_id)
@@ -385,10 +457,19 @@ def finalize_job(_batch_results, job_id: str) -> None:
         sr.theater_verified = data["theater_verified"]
         sr.google_theater = data["google_theater"]
         sr.google_address = data["google_address"]
+        sr.google_verdict = data.get("google_verdict", "")
+        sr.google_reason = data.get("google_reason", "")
+        sr.site_verdict = data.get("site_verdict", "")
+        sr.site_reason = data.get("site_reason", "")
+        sr.site_url = data.get("site_url", "")
 
     xlsx_bytes = batch_io.build_output_xlsx(original_headers, rows, showtime_rows)
     output_key = storage.output_key(job_id)
     storage.put_bytes(output_key, xlsx_bytes)
+
+    with Session(engine) as session:
+        job_for_audit = session.get(DeletedShowtimeJob, job_id)
+        scrape_credits_used = job_for_audit.scrape_credits_used if job_for_audit else 0
 
     audit_payload = {
         "job_id": job_id,
@@ -396,6 +477,12 @@ def finalize_job(_batch_results, job_id: str) -> None:
             "TRUE": sum(1 for r in showtime_rows if r.verdict == TRUE_),
             "FALSE": sum(1 for r in showtime_rows if r.verdict == FALSE_),
             "UNABLE_TO_DETERMINE": sum(1 for r in showtime_rows if r.verdict == UNKNOWN_),
+        },
+        "site": {
+            "verified_count": sum(1 for r in showtime_rows if r.site_verdict == FALSE_),
+            "wrong_count": sum(1 for r in showtime_rows if r.site_verdict == TRUE_),
+            "unavailable_count": sum(1 for r in showtime_rows if r.site_verdict not in (FALSE_, TRUE_)),
+            "scrape_credits_used": scrape_credits_used,
         },
         "rows": [
             {
@@ -408,6 +495,11 @@ def finalize_job(_batch_results, job_id: str) -> None:
                 "reason": r.reason,
                 "published": r.published,
                 "query": r.source_query,
+                "google_verdict": r.google_verdict,
+                "google_reason": r.google_reason,
+                "site_verdict": r.site_verdict,
+                "site_reason": r.site_reason,
+                "site_url": r.site_url,
             }
             for r in showtime_rows
         ],
@@ -484,7 +576,8 @@ def dispatch_job(job_id: str) -> None:
                 theater,
                 target.isoformat(),
                 [idx for idx, _r in items],
-                [{"title": r.title, "show_time_raw": r.show_time_raw, "show_min": r.show_min}
+                [{"title": r.title, "show_time_raw": r.show_time_raw, "show_min": r.show_min,
+                  "circuit": r.circuit}
                  for _idx, r in items],
             )
             for (theater, target), items in batches.items()

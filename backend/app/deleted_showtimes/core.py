@@ -68,6 +68,18 @@ class ShowtimeRow:
     theater_verified: bool = False
     google_theater: str = ""
     google_address: str = ""
+    # Site-verification fields (see docs/plans/2026-09-23-deleted-showtimes-
+    # site-verification-design.md). google_verdict/google_reason snapshot
+    # what decide_rows() decided from Google alone, BEFORE apply_site_check()
+    # (if called) overwrites verdict/reason with a confident site verdict —
+    # so the report can show both independently of which one "won".
+    # site_verdict/site_reason/site_url default to "" when no adapter matched
+    # this row's theater at all (see site_adapters.registry.resolve).
+    google_verdict: str = ""
+    google_reason: str = ""
+    site_verdict: str = ""
+    site_reason: str = ""
+    site_url: str = ""
 
 
 def _iter_showtime_blocks(data: Dict[str, Any]):
@@ -242,6 +254,116 @@ def decide_rows(batch: List[ShowtimeRow], lst: Listing, title_missing_is_deleted
             r.reason = f"NO_EXACT_MATCH (nearest {r.nearest})"
             if not lst.theater_verified:
                 r.reason += " [theater identity unverified]"
+
+
+NO_ADAPTER_REASON = "NO_ADAPTER_FOR_CIRCUIT"
+
+
+def apply_site_check(
+    row: ShowtimeRow,
+    by_title: Dict[str, List[int]],
+    status_map: Dict[Tuple[str, int], str],
+    method: str,
+    site_url: Optional[str],
+) -> None:
+    """Combine one site_adapters SiteListing (passed as plain by_title/
+    status_map/method rather than the dataclass itself, keeping this module
+    adapter-agnostic — no import of site_adapters here) with the Google
+    verdict `decide_rows` already wrote onto `row`. Row-level comparison
+    logic is a direct port of scripts/site_verify_batch.py's `_process_theater`,
+    validated live against real theaters during research.
+
+    Must be called AFTER decide_rows(). Snapshots the Google-only verdict as
+    row.google_verdict/google_reason, then overwrites row.verdict/row.reason
+    with the site's verdict whenever it's confident (FALSE/TRUE) — a
+    confident site check always wins per product decision. An inconclusive
+    site check (row.site_verdict stays UNKNOWN_) leaves row.verdict at
+    Google's call, unchanged from today's production behaviour.
+
+    Never claims TRUE from a weak signal: a title missing entirely from the
+    site's extracted listing is NOT treated as "confirmed absent" (it could
+    be a scrape/extraction gap rather than a real removal) — only an
+    exact-title-match-but-wrong-or-missing-time counts as a confident TRUE.
+    Mirrors the identical guard `decide_rows` already applies to Google's
+    panel for `truncated`/`coverage_from`: a row earlier than the site's
+    earliest still-listed time is UNABLE_TO_DETERMINE, not a confirmed match
+    or miss, since the site (like Google) drops already-started showtimes.
+    """
+    row.google_verdict = row.verdict
+    row.google_reason = row.reason
+    row.site_url = site_url or ""
+
+    site_verdict = UNKNOWN_
+    site_reason = method
+
+    if by_title and row.show_min is not None:
+        norm = norm_title(row.title)
+        entries = by_title.get(norm)
+        all_listed_minutes = [m for mins in by_title.values() for m in mins]
+        earliest_listed_min = min(all_listed_minutes) if all_listed_minutes else None
+
+        if entries is None:
+            site_reason = "TITLE_NOT_IN_STRUCTURED_LISTING"
+        elif row.show_min in entries:
+            status = status_map.get((norm, row.show_min), "")
+            if status and status.lower() != "sellable":
+                # Listed but not bookable (e.g. Soldout) is a different
+                # defect from "deleted" — never fold into TRUE/FALSE.
+                site_reason = f"SITE_LISTED_NOT_SELLABLE status={status}"
+            else:
+                site_verdict = FALSE_
+                site_reason = "SITE_EXACT_MATCH" + (f" status={status}" if status else "")
+        elif earliest_listed_min is not None and row.show_min < earliest_listed_min:
+            site_reason = (f"SHOWTIME_ALREADY_PASSED_OR_TRUNCATED "
+                            f"(site's remaining listing starts at {fmt_min(earliest_listed_min)})")
+        else:
+            nearest = min(entries, key=lambda m: abs(m - row.show_min))
+            site_verdict = TRUE_
+            site_reason = (f"SITE_NO_EXACT_MATCH nearest={fmt_min(nearest)} "
+                            f"published={sorted({fmt_min(m) for m in entries})}")
+
+    row.site_verdict = site_verdict
+    row.site_reason = site_reason
+
+    if site_verdict != UNKNOWN_:
+        row.verdict = site_verdict
+        row.reason = f"SITE: {site_reason}"
+    else:
+        row.reason = f"GOOGLE (site unconfirmed: {site_reason}): {row.google_reason}"
+
+
+_SITE_REASON_PLAIN = [
+    (NO_ADAPTER_REASON,
+     "Site check not available for this theater chain yet — verdict based on Google only"),
+    ("URL_NOT_RESOLVED",
+     "Could not find this theater's website — verdict based on Google only"),
+    ("PAGE_FETCHED_NO_STRUCTURED_DATA",
+     "Theater website loaded but showtimes could not be read — verdict based on Google only"),
+    ("TITLE_NOT_IN_STRUCTURED_LISTING",
+     "Movie not found in the theater's website listing (may be a scrape gap, not a "
+     "confirmed removal) — verdict based on Google only"),
+    ("SITE_LISTED_NOT_SELLABLE",
+     "Showtime is listed on the theater's website but not currently bookable (e.g. sold "
+     "out) — verdict based on Google only"),
+    ("SHOWTIME_ALREADY_PASSED_OR_TRUNCATED",
+     "Showtime has already started or passed on the theater's website — cannot verify"),
+    ("SITE_EXACT_MATCH",
+     "Confirmed present on the theater's own website at this exact time"),
+    ("SITE_NO_EXACT_MATCH",
+     "Theater's website lists this movie at a different time — showtime appears changed "
+     "or removed"),
+]
+
+
+def plain_site_reason(reason_code: str) -> str:
+    """Map a raw SITE_REASON code to clean plain English for the report's
+    RESULTS sheet — the raw code stays available in the SITE_EVIDENCE sheet
+    for debugging (product decision: fallback wording must be plain English,
+    not internal reason codes)."""
+    for prefix, plain in _SITE_REASON_PLAIN:
+        if reason_code.startswith(prefix):
+            return plain
+    return "Site check inconclusive — verdict based on Google only"
 
 
 _MARKETING_TAIL = re.compile(

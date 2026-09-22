@@ -60,6 +60,7 @@ function JobHistory({ refreshKey }: JobHistoryProps) {
     { key: 'true_count', header: 'Deleted', cell: (row) => String(row.true_count) },
     { key: 'false_count', header: 'Confirmed', cell: (row) => String(row.false_count) },
     { key: 'unknown_count', header: 'Undetermined', cell: (row) => String(row.unknown_count) },
+    { key: 'site_wrong_count', header: 'Site Overrode', cell: (row) => String(row.site_wrong_count) },
     { key: 'created_at', header: 'Started', cell: (row) => formatDate(row.created_at) },
     {
       key: 'download',

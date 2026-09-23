@@ -18,6 +18,12 @@ PROD_DB_PORT=$(echo "$PROD_DB_SECRET" | jq -r .port)
 PROD_DB_DATABASE=$(echo "$PROD_DB_SECRET" | jq -r .database)
 PROD_DB_USERNAME=$(echo "$PROD_DB_SECRET" | jq -r .username)
 PROD_DB_PASSWORD=$(echo "$PROD_DB_SECRET" | jq -r .password)
+# dqscan-only override (2026-09-24): amenity/prod-db-credentials' .database
+# is mqproduction, title_matching's Movie Master schema -- movies_shows
+# itself lives in moviemeasure on this same prod host. Hardcoded rather
+# than a new secret field since it doesn't vary by deployment. See
+# config.prod.yaml.
+DQSCAN_PROD_DB_DATABASE=moviemeasure
 # Read by dqscan (app/tasks/dqscan_task.py) when the Settings-page trigger's
 # --env dev, same shape/secret as setup_dqscan.sh's dev DB pull for the host
 # cron -- this is the container-side copy of that same secret.
@@ -98,6 +104,7 @@ PROD_DB_PORT=${PROD_DB_PORT}
 PROD_DB_DATABASE=${PROD_DB_DATABASE}
 PROD_DB_USERNAME=${PROD_DB_USERNAME}
 PROD_DB_PASSWORD=${PROD_DB_PASSWORD}
+DQSCAN_PROD_DB_DATABASE=${DQSCAN_PROD_DB_DATABASE}
 DEV_DB_HOST=${DEV_DB_HOST}
 DEV_DB_PORT=${DEV_DB_PORT}
 DEV_DB_DATABASE=${DEV_DB_DATABASE}

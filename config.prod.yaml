@@ -3,7 +3,14 @@ database:
   port: ${PROD_DB_PORT}
   user: ${PROD_DB_USERNAME}
   password: ${PROD_DB_PASSWORD}
-  schema: ${PROD_DB_DATABASE}
+  # NOT ${PROD_DB_DATABASE} (2026-09-24) -- that var is title_matching/
+  # prod_db.py's schema (mqproduction, where fq_movie_master lives), shared
+  # from the same amenity/prod-db-credentials secret. movies_shows itself
+  # lives in a different schema on the same prod host (moviemeasure, same
+  # name as dev's DEV_DB_DATABASE) -- pointing dqscan at PROD_DB_DATABASE
+  # silently queried the wrong schema and returned "no data found". This is
+  # dqscan's own var so fixing it can never affect the Movie Master sync.
+  schema: ${DQSCAN_PROD_DB_DATABASE}
 scan:
   window_column: date_sh
   detail_row_cap: 500

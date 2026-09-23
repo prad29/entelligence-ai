@@ -36,6 +36,13 @@
   PROD_DB_USERNAME=$(echo "$PROD_DB_SECRET" | jq -r .username)
   PROD_DB_PASSWORD=$(echo "$PROD_DB_SECRET" | jq -r .password)
 
+  # dqscan-only override (2026-09-24): amenity/prod-db-credentials' .database
+  # is mqproduction, title_matching's Movie Master schema -- movies_shows
+  # itself lives in moviemeasure on this same prod host. Hardcoded rather
+  # than a new secret field since it doesn't vary by deployment. See
+  # config.prod.yaml.
+  DQSCAN_PROD_DB_DATABASE=moviemeasure
+
   # No AWS_ACCESS_KEY_ID/SECRET here -- boto3 in emailer.py/sns_notifier.py
   # picks up the instance's IAM role automatically.
   cat > "$DQSCAN_HOME/.env" <<EOF
@@ -49,6 +56,7 @@ PROD_DB_PORT=${PROD_DB_PORT}
 PROD_DB_DATABASE=${PROD_DB_DATABASE}
 PROD_DB_USERNAME=${PROD_DB_USERNAME}
 PROD_DB_PASSWORD=${PROD_DB_PASSWORD}
+DQSCAN_PROD_DB_DATABASE=${DQSCAN_PROD_DB_DATABASE}
 EOF
   chown ec2-user:ec2-user "$DQSCAN_HOME/.env"
   chmod 600 "$DQSCAN_HOME/.env"

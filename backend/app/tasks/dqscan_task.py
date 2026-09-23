@@ -3,7 +3,7 @@
 dqscan isn't an app/ package — it's a standalone tool that lives at the repo
 root, shipped into this same image (see backend/Dockerfile.prod). Shelling
 out to its existing `python -m dqscan.run_daily` CLI reuses its
-orchestration (state tracking, xlsx report, SES/SNS delivery) unchanged
+orchestration (window computation, xlsx report, SES/SNS delivery) unchanged
 rather than re-implementing it here.
 
 check_dqscan_cron replaces what used to be a host crontab entry
@@ -99,6 +99,6 @@ def check_dqscan_cron() -> None:
         session.commit()
         env = cfg.env
 
-    # No --from/--to -- let run_daily.py's own state file drive the window
-    # (last cron run to now), exactly like the host crontab used to.
+    # No --from/--to -- let run_daily.py auto-compute the window itself
+    # (today through the latest date_sh in movies_shows, as of 2026-09-24).
     run_dqscan_scan.delay(env)

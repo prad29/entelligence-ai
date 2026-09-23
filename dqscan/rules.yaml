@@ -1065,6 +1065,74 @@ rules:
     GROUP BY mm_id, running_date, total_seats, available, reserved, checkered
     HAVING COUNT(mm_id) > 1
 
+- id: DUP_TICKETING_RECORD_SAME_MMID
+  name: day-of ticketing row written twice at the same instant
+  class: custom
+  severity: critical
+  status: active
+  requires: [id, mm_id, running_date, date_sh, is_ticketing, total_seats, available,
+             reserved, checkered, circuit_name, theater_name, theater_city, title,
+             time_sh, price, child, senior, last_updates, studio_name, screen_format,
+             movie_format]
+  detail_columns: [mm_id, running_date, last_updates, total_seats, available, reserved, dup_count, max_id]
+  message: "a day-of ticketing showtime was written twice with the same timestamp and seat snapshot"
+  note: >
+    Added 2026-09-23 (query from the data team). The day-of counterpart to
+    PRESALES_DUP_RECORD: rows crawled on the showtime's own date
+    (running_date = date_sh) with is_ticketing = 1. The duplicate signature
+    here additionally requires the same last_updates, not just the same
+    seat snapshot -- so this only fires on a true same-instant double-write
+    of one crawl event, which is why it is severity: critical while
+    PRESALES_DUP_RECORD (no last_updates in its signature, so two separate
+    same-day crawls of an unchanged snapshot can also group) is high. Same
+    reasoning as the COUNT(*) > COUNT(DISTINCT last_updates) test in
+    XROW_DUPLICATE_SHOWTIME, just expressed by grouping on last_updates
+    directly. Deliberately has NO ticket_availability filter -- one rule
+    covers both the plain and the Crawdads-correction case, confirmed with
+    the requester. Deliberately scoped to CURRENT_DATE() - INTERVAL 1 DAY
+    rather than this run's --from/--to window, same CURRENT_DATE()
+    convention as PRES_AUDITORIUM (so the report's %-of-window column is
+    not meaningful here). Translation fixes vs. the source query: every
+    selected column that is not a GROUP BY key is wrapped in MAX() for
+    MySQL ONLY_FULL_GROUP_BY legality (same pattern as
+    XCOL_SHOW_BEFORE_RELEASE); DATE_FORMAT() over the grouped running_date
+    and last_updates columns is left unwrapped since those are already
+    group keys, while date_sh is not a group key and so is MAX()-wrapped
+    before formatting. count(1) is aliased dup_count so the compiler's
+    wrapping SELECT * has a usable column name. HAVING COUNT(mm_id) >= 2
+    is kept verbatim from the source -- identical in effect to the > 1 used
+    by PRESALES_DUP_RECORD.
+  sql: |
+    SELECT COUNT(*) AS dup_count,
+           mm_id,
+           MAX(id) AS max_id,
+           MAX(is_ticketing) AS is_ticketing,
+           MAX(circuit_name) AS circuit_name,
+           MAX(theater_name) AS theater_name,
+           MAX(theater_city) AS theater_city,
+           MAX(title) AS title,
+           DATE_FORMAT(MAX(date_sh), '%Y-%m-%d') AS date_sh,
+           MAX(time_sh) AS time_sh,
+           MAX(price) AS price,
+           MAX(child) AS child,
+           MAX(senior) AS senior,
+           total_seats,
+           available,
+           reserved,
+           DATE_FORMAT(last_updates, '%Y-%m-%d %H:%i:%s') AS last_updates,
+           DATE_FORMAT(running_date, '%Y-%m-%d') AS running_date,
+           MAX(studio_name) AS studio_name,
+           MAX(screen_format) AS screen_format,
+           MAX(movie_format) AS movie_format
+    FROM {{table}}
+    WHERE date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
+      AND running_date = date_sh
+      AND is_ticketing = 1
+      AND total_seats IS NOT NULL
+      AND running_date IS NOT NULL
+    GROUP BY mm_id, running_date, last_updates, total_seats, available, reserved, checkered
+    HAVING COUNT(mm_id) >= 2
+
 - id: XROW_THEATER_NAME
   name: theater_id carrying more than one theater_name
   class: cross_row

@@ -991,6 +991,80 @@ rules:
     explicit COUNT(*) > 1 guard 2026-09-22, same NULL-last_updates fix as
     XROW_DUPLICATE_SHOWTIME (Opus audit finding B1).
 
+- id: PRESALES_DUP_RECORD
+  name: presale row written more than once with an identical seat snapshot
+  class: custom
+  severity: high
+  status: active
+  requires: [id, mm_id, running_date, date_sh, is_ticketing, total_seats, available,
+             reserved, checkered, circuit_name, theater_name, theater_city, title,
+             time_sh, price, child, senior, last_updates, studio_name, screen_format,
+             movie_format]
+  detail_columns: [mm_id, running_date, date_sh, total_seats, available, reserved, dup_count, max_id]
+  message: "a presale showtime was written more than once with the same seat snapshot"
+  note: >
+    Added 2026-09-23 (query from the data team). A "presale" row is one
+    crawled before the showtime actually runs (running_date <> date_sh)
+    with is_ticketing <> 1. If the same (mm_id, running_date) carries more
+    than one row whose seat snapshot (total_seats, available, reserved,
+    checkered) is byte-for-byte identical, the same crawl result was
+    written twice -- which double-counts seat deltas downstream, since
+    total_seats is a delta column. Deliberately has NO ticket_availability
+    filter, unlike the XROW_DUPLICATE_SHOWTIME / XROW_DUPLICATE_CRAWDADS
+    pair: this one rule is meant to catch the plain case AND the Crawdads
+    correction case together, matching the source query as given and
+    confirmed with the requester (an earlier plan to split it into
+    PRESALES_DUP_RECORD + PRESALES_DUP_CRAWDAD was rejected). Deliberately
+    scoped to CURRENT_DATE() - INTERVAL 1 DAY (yesterday and today), not
+    this run's --from/--to window, so a retrospective/backfill run still
+    checks against right-now -- same CURRENT_DATE() convention as
+    PRES_AUDITORIUM, and the report's %-of-window column is therefore not
+    meaningful for this rule. severity: high rather than critical because
+    the duplicate signature here does NOT include last_updates -- two
+    genuinely separate crawls on the same day that happened to observe an
+    unchanged seat snapshot would also land in a group, so this is a strong
+    but not airtight signal; DUP_TICKETING_RECORD_SAME_MMID, which does
+    require identical last_updates, is critical for exactly that reason.
+    Translation fixes vs. the source query: (1) every selected column that
+    is not a GROUP BY key is wrapped in MAX() so the query is legal under
+    MySQL's ONLY_FULL_GROUP_BY (same pattern as XCOL_SHOW_BEFORE_RELEASE --
+    those columns are effectively constant within the group, so the pick is
+    arbitrary but deterministic); DATE_FORMAT() over a grouped column
+    (running_date) is left unwrapped since it is already a group key.
+    (2) the source selected running_date twice under the same alias -- an
+    authoring slip, collapsed to one. (3) count(1) is aliased dup_count so
+    the wrapping SELECT * the compiler generates has a usable column name.
+  sql: |
+    SELECT COUNT(*) AS dup_count,
+           mm_id,
+           DATE_FORMAT(running_date, '%Y-%m-%d') AS running_date,
+           MAX(id) AS max_id,
+           MAX(is_ticketing) AS is_ticketing,
+           MAX(circuit_name) AS circuit_name,
+           MAX(theater_name) AS theater_name,
+           MAX(theater_city) AS theater_city,
+           MAX(title) AS title,
+           DATE_FORMAT(MAX(date_sh), '%Y-%m-%d') AS date_sh,
+           MAX(time_sh) AS time_sh,
+           MAX(price) AS price,
+           MAX(child) AS child,
+           MAX(senior) AS senior,
+           total_seats,
+           available,
+           reserved,
+           DATE_FORMAT(MAX(last_updates), '%Y-%m-%d %H:%i:%s') AS last_updates,
+           MAX(studio_name) AS studio_name,
+           MAX(screen_format) AS screen_format,
+           MAX(movie_format) AS movie_format
+    FROM {{table}}
+    WHERE date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
+      AND running_date <> date_sh
+      AND running_date IS NOT NULL
+      AND is_ticketing <> 1
+      AND total_seats IS NOT NULL
+    GROUP BY mm_id, running_date, total_seats, available, reserved, checkered
+    HAVING COUNT(mm_id) > 1
+
 - id: XROW_THEATER_NAME
   name: theater_id carrying more than one theater_name
   class: cross_row

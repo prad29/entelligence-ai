@@ -1299,42 +1299,97 @@ rules:
   class: custom
   severity: critical
   status: active
-  requires: [mm_id, total_seats, actual_total_seats, ticket_availability]
-  detail_columns: [mm_id, seat_sum, actual_total_seats]
-  message: "lifetime total_seats sum is 0 but the showtime has real capacity"
+  requires: [mm_id, auditorium, actual_total_seats, total_seats, source_flag,
+             is_ticketing, circuit_name, theater_name, theater_city, title, date_sh,
+             time_sh, price, child, senior, available, reserved, last_updates,
+             running_date, studio_name, screen_format, movie_format, amenities_new]
+  detail_columns: [mm_id, auditorium, seat_sum, actual_total_seats, theater_name, title, date_sh]
+  message: "total_seats never established a positive capacity for a showtime that has one"
   note: >
-    Added 2026-09-21 per request. total_seats is a delta column -- an
+    Added 2026-09-21, rewritten 2026-09-23 against a new source query from
+    the data team. Unchanged intent: total_seats is a delta column -- an
     mm_id's very first crawl is expected to log total_seats equal to the
     starting actual_total_seats (there's no previous row to diff against),
-    then 0 on every later row unless capacity itself changes. If that
-    first establishing row never got written, SUM(total_seats) over the
-    mm_id's lifetime stays 0 forever even though the showtime plainly has
-    real capacity (actual_total_seats > 0) -- this rule catches exactly
-    that gap. Distinct from XROW_SEATING_TYPE_LIFETIME_SEATS, which checks
-    the sum's sign against seating_type; this checks it against
-    actual_total_seats directly, regardless of seating_type. Same
-    Crawdads-exclusion and window-scoping convention as
-    XROW_SEATING_TYPE_LIFETIME_SEATS -- mm_ids are narrowed to this run's
-    --from/--to window first, then summed/maxed across their full
-    lifetime. Uses COALESCE(seat_sum, 0) = 0, not a bare seat_sum = 0
-    (2026-09-22, Opus audit finding B2): if every total_seats value for an
-    mm_id is NULL, SUM() returns NULL rather than 0, and NULL = 0 is
-    unknown -- which would let the worst case (an mm_id that never had ANY
-    capacity-establishing value written) escape the exact rule meant to
-    catch it. No change against the dev window checked (still 139) since
-    no all-NULL mm_id was present there, but the gap is real.
+    then 0 on every later row unless capacity itself changes. If that first
+    establishing row never got written, the total_seats sum stays at or
+    below 0 even though the showtime plainly has real capacity
+    (actual_total_seats > 0). Still distinct from
+    XROW_SEATING_TYPE_LIFETIME_SEATS, which checks the sum's sign against
+    seating_type; this checks it against actual_total_seats directly.
+    Four changes from the 2026-09-21/22 version, all confirmed with the
+    requester: (1) Crawdads rows are now INCLUDED in the sum -- the
+    previous version excluded ticket_availability = 'Crawdads', this one
+    has no such filter. (2) mm_ids that report a D-Box auditorium are
+    excluded via a NOT IN subquery on amenities_new; kept as amenities_new
+    verbatim from the source query even though amenities is the column this
+    codebase normally populates -- explicitly requested. It is not a pure
+    no-op: on dev amenities_new has 1338 non-empty rows and matches 1 D-Box
+    row in the current window (amenities matches 20 there), so the
+    exclusion drops 1 mm_id rather than 0. (3) Added a
+    COUNT(DISTINCT auditorium) = 1 guard,
+    which deliberately drops mm_ids that never report an auditorium at all
+    (AMC-style theaters): COUNT(DISTINCT) over an all-NULL column is 0, not
+    1, so those groups fall out. Intended, not a bug. (4) The scope is now
+    CURRENT_DATE() - INTERVAL 1 DAY, not this run's --from/--to window,
+    matching PRES_AUDITORIUM's convention -- so the report's %-of-window
+    column is not meaningful for this rule.
+    Read the aggregate carefully: because the WHERE clause filters
+    actual_total_seats > 0 AND total_seats IS NOT NULL at the ROW level,
+    before GROUP BY mm_id, SUM(total_seats) here covers only that mm_id's
+    rows meeting those per-row conditions -- NOT every row the mm_id ever
+    had, which is what the previous version summed. An mm_id whose
+    establishing row exists but was written while actual_total_seats was
+    still 0 therefore no longer cancels out the deficit. This is the source
+    query's semantics and is intentional; don't "restore" the old
+    all-rows sum without re-checking with the requester. One consequence:
+    the COALESCE(seat_sum, 0) guard the previous version needed is gone,
+    because total_seats IS NOT NULL is now enforced per row, so
+    SUM(total_seats) can never be NULL for a surviving group.
+    Translation fixes vs. the source query: the source did
+    SELECT <22 bare columns> ... GROUP BY mm_id, which MySQL rejects under
+    ONLY_FULL_GROUP_BY -- every non-grouped column is wrapped in MAX()
+    (same pattern as XCOL_SHOW_BEFORE_RELEASE; these are effectively
+    constant per mm_id, so the pick is arbitrary but deterministic), and
+    total_seats, which the source selected twice, is collapsed to the one
+    SUM(total_seats) AS seat_sum that the HAVING clause actually tests
+    rather than an arbitrary single row's delta.
   sql: |
-    SELECT mm_id, seat_sum, actual_total_seats
-    FROM (
-      SELECT mm_id,
-             SUM(total_seats) AS seat_sum,
-             MAX(actual_total_seats) AS actual_total_seats
-      FROM {{table}}
-      WHERE ticket_availability <> 'Crawdads'
-        AND mm_id IN (SELECT DISTINCT mm_id FROM {{table}} WHERE {{window}})
-      GROUP BY mm_id
-    ) g
-    WHERE COALESCE(seat_sum, 0) = 0 AND actual_total_seats > 0
+    SELECT mm_id,
+           MAX(auditorium) AS auditorium,
+           MAX(actual_total_seats) AS actual_total_seats,
+           SUM(total_seats) AS seat_sum,
+           MAX(source_flag) AS source_flag,
+           MAX(is_ticketing) AS is_ticketing,
+           MAX(circuit_name) AS circuit_name,
+           MAX(theater_name) AS theater_name,
+           MAX(theater_city) AS theater_city,
+           MAX(title) AS title,
+           DATE_FORMAT(MAX(date_sh), '%Y-%m-%d') AS date_sh,
+           MAX(time_sh) AS time_sh,
+           MAX(price) AS price,
+           MAX(child) AS child,
+           MAX(senior) AS senior,
+           MAX(available) AS available,
+           MAX(reserved) AS reserved,
+           DATE_FORMAT(MAX(last_updates), '%Y-%m-%d %H:%i:%s') AS last_updates,
+           DATE_FORMAT(MAX(running_date), '%Y-%m-%d') AS running_date,
+           MAX(studio_name) AS studio_name,
+           MAX(screen_format) AS screen_format,
+           MAX(movie_format) AS movie_format
+    FROM {{table}}
+    WHERE date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
+      AND actual_total_seats > 0
+      AND total_seats IS NOT NULL
+      AND mm_id NOT IN (
+        SELECT DISTINCT mm_id
+        FROM {{table}}
+        WHERE date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
+          AND (amenities_new LIKE '%D%Box%' OR amenities_new LIKE '%Dbox%')
+      )
+    GROUP BY mm_id
+    HAVING SUM(total_seats) <= 0
+       AND COUNT(DISTINCT auditorium) = 1
+    ORDER BY MAX(running_date) ASC
 
 - id: XROW_SEATING_TYPE_LIFETIME_SEATS
   name: seating_type does not match the mm_id's lifetime actual_total_seats sum

@@ -866,6 +866,15 @@ rules:
     the old GROUP BY mm_id / MAX()-wrapping (added earlier purely to dodge
     ONLY_FULL_GROUP_BY) is no longer needed at all, removing the filesort
     that came with it too.
+    IMPORTANT, verified directly against prod (2026-09-24): this is NOT
+    purely a speed optimization -- it's also a narrower check. The old
+    (all-crawl-days) version found 220 matching mm_ids; the new
+    (today-only) version found 104 -- more than half the previously-caught
+    violations are mm_ids whose violation showed up on an earlier crawl day
+    but not specifically in today's. An earlier version of this note
+    incorrectly claimed "no change in which rows get flagged" -- that was
+    wrong and has been corrected here. If catching a violation on ANY past
+    crawl day (not just today) matters, this rule needs revisiting.
   sql: |
     SELECT ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id, ms.title,
            ms.release_date AS ms_release_date, fm.release_date AS master_release_date

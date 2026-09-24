@@ -54,18 +54,25 @@ def run_dqscan_scan(env: str, from_date: Optional[str] = None, to_date: Optional
 
     logger.info("dqscan_trigger_start env=%s from=%s to=%s root=%s", env, from_date, to_date, root)
 
+    # Deliberately NOT capture_output=True -- that buffers everything until
+    # the subprocess exits, so dqscan's own progress logging (engine.py's
+    # "Progress: X/Y work items done" lines, emitted as each rule/batch
+    # finishes) would never reach `docker compose logs` while a scan is
+    # actually running, and would be discarded entirely on success. Letting
+    # stdout/stderr inherit this process's instead makes dqscan's logging
+    # stream straight through to this worker's own log output in real time.
     result = subprocess.run(
         cmd,
         cwd=str(root),
-        capture_output=True,
         text=True,
         timeout=settings.DQSCAN_TIMEOUT_SECONDS,
     )
 
     if result.returncode != 0:
-        output = (result.stdout + result.stderr)[-4000:]
-        logger.error("dqscan_trigger_failed env=%s output=%s", env, output)
-        raise RuntimeError(f"dqscan exited {result.returncode}: {output[-2000:]}")
+        # No captured output to include here -- it already streamed to this
+        # worker's own logs above, which is where to look for what failed.
+        logger.error("dqscan_trigger_failed env=%s returncode=%s", env, result.returncode)
+        raise RuntimeError(f"dqscan exited {result.returncode}; see worker logs above for details")
 
     logger.info("dqscan_trigger_complete env=%s", env)
     return {"env": env, "from": from_date, "to": to_date}

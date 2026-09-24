@@ -147,6 +147,7 @@ def run(
                     )
                 future_to_index[future] = idx
 
+            completed_work_items = 0
             for future in as_completed(future_to_index):
                 idx = future_to_index[future]
                 item_rules = work_items[idx]
@@ -159,6 +160,13 @@ def run(
                     ]
                 results_by_index[idx] = result if isinstance(result, list) else [result]
                 processed_ids.update(r.id for r in item_rules)
+
+                completed_work_items += 1
+                statuses = ",".join(f"{r.rule.id}={r.run_status}" for r in results_by_index[idx])
+                logger.info(
+                    "Progress: %d/%d work items done (just finished: %s)",
+                    completed_work_items, len(work_items), statuses,
+                )
     except KeyboardInterrupt:
         remaining = [r for r in batchable + individual if r.id not in processed_ids]
         logger.warning(

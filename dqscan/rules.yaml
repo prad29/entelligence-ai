@@ -875,6 +875,17 @@ rules:
     incorrectly claimed "no change in which rows get flagged" -- that was
     wrong and has been corrected here. If catching a violation on ANY past
     crawl day (not just today) matters, this rule needs revisiting.
+    Dropped `ORDER BY ms.title` 2026-09-25 -- verified this rule's own
+    detail query (compiler.py wraps the sql above as `SELECT * FROM (...)
+    LIMIT 501`) was timing out at 180s in a real prod run despite the count
+    query being fast, and confirmed the cause directly: the count form
+    drops the ORDER BY entirely (redundant when only counting) and gets a
+    fast `ref (const)` plan on idx_running_date (5.6s measured); the detail
+    form has to honor it and switches to a full index scan for the sort,
+    which never completed within 200s in testing. Timed the fix directly:
+    with no ORDER BY, the detail query gets the same fast idx_running_date
+    plan as the count query and returns in 5.2s. Ordering was cosmetic --
+    nothing here depends on rows coming back title-sorted.
   sql: |
     SELECT ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id, ms.title,
            ms.release_date AS ms_release_date, fm.release_date AS master_release_date
@@ -884,7 +895,6 @@ rules:
       AND ms.date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
       AND ms.date_sh <= DATE_SUB(fm.release_date, INTERVAL 2 DAY)
       AND (fm.linked_movie_id IS NULL OR TRIM(fm.linked_movie_id) = '')
-    ORDER BY ms.title
 
 - id: XCOL_STUDIO_RELEASE_PAIR
   name: studio_name and release_date blank inconsistently
@@ -1139,69 +1149,124 @@ rules:
 
 - id: XROW_THEATER_NAME
   name: theater_id carrying more than one theater_name
-  class: cross_row
+  class: custom
   severity: high
   status: active
   requires: [theater_id, theater_name]
-  group_by: [theater_id]
-  having: "COUNT(DISTINCT theater_name) > 1"
   detail_columns: [theater_id, theater_name]
   message: "one theater id maps to more than one name"
+  note: >
+    Rewritten 2026-09-25 -- was class: cross_row (group_by/having compiled
+    generically into a GROUP BY subquery for the count, then a separate
+    `t JOIN (subquery) USING (theater_id)` self-join for the detail rows).
+    That self-join was a real production timeout at prod scale: EXPLAIN
+    showed the detail form driving off idx_theater_id instead of the
+    date_sh window, estimated at 300.7M rows (over half the table) with
+    the window filter demoted to a post-filter -- confirmed as a live
+    180s timeout in a real run, not just a plan estimate. Rewritten as a
+    single GROUP BY ... HAVING pass with GROUP_CONCAT(DISTINCT ...)
+    surfacing the actual conflicting values directly, so count and detail
+    are now the exact same query (no self-join back to the base table at
+    all) and both get the same good idx_date_sh_title plan the count
+    query always had. Verified directly against prod: EXPLAIN now shows
+    idx_date_sh_title with a 6.6M row estimate (matching the window, not
+    half the table); timed at 68.6s uncapped, comfortably under the 180s
+    budget.
+  sql: |
+    SELECT theater_id,
+           GROUP_CONCAT(DISTINCT theater_name ORDER BY theater_name SEPARATOR ' | ') AS theater_name
+    FROM {{table}}
+    WHERE {{window}}
+    GROUP BY theater_id
+    HAVING COUNT(DISTINCT theater_name) > 1
 
 - id: XROW_THEATER_ADDRESS
   name: theater_id carrying more than one address
-  class: cross_row
+  class: custom
   severity: high
   status: active
-  requires: [theater_id, theater_address]
-  group_by: [theater_id]
-  having: "COUNT(DISTINCT theater_address) > 1"
+  requires: [theater_id, theater_name, theater_address]
   detail_columns: [theater_id, theater_name, theater_address]
   message: "one theater id maps to more than one address"
+  note: "Same rewrite and rationale as XROW_THEATER_NAME (2026-09-25) -- see that rule's note."
+  sql: |
+    SELECT theater_id,
+           GROUP_CONCAT(DISTINCT theater_name ORDER BY theater_name SEPARATOR ' | ') AS theater_name,
+           GROUP_CONCAT(DISTINCT theater_address ORDER BY theater_address SEPARATOR ' | ') AS theater_address
+    FROM {{table}}
+    WHERE {{window}}
+    GROUP BY theater_id
+    HAVING COUNT(DISTINCT theater_address) > 1
 
 - id: XROW_THEATER_DMA
   name: theater_id carrying more than one dma
-  class: cross_row
+  class: custom
   severity: high
   status: active
-  requires: [theater_id, dma]
-  group_by: [theater_id]
-  having: "COUNT(DISTINCT dma) > 1"
+  requires: [theater_id, theater_name, dma]
   detail_columns: [theater_id, theater_name, dma]
   message: "one theater id maps to more than one market"
+  note: "Same rewrite and rationale as XROW_THEATER_NAME (2026-09-25) -- see that rule's note."
+  sql: |
+    SELECT theater_id,
+           GROUP_CONCAT(DISTINCT theater_name ORDER BY theater_name SEPARATOR ' | ') AS theater_name,
+           GROUP_CONCAT(DISTINCT dma ORDER BY dma SEPARATOR ' | ') AS dma
+    FROM {{table}}
+    WHERE {{window}}
+    GROUP BY theater_id
+    HAVING COUNT(DISTINCT dma) > 1
 
 - id: XROW_THEATER_CIRCUIT
   name: theater_id carrying more than one circuit_name
-  class: cross_row
+  class: custom
   severity: medium
   status: active
-  requires: [theater_id, circuit_name]
-  group_by: [theater_id]
-  having: "COUNT(DISTINCT circuit_name) > 1"
+  requires: [theater_id, theater_name, circuit_name]
   detail_columns: [theater_id, theater_name, circuit_name]
   message: "one theater id maps to more than one circuit"
+  note: "Same rewrite and rationale as XROW_THEATER_NAME (2026-09-25) -- see that rule's note."
+  sql: |
+    SELECT theater_id,
+           GROUP_CONCAT(DISTINCT theater_name ORDER BY theater_name SEPARATOR ' | ') AS theater_name,
+           GROUP_CONCAT(DISTINCT circuit_name ORDER BY circuit_name SEPARATOR ' | ') AS circuit_name
+    FROM {{table}}
+    WHERE {{window}}
+    GROUP BY theater_id
+    HAVING COUNT(DISTINCT circuit_name) > 1
 
 - id: XROW_TITLE_STUDIO
   name: title carrying more than one studio_name
-  class: cross_row
+  class: custom
   severity: medium
   status: active
   requires: [title, studio_name]
-  group_by: [title]
-  having: "COUNT(DISTINCT studio_name) > 1"
   detail_columns: [title, studio_name]
   message: "one title maps to more than one studio"
+  note: "Same rewrite and rationale as XROW_THEATER_NAME (2026-09-25) -- see that rule's note."
+  sql: |
+    SELECT title,
+           GROUP_CONCAT(DISTINCT studio_name ORDER BY studio_name SEPARATOR ' | ') AS studio_name
+    FROM {{table}}
+    WHERE {{window}}
+    GROUP BY title
+    HAVING COUNT(DISTINCT studio_name) > 1
 
 - id: XROW_TITLE_RELEASE
   name: title carrying more than one release_date
-  class: cross_row
+  class: custom
   severity: medium
   status: active
   requires: [title, release_date]
-  group_by: [title]
-  having: "COUNT(DISTINCT release_date) > 1"
   detail_columns: [title, release_date]
   message: "one title maps to more than one release date"
+  note: "Same rewrite and rationale as XROW_THEATER_NAME (2026-09-25) -- see that rule's note."
+  sql: |
+    SELECT title,
+           GROUP_CONCAT(DISTINCT release_date ORDER BY release_date SEPARATOR ' | ') AS release_date
+    FROM {{table}}
+    WHERE {{window}}
+    GROUP BY title
+    HAVING COUNT(DISTINCT release_date) > 1
 
 - id: XROW_WRONG_AVAILABLE
   name: available delta does not reconcile against the previous crawl

@@ -12,8 +12,6 @@ import logging
 import time
 from pathlib import Path
 
-from sqlalchemy.exc import SQLAlchemyError
-
 from dqscan import compiler, db, introspect, report
 from dqscan.config import Config
 from dqscan.models import CompiledRule, Rule, RuleOutcome, RunResult, ScanMeta
@@ -36,7 +34,7 @@ _BATCH_CHUNK_SIZE = 10
 _MYSQL_TIMEOUT_ERRNO = 3024
 
 
-def _is_timeout_error(exc: SQLAlchemyError) -> bool:
+def _is_timeout_error(exc: Exception) -> bool:
     orig = getattr(exc, "orig", None)
     args = getattr(orig, "args", ())
     return bool(args) and args[0] == _MYSQL_TIMEOUT_ERRNO
@@ -104,7 +102,14 @@ def run(
 
     # Steps 4-5: execute + classify. One rule (or, for a batch, one whole
     # chunk) failing must not stop the run — and neither should the user
-    # hitting Ctrl+C: whatever's already been collected still gets a report.
+    # hitting Ctrl+C, nor any other unexpected exception a rule's own
+    # per-rule handling didn't anticipate (e.g. a connection re-acquired
+    # from the pool failing during setup, not during statement execution --
+    # that one already broke a real prod run, taking 45 already-computed
+    # results down with it since nothing had been written yet). Whatever's
+    # already been collected still gets a report. (KeyboardInterrupt,
+    # Exception) deliberately excludes SystemExit/GeneratorExit -- those
+    # must still propagate.
     processed_ids: set[str] = set()
     try:
         for item_rules in work_items:
@@ -122,7 +127,9 @@ def run(
                     )
                 )
             processed_ids.update(r.id for r in item_rules)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, Exception) as exc:
+        if not isinstance(exc, KeyboardInterrupt):
+            logger.exception("Unexpected error during rule execution; writing a partial report instead of crashing")
         remaining = [r for r in batchable + individual if r.id not in processed_ids]
         logger.warning(
             "Run interrupted; writing a partial report for %d/%d compiled rules",
@@ -164,7 +171,7 @@ def _scan_extent(engine, window_column: str, window_params: dict, timeout_ms: in
     )
     try:
         row = db.run_query(engine, sql, window_params, timeout_ms)[0]
-    except SQLAlchemyError as exc:
+    except db.RECOVERABLE_DB_ERRORS as exc:
         # Nothing downstream requires this — percentage/needs_calibration
         # just can't be computed, and every sheet already renders that as
         # blank. A raw set of counts beats no report at all.
@@ -220,7 +227,7 @@ def _process_individual(engine, rule, compiled_by_id, window_params, rows_scanne
         return _execute_individually(
             engine, rule, compiled_by_id[rule.id], window_params, rows_scanned, config, timeout_ms
         )
-    except SQLAlchemyError as exc:
+    except db.RECOVERABLE_DB_ERRORS as exc:
         logger.exception("Rule %s failed during execution", rule.id)
         return RuleOutcome(rule=rule, run_status="error", error=str(exc))
 
@@ -237,7 +244,7 @@ def _process_batch(
             ca_provinces=pack_meta["ca_provinces"],
         )
         row = db.run_query(engine, sql, {**batch_params, **window_params}, timeout_ms)[0]
-    except SQLAlchemyError as exc:
+    except db.RECOVERABLE_DB_ERRORS as exc:
         if _is_timeout_error(exc):
             # The batch didn't fail because of a broken rule — it ran out
             # of the same time budget any of its rules would individually.
@@ -262,7 +269,7 @@ def _process_batch(
         compiled = compiled_by_id[rule.id]
         try:
             detail_rows = _fetch_detail(engine, compiled, window_params, timeout_ms) if count > 0 else []
-        except SQLAlchemyError as exc:
+        except db.RECOVERABLE_DB_ERRORS as exc:
             logger.exception("Rule %s's detail query failed after a successful batch count", rule.id)
             results.append(RuleOutcome(rule=rule, run_status="error", error=str(exc)))
             continue

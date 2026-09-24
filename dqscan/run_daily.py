@@ -1,10 +1,9 @@
-"""Daily cron entry point: scan from the end of the last successful run
-through now, email the report, and advance the state file on success.
+"""Daily cron entry point: scan from today through the latest showtime date
+currently in movies_shows, and email the report.
 
 Intentionally separate from __main__.py's --from/--to CLI: that one is for
-manual, retrospective analysis (explicit window, no state, no email); this
-one is for the unattended incremental job (auto-computed window, state
-tracking, always emails).
+manual, retrospective analysis (explicit window, no email); this one is for
+the unattended job (auto-computed window, always emails).
 
 Usage (crontab, 6PM daily):
     0 18 * * * cd /path/to/repo && /path/to/venv/bin/python -m dqscan.run_daily --env prod >> /var/log/dqscan/daily.log 2>&1
@@ -15,11 +14,16 @@ prod, no code change. --config is still available for an explicit path
 override (e.g. pointing at some other environment entirely) and wins if
 given.
 
-On failure, state is deliberately NOT advanced and the exception propagates
-(non-zero exit) -- the next run retries the same window plus whatever's
-accumulated since, rather than silently skipping a day's data. Wire cron
-failure alerting (e.g. a CloudWatch alarm on the log, or a non-zero-exit
-notifier) separately -- this module has no failure-path emailer of its own.
+Changed 2026-09-24 (per request): the window used to be incremental and
+state-tracked (from = end of the last successful run, or yesterday on the
+very first run; to = today) via dqscan/state.py's last-run JSON file. That
+module is left in place but is no longer read or written here -- every run
+now scans from CURRENT_DATE() through whatever the furthest-out date_sh in
+the table is, regardless of what a previous run already covered. This is a
+deliberate tradeoff: simpler and always catches the full remaining future
+catalog, at the cost of re-scanning showtimes a prior run already checked
+on every firing (acceptable since each rule query is still scoped to this
+window, not the whole table's history).
 """
 
 from __future__ import annotations
@@ -27,10 +31,11 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
-from dqscan import emailer, engine, sns_notifier, state
+from dqscan import db, emailer, engine, sns_notifier
 from dqscan.config import load_config
 
 logger = logging.getLogger("dqscan.run_daily")
@@ -39,7 +44,6 @@ REPORTS_DIR = Path(__file__).parent / "reports"
 REPORT_RETENTION_DAYS = 30
 
 _DATE_FORMAT = "%Y-%m-%d"
-_DEFAULT_LOOKBACK_DAYS = 1  # first-ever run with no state file: scan just yesterday
 
 # The one flag that moves the whole job between environments -- everything
 # else (DB host/schema, email sender/recipients) lives in the config file
@@ -48,6 +52,19 @@ _CONFIG_BY_ENV = {
     "dev": "config.yaml",
     "prod": "config.prod.yaml",
 }
+
+
+def _latest_date_sh(config) -> Optional[str]:
+    """The furthest-out showtime date currently in movies_shows, or None if
+    the table is empty. A short-lived engine of its own -- separate from the
+    one engine.run() creates internally for the actual scan -- since this
+    has to run before the window it computes even exists."""
+    eng = db.get_engine(config.database)
+    try:
+        latest = db.run_scalar(eng, f"SELECT MAX(date_sh) FROM {engine.TABLE}")
+    finally:
+        eng.dispose()
+    return latest.strftime(_DATE_FORMAT) if latest else None
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -61,20 +78,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="explicit path to a config file, overriding --env",
     )
     parser.add_argument(
-        "--state-path", dest="state_path", default=None,
-        help="path to the last-run state file (default: schema-qualified, "
-        "e.g. dqscan/.state/last_run_<schema>.json -- so dev/prod configs "
-        "never share, and silently corrupt, one another's incremental window)",
-    )
-    parser.add_argument(
         "--recipients", dest="recipients", default=None,
         help="comma-separated email addresses, overriding config.email.recipients for this run only "
         "(the config file itself is never touched)",
     )
     parser.add_argument(
         "--from", dest="from_date", default=None,
-        help="override the auto-computed window start (YYYY-MM-DD); requires --to too. "
-        "State still advances to now() on success, same as a normal incremental run.",
+        help="override the auto-computed window start (YYYY-MM-DD); requires --to too.",
     )
     parser.add_argument(
         "--to", dest="to_date", default=None,
@@ -109,18 +119,16 @@ def main(argv: list[str] | None = None) -> int:
 
     config_path = args.config_path or _CONFIG_BY_ENV[args.env]
     config = load_config(config_path)
-    state_path = args.state_path or (state.DEFAULT_STATE_PATH.parent / f"last_run_{config.database.schema}.json")
 
     now = datetime.now()
     if args.from_date and args.to_date:
         from_date, to_date = args.from_date, args.to_date
     else:
-        last_end = state.read_last_run_end(state_path)
-        from_date = (last_end or (now - timedelta(days=_DEFAULT_LOOKBACK_DAYS))).strftime(_DATE_FORMAT)
-        to_date = now.strftime(_DATE_FORMAT)
+        from_date = now.strftime(_DATE_FORMAT)
+        to_date = _latest_date_sh(config) or from_date
 
     if from_date > to_date:
-        logger.info("Nothing new since last run (from=%s, to=%s); skipping", from_date, to_date)
+        logger.info("No showtimes at or after today (from=%s, to=%s); skipping", from_date, to_date)
         return 0
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -154,10 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     if not config.email.enabled and not config.sns.enabled:
         logger.info("email and sns are both disabled; report written to %s but not sent", out_path)
 
-    # Only advance state, and only prune, after a fully successful run
-    # (scan + notification) -- a failure anywhere above must leave the
-    # window untouched so the next run retries it.
-    state.write_last_run_end(now, state_path)
+    # Only prune after a fully successful run (scan + notification) -- no
+    # reason to touch old reports if this run itself failed partway through.
     _prune_old_reports(REPORTS_DIR, REPORT_RETENTION_DAYS)
 
     logger.info("Daily scan complete: rows_scanned=%d", run_result.meta.rows_scanned)

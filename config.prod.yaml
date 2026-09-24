@@ -26,6 +26,12 @@ scan:
   # contention from anything else running. This is a timeout-budget problem,
   # not a query problem -- 180s covers the measured range with headroom.
   query_timeout_seconds: 180
+  # 6 rules/batches run concurrently against the DB (2026-09-24, per
+  # request) -- db.get_engine's connection pool is sized to match this
+  # exactly (see dqscan/engine.py), so raising this without also touching
+  # that pool sizing would just queue extra work items behind a pool that's
+  # too small for them.
+  parallel_workers: 6
 email:
   enabled: false
   # reports@enttelligence.com is not yet a verified SES sender identity (nor

@@ -11,6 +11,7 @@ scan:
   include_calibration: true
   include_dormant: false
   query_timeout_seconds: 60
+  parallel_workers: 6
 email:
   enabled: false
   # souveek.pradhan@enttelligence.com is SES-verified; reports@ is not (see

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from dqscan import compiler, db, introspect, report
@@ -54,7 +55,9 @@ def run(
     # backstop impose one behind the user's back.
     timeout_ms = query_timeout_seconds * 1000 if query_timeout_seconds else None
     read_timeout_seconds = query_timeout_seconds + 15 if query_timeout_seconds else None
-    engine = db.get_engine(config.database, read_timeout_seconds=read_timeout_seconds)
+    engine = db.get_engine(
+        config.database, read_timeout_seconds=read_timeout_seconds, pool_size=config.scan.parallel_workers
+    )
     window_column = config.scan.window_column
     window_params = {"from_date": from_date, "to_date": to_date}
 
@@ -100,36 +103,63 @@ def run(
     ]
     work_items += [[rule] for rule in individual]
 
-    # Steps 4-5: execute + classify. One rule (or, for a batch, one whole
-    # chunk) failing must not stop the run — and neither should the user
-    # hitting Ctrl+C, nor any other unexpected exception a rule's own
-    # per-rule handling didn't anticipate (e.g. a connection re-acquired
-    # from the pool failing during setup, not during statement execution --
-    # that one already broke a real prod run, taking 45 already-computed
-    # results down with it since nothing had been written yet). Whatever's
-    # already been collected still gets a report. (KeyboardInterrupt,
-    # Exception) deliberately excludes SystemExit/GeneratorExit -- those
-    # must still propagate.
+    # Steps 4-5: execute + classify. Work items (each a single individual
+    # rule, or one whole batch of up to _BATCH_CHUNK_SIZE batchable rules)
+    # run up to config.scan.parallel_workers at a time -- each checks out
+    # its own pooled connection (db.get_engine was sized to match), so this
+    # is real DB-level concurrency, not just Python-level overlap. Results
+    # are gathered back into original rule-file order regardless of which
+    # one finished first, so the report's ordering is unaffected by this.
+    #
+    # One rule/batch failing must not stop the run, and must not cost any
+    # OTHER work item its result either -- caught per-future, right around
+    # its own future.result(), not around the whole gathering loop. (An
+    # earlier version of this caught it around the whole loop; verified by
+    # simulation that this loses every already-finished-but-not-yet-
+    # collected result the moment any one future raises, since as_completed
+    # yields in completion order and one bad .result() call aborted
+    # iteration before the good ones still sitting in the queue got
+    # collected.) This also covers the exact failure that broke a real
+    # prod run: a connection re-acquired from the pool failing during setup
+    # (not statement execution), which bypassed engine.py's existing
+    # per-rule SQLAlchemyError handling entirely and crashed the whole
+    # process, taking 45 already-computed results down with it since
+    # nothing had been written yet.
+    #
+    # The user hitting Ctrl+C is handled separately, at the outer level --
+    # that one really should stop gathering and salvage whatever's already
+    # in hand, rather than waiting for every in-flight future to finish.
     processed_ids: set[str] = set()
+    results_by_index: dict[int, list[RuleOutcome]] = {}
     try:
-        for item_rules in work_items:
-            if len(item_rules) > 1:
-                outcomes.extend(
-                    _process_batch(
-                        engine, item_rules, pack_meta, window_column, window_params,
+        with ThreadPoolExecutor(max_workers=config.scan.parallel_workers) as executor:
+            future_to_index = {}
+            for idx, item_rules in enumerate(work_items):
+                if len(item_rules) > 1:
+                    future = executor.submit(
+                        _process_batch, engine, item_rules, pack_meta, window_column, window_params,
                         compiled_by_id, rows_scanned, config, timeout_ms,
                     )
-                )
-            else:
-                outcomes.append(
-                    _process_individual(
-                        engine, item_rules[0], compiled_by_id, window_params, rows_scanned, config, timeout_ms
+                else:
+                    future = executor.submit(
+                        _process_individual,
+                        engine, item_rules[0], compiled_by_id, window_params, rows_scanned, config, timeout_ms,
                     )
-                )
-            processed_ids.update(r.id for r in item_rules)
-    except (KeyboardInterrupt, Exception) as exc:
-        if not isinstance(exc, KeyboardInterrupt):
-            logger.exception("Unexpected error during rule execution; writing a partial report instead of crashing")
+                future_to_index[future] = idx
+
+            for future in as_completed(future_to_index):
+                idx = future_to_index[future]
+                item_rules = work_items[idx]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    logger.exception("Work item failed unexpectedly (rules: %s)", [r.id for r in item_rules])
+                    result = [
+                        RuleOutcome(rule=r, run_status="error", error=f"unexpected error: {exc}") for r in item_rules
+                    ]
+                results_by_index[idx] = result if isinstance(result, list) else [result]
+                processed_ids.update(r.id for r in item_rules)
+    except KeyboardInterrupt:
         remaining = [r for r in batchable + individual if r.id not in processed_ids]
         logger.warning(
             "Run interrupted; writing a partial report for %d/%d compiled rules",
@@ -137,6 +167,12 @@ def run(
         )
         for rule in remaining:
             outcomes.append(RuleOutcome(rule=rule, run_status="dormant", dormant_reason="skipped: run interrupted"))
+
+    # Flatten back into original rule-file order -- completion order under
+    # the thread pool has no relationship to it.
+    for idx in range(len(work_items)):
+        if idx in results_by_index:
+            outcomes.extend(results_by_index[idx])
 
     duration = time.monotonic() - start
     meta = ScanMeta(

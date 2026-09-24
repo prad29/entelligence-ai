@@ -25,6 +25,10 @@ _SCAN_DEFAULTS = {
     "include_calibration": True,
     "include_dormant": False,
     "query_timeout_seconds": 60,
+    # How many rules/batches run concurrently against the DB. Each one
+    # checks out its own pooled connection (see db.get_engine's pool_size),
+    # so this is also what sizes the connection pool.
+    "parallel_workers": 6,
 }
 
 _EMAIL_DEFAULTS = {
@@ -60,6 +64,7 @@ class ScanConfig:
     include_calibration: bool
     include_dormant: bool
     query_timeout_seconds: int
+    parallel_workers: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +135,7 @@ def _build_scan_config(raw: dict) -> ScanConfig:
         include_calibration=bool(merged["include_calibration"]),
         include_dormant=bool(merged["include_dormant"]),
         query_timeout_seconds=int(merged["query_timeout_seconds"]),
+        parallel_workers=int(merged["parallel_workers"]),
     )
 
 

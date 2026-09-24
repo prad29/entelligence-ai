@@ -37,7 +37,9 @@ _ALLOWED_PREFIXES = ("SELECT", "WITH")
 _LEADING_SELECT = re.compile(r"^(\s*)(SELECT)\b", re.IGNORECASE)
 
 
-def get_engine(db_config: DatabaseConfig, *, read_timeout_seconds: int | None = None) -> Engine:
+def get_engine(
+    db_config: DatabaseConfig, *, read_timeout_seconds: int | None = None, pool_size: int = 6
+) -> Engine:
     # URL.create escapes user/password -- a raw f-string interpolation breaks
     # the moment a password contains an unescaped URL-special character (e.g.
     # "@", ":", "/"), since the parser can no longer tell where the
@@ -57,7 +59,14 @@ def get_engine(db_config: DatabaseConfig, *, read_timeout_seconds: int | None = 
         # the connection is fine — pool_pre_ping keeps a dead one from being
         # handed back out.
         connect_args["read_timeout"] = read_timeout_seconds
-    engine = create_engine(url, connect_args=connect_args, pool_pre_ping=True)
+    # pool_size sized to match how many rules/batches engine.run() executes
+    # concurrently (config.scan.parallel_workers) -- each one checks out its
+    # own connection for the whole duration of its count+detail queries.
+    # max_overflow gives headroom rather than a hard ceiling at exactly
+    # parallel_workers.
+    engine = create_engine(
+        url, connect_args=connect_args, pool_pre_ping=True, pool_size=pool_size, max_overflow=pool_size,
+    )
     # AUTOCOMMIT + no engine.begin(): there is never an open transaction to
     # accidentally write inside, which is most of the read-only guarantee.
     return engine.execution_options(isolation_level="AUTOCOMMIT")

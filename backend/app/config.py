@@ -339,7 +339,6 @@ class Settings(BaseSettings):
     # are DB-backed (app.models.DqscanSettings), not env vars here — see
     # app/routers/dqscan.py.
     DQSCAN_TRIGGER_ENABLED: bool = True
-    DQSCAN_TIMEOUT_SECONDS: int = 600
 
     @property
     def SERPAPI_API_KEYS(self) -> list[tuple[int, str]]:

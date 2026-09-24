@@ -25,7 +25,6 @@ from typing import Optional
 from croniter import croniter
 
 from app.celery_app import celery
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +60,22 @@ def run_dqscan_scan(env: str, from_date: Optional[str] = None, to_date: Optional
     # actually running, and would be discarded entirely on success. Letting
     # stdout/stderr inherit this process's instead makes dqscan's logging
     # stream straight through to this worker's own log output in real time.
+    #
+    # Deliberately no `timeout=` either (removed 2026-09-25, per request) --
+    # a real prod run hit this directly: 29 rules at 6-way parallelism, each
+    # individually bounded by config.prod.yaml's query_timeout_seconds
+    # (180s) and gracefully degrading per-rule on failure (see engine.py),
+    # took long enough overall that the old hardcoded 600s subprocess
+    # timeout killed the whole process at 16/29 with zero report written --
+    # even though every piece of work was already progressing and bounded
+    # on its own. Every layer that actually needs a timeout already has
+    # one (the DB query hint, the socket read_timeout backstop); an outer
+    # wall-clock ceiling on top of those only ever fires while the run is
+    # still making real progress, so it doesn't protect anything.
     result = subprocess.run(
         cmd,
         cwd=str(root),
         text=True,
-        timeout=settings.DQSCAN_TIMEOUT_SECONDS,
     )
 
     if result.returncode != 0:

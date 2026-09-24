@@ -24,8 +24,16 @@ scan:
   # missing-index or runaway-query problem); timed 3 representative failing
   # queries uncapped and all three landed in the 37-73s range with no DB
   # contention from anything else running. This is a timeout-budget problem,
-  # not a query problem -- 180s covers the measured range with headroom.
-  query_timeout_seconds: 180
+  # not a query problem.
+  # Raised again to 300 (2026-09-25, per request) -- a real run at 180s
+  # still hit it on a few rules (XROW_MM_ID_IDENTITY, XROW_DUPLICATE_SHOWTIME,
+  # measured at 72.6s in isolation but pushed over 180s by real contention
+  # from 6-way parallelism). This is per-query, not the overall run --
+  # dqscan_task.py's separate outer subprocess timeout was removed entirely
+  # on 2026-09-25 (see that file's history), so this is now the only
+  # timeout in play besides the socket-level read_timeout backstop
+  # (query_timeout_seconds + 15, see dqscan/engine.py).
+  query_timeout_seconds: 300
   # 6 rules/batches run concurrently against the DB (2026-09-24, per
   # request) -- db.get_engine's connection pool is sized to match this
   # exactly (see dqscan/engine.py), so raising this without also touching

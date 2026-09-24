@@ -845,42 +845,37 @@ rules:
   detail_columns: [mm_id, date_sh, running_date, theater_id, title, ms_release_date, master_release_date]
   message: "showtime scheduled before the film's release date"
   note: >
-    Rewritten 2026-09-21 per request -- the old version trusted
-    movies_shows.release_date directly, which is the crawled value, not the
-    verified one. This instead joins mqproduction.fq_movie_master (same
-    ms.title = fm.movie_title join as XTAB_MOVIE_MASTER) for release_date,
-    restricted to master rows with no linked_movie_id (fm.linked_movie_id
-    IS NULL OR blank), and only flags a showtime at least 2 days before
-    that release date (DATE_SUB(fm.release_date, INTERVAL 2 DAY) --
-    deliberately more lenient than a plain "<", per the source query).
-    Deliberately scoped to CURRENT_DATE() - INTERVAL 1 DAY (yesterday and
-    today only), not the run's --from/--to window, matching the source
-    query exactly -- same CURRENT_DATE()-based convention as PRES_AUDITORIUM.
-    The source query was `SELECT * ... GROUP BY ms.mm_id`; rewritten here
-    with an explicit column list and MAX() around every non-grouped column
-    instead, to dedup to one row per mm_id without relying on MySQL running
-    with ONLY_FULL_GROUP_BY relaxed (the same class of portability issue
-    that broke XROW_DUP_MMID_NO_AUDITORIUM's window-function DISTINCT) --
-    no change in which rows get flagged.
+    Rewritten 2026-09-21 per request, re-optimized 2026-09-24 per a faster
+    query. Joins mqproduction.fq_movie_master (same ms.title = fm.movie_title
+    join as XTAB_MOVIE_MASTER) for release_date, restricted to master rows
+    with no linked_movie_id (fm.linked_movie_id IS NULL OR blank), and only
+    flags a showtime at least 2 days before that release date
+    (DATE_SUB(fm.release_date, INTERVAL 2 DAY) -- deliberately more lenient
+    than a plain "<"). Still scoped to CURRENT_DATE() - INTERVAL 1 DAY
+    (yesterday and today only, not the run's --from/--to window), same
+    CURRENT_DATE()-based convention as PRES_AUDITORIUM.
+    The 2026-09-24 change adds `ms.running_date = CURRENT_DATE()` --
+    restricting to today's crawl snapshot only, rather than every crawl
+    day's row for every showtime with date_sh >= yesterday. This is what
+    actually made the old version slow at real prod scale: it was scanning
+    an mm_id's *entire* accumulated crawl history for every future showtime
+    (millions of rows), when the point of the check is just "did today's
+    crawl reveal a violation." Because running_date is part of this pack's
+    declared grain ([mm_id, running_date]), restricting to today's
+    running_date already yields at most one row per mm_id on its own --
+    the old GROUP BY mm_id / MAX()-wrapping (added earlier purely to dodge
+    ONLY_FULL_GROUP_BY) is no longer needed at all, removing the filesort
+    that came with it too.
   sql: |
-    SELECT mm_id,
-           MAX(date_sh) AS date_sh,
-           MAX(running_date) AS running_date,
-           MAX(theater_id) AS theater_id,
-           MAX(title) AS title,
-           MAX(ms_release_date) AS ms_release_date,
-           MAX(master_release_date) AS master_release_date
-    FROM (
-      SELECT ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id, ms.title,
-             ms.release_date AS ms_release_date, fm.release_date AS master_release_date
-      FROM {{table}} ms
-      JOIN mqproduction.fq_movie_master fm ON ms.title = fm.movie_title
-      WHERE (fm.linked_movie_id IS NULL OR TRIM(fm.linked_movie_id) = '')
-        AND ms.date_sh <= DATE_SUB(fm.release_date, INTERVAL 2 DAY)
-        AND ms.date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
-    ) x
-    GROUP BY mm_id
-    ORDER BY title
+    SELECT ms.mm_id, ms.date_sh, ms.running_date, ms.theater_id, ms.title,
+           ms.release_date AS ms_release_date, fm.release_date AS master_release_date
+    FROM {{table}} ms
+    JOIN mqproduction.fq_movie_master fm ON ms.title = fm.movie_title
+    WHERE ms.running_date = CURRENT_DATE()
+      AND ms.date_sh >= CURRENT_DATE() - INTERVAL 1 DAY
+      AND ms.date_sh <= DATE_SUB(fm.release_date, INTERVAL 2 DAY)
+      AND (fm.linked_movie_id IS NULL OR TRIM(fm.linked_movie_id) = '')
+    ORDER BY ms.title
 
 - id: XCOL_STUDIO_RELEASE_PAIR
   name: studio_name and release_date blank inconsistently

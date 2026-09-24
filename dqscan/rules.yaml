@@ -1213,10 +1213,17 @@ rules:
   message: "seat change does not match the movement in the absolute count"
   note: >
     Reconciled on 100% of comparable sample rows. The single strongest check in
-    the pack. Deliberately has no `id` column reference -- prod's movies_shows
-    has no id column at all (dev's does); the ORDER BY tiebreak isn't load-
-    bearing since rules.yaml's own grain declaration ([mm_id, running_date])
-    already guarantees at most one row per partition value.
+    the pack. Deliberately has no `id` column reference -- not because prod
+    lacks one (corrected 2026-09-25: it does -- moviemeasure.movies_shows,
+    the table dqscan actually points to on prod since the 2026-09-24 schema
+    fix, has an `id bigint unsigned` PRIMARY KEY, 601M rows. The original
+    claim here was true only of a different, wrong table -- mqproduction.
+    movies_shows, a separate 1.8M-row table with no `id` that dqscan was
+    misconfigured to hit before that fix). The ORDER BY tiebreak isn't
+    load-bearing regardless of whether `id` exists, since rules.yaml's own
+    grain declaration ([mm_id, running_date]) already guarantees at most
+    one row per partition value -- so nothing here needed to change, only
+    the stated reason.
   sql: |
     SELECT mm_id, running_date, available, actual_available, prev_actual_available
     FROM (

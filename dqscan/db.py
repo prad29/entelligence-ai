@@ -11,12 +11,23 @@ import logging
 import re
 from typing import Any
 
+import pymysql
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
+from sqlalchemy.exc import SQLAlchemyError
 
 from dqscan.config import DatabaseConfig
 
 logger = logging.getLogger("dqscan.db")
+
+# A connection re-acquired from the pool right after a prior query broke its
+# socket can raise pymysql's own exception directly during connection setup
+# (e.g. while setting autocommit) -- SQLAlchemy only wraps DBAPI errors into
+# SQLAlchemyError once a statement is executing on an established
+# connection, not during that setup step. Callers that need to treat a
+# single rule/batch failure as recoverable, not fatal to the whole run,
+# must catch this tuple instead of SQLAlchemyError alone.
+RECOVERABLE_DB_ERRORS = (SQLAlchemyError, pymysql.err.Error)
 
 _ALLOWED_PREFIXES = ("SELECT", "WITH")
 

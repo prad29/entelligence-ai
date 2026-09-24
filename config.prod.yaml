@@ -17,7 +17,15 @@ scan:
   calibration_threshold: 0.20
   include_calibration: true
   include_dormant: false
-  query_timeout_seconds: 60
+  # Raised from 60 to 180 (2026-09-24) -- prod movies_shows is ~596M rows
+  # (dev is far smaller), and a full today-through-latest-date_sh run there
+  # timed out 34 of 72 rules at 60s. Investigated directly: indexes on
+  # date_sh/mm_id/etc. already exist and EXPLAIN plans are reasonable (no
+  # missing-index or runaway-query problem); timed 3 representative failing
+  # queries uncapped and all three landed in the 37-73s range with no DB
+  # contention from anything else running. This is a timeout-budget problem,
+  # not a query problem -- 180s covers the measured range with headroom.
+  query_timeout_seconds: 180
 email:
   enabled: false
   # reports@enttelligence.com is not yet a verified SES sender identity (nor
